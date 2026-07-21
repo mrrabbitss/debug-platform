@@ -1,0 +1,52 @@
+{
+  "name": "gw-ap-debug-client",
+  "displayName": "GW/AP Debug Platform Client",
+  "description": "Internal VS Code client for GW/AP collectDebuginfo diagnosis and code correlation.",
+  "version": "0.1.0",
+  "publisher": "internal",
+  "engines": { "vscode": "^1.100.0" },
+  "categories": ["Other", "Machine Learning"],
+  "activationEvents": [
+    "onCommand:gwap.createCase",
+    "onCommand:gwap.uploadDebugInfo",
+    "onCommand:gwap.uploadWorkspace",
+    "onCommand:gwap.askSelection",
+    "onCommand:gwap.openCase"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "gwap.createCase", "title": "GW/AP: Create Debug Case" },
+      { "command": "gwap.uploadDebugInfo", "title": "GW/AP: Upload collectDebuginfo" },
+      { "command": "gwap.uploadWorkspace", "title": "GW/AP: Associate Current Workspace" },
+      { "command": "gwap.askSelection", "title": "GW/AP: Ask About Selected Code" },
+      { "command": "gwap.openCase", "title": "GW/AP: Open Case in Browser" }
+    ],
+    "configuration": {
+      "title": "GW/AP Debug",
+      "properties": {
+        "gwap.backendUrl": { "type": "string", "default": "http://127.0.0.1:8000/api/v1", "description": "Debug Platform API base URL" },
+        "gwap.webUrl": { "type": "string", "default": "http://127.0.0.1:5173", "description": "Debug Platform Web URL" },
+        "gwap.apiKey": { "type": "string", "default": "", "description": "Optional X-API-Key", "scope": "machine-overridable" },
+        "gwap.defaultCaseId": { "type": "string", "default": "", "description": "Default case ID" }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "npx @vscode/vsce package"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "axios": "^1.11.0",
+    "form-data": "^4.0.4"
+  },
+  "devDependencies": {
+    "@types/archiver": "^6.0.3",
+    "@types/node": "^22.17.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "^5.8.3"
+  }
+}

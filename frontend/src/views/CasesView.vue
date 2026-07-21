@@ -1,0 +1,73 @@
+<script setup lang="ts">
+import { onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { api } from '../api/client'
+import type { CaseItem } from '../types'
+
+const router = useRouter()
+const cases = ref<CaseItem[]>([])
+const loading = ref(false)
+const dialogVisible = ref(false)
+const form = reactive({
+  title: '', device_type: 'GW', device_model: '', firmware_version: '', issue_time: '',
+  description: '', reproduction_steps: '', topology: ''
+})
+
+async function loadCases() {
+  loading.value = true
+  try { cases.value = (await api.get('/cases')).data }
+  finally { loading.value = false }
+}
+
+async function createCase() {
+  if (!form.title.trim()) return ElMessage.warning('请填写问题标题')
+  const { data } = await api.post('/cases', form)
+  dialogVisible.value = false
+  ElMessage.success('案例已创建')
+  router.push(`/cases/${data.id}`)
+}
+
+onMounted(loadCases)
+</script>
+
+<template>
+  <div>
+    <div class="toolbar">
+      <h1 class="page-title" style="margin-right:auto">故障案例</h1>
+      <el-button type="primary" @click="dialogVisible = true">新建案例</el-button>
+      <el-button @click="loadCases">刷新</el-button>
+    </div>
+    <el-card>
+      <el-table :data="cases" v-loading="loading" @row-dblclick="(row: CaseItem) => router.push(`/cases/${row.id}`)">
+        <el-table-column prop="id" label="案例编号" width="210" />
+        <el-table-column prop="title" label="问题标题" min-width="220" />
+        <el-table-column prop="device_type" label="设备" width="80" />
+        <el-table-column prop="device_model" label="型号" width="130" />
+        <el-table-column prop="firmware_version" label="固件版本" width="130" />
+        <el-table-column prop="status" label="状态" width="120">
+          <template #default="scope"><el-tag>{{ scope.row.status }}</el-tag></template>
+        </el-table-column>
+        <el-table-column prop="severity" label="级别" width="90" />
+        <el-table-column prop="created_at" label="创建时间" width="180" />
+        <el-table-column label="操作" width="100">
+          <template #default="scope"><el-button link type="primary" @click="router.push(`/cases/${scope.row.id}`)">查看</el-button></template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <el-dialog v-model="dialogVisible" title="创建 GW/AP 故障案例" width="680px">
+      <el-form label-width="110px">
+        <el-form-item label="问题标题"><el-input v-model="form.title" /></el-form-item>
+        <el-form-item label="设备类型"><el-radio-group v-model="form.device_type"><el-radio-button value="GW">GW</el-radio-button><el-radio-button value="AP">AP</el-radio-button><el-radio-button value="OTHER">其他</el-radio-button></el-radio-group></el-form-item>
+        <el-form-item label="设备型号"><el-input v-model="form.device_model" /></el-form-item>
+        <el-form-item label="固件版本"><el-input v-model="form.firmware_version" /></el-form-item>
+        <el-form-item label="问题时间"><el-input v-model="form.issue_time" placeholder="例如 2026-07-20 10:32:00" /></el-form-item>
+        <el-form-item label="组网环境"><el-input v-model="form.topology" type="textarea" :rows="2" /></el-form-item>
+        <el-form-item label="问题现象"><el-input v-model="form.description" type="textarea" :rows="4" /></el-form-item>
+        <el-form-item label="复现步骤"><el-input v-model="form.reproduction_steps" type="textarea" :rows="3" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" @click="createCase">创建</el-button></template>
+    </el-dialog>
+  </div>
+</template>

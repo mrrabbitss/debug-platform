@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 36px; color: #1f2937; line-height: 1.65; }
+    h1 { text-align: center; margin-bottom: 26px; }
+    h2 { border-left: 4px solid #2563eb; padding-left: 10px; margin-top: 28px; }
+    h3 { margin-bottom: 4px; }
+    table { border-collapse: collapse; width: 100%; }
+    td, th { border: 1px solid #d1d5db; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #f3f4f6; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #e5e7eb; font-size: 12px; }
+    .high { background: #fee2e2; color: #991b1b; }
+    .medium { background: #fef3c7; color: #92400e; }
+    .low { background: #dbeafe; color: #1e40af; }
+    .evidence { background: #f8fafc; padding: 10px; border: 1px solid #e2e8f0; margin: 8px 0; white-space: pre-wrap; }
+    .muted { color: #6b7280; }
+    @media print { body { margin: 12mm; } }
+  </style>
+</head>
+<body>
+<h1>{{ title }}</h1>
+<table>
+  <tr><th>案例编号</th><td>{{ case.id }}</td><th>设备类型</th><td>{{ case.device_type }}</td></tr>
+  <tr><th>问题标题</th><td>{{ case.title }}</td><th>设备型号</th><td>{{ case.device_model or '未提供' }}</td></tr>
+  <tr><th>固件版本</th><td>{{ case.firmware_version or '未提供' }}</td><th>问题时间</th><td>{{ case.issue_time or '未提供' }}</td></tr>
+  <tr><th>分析引擎</th><td>{{ result.analysis_engine or analysis.provider }}</td><th>分析时间</th><td>{{ analysis.completed_at or analysis.created_at }}</td></tr>
+</table>
+
+<h2>一、问题现象</h2>
+<p>{{ case.description or '未填写' }}</p>
+{% if case.reproduction_steps %}<p><strong>复现步骤：</strong>{{ case.reproduction_steps }}</p>{% endif %}
+
+<h2>二、综合摘要</h2>
+<p>{{ result.summary or '暂无诊断摘要' }}</p>
+
+<h2>三、已确认事实</h2>
+<ol>
+{% for fact in result.confirmed_facts or [] %}
+  <li>{{ fact.statement }} <span class="muted">证据：{{ fact.evidence_ids|join('、') }}</span></li>
+{% else %}<li>暂无已确认事实。</li>{% endfor %}
+</ol>
+
+<h2>四、根因候选</h2>
+{% for item in result.hypotheses or [] %}
+  <h3>{{ item.rank }}. {{ item.title }}
+    <span class="badge {{ (item.confidence_level or 'low')|lower }}">{{ item.confidence_level or 'UNKNOWN' }}</span>
+    <span class="badge">{{ item.priority or 'UNKNOWN' }}</span>
+  </h3>
+  <p>{{ item.description }}</p>
+  <p class="muted">支持证据：{{ item.supporting_evidence|join('、') }}；反证：{{ item.contradicting_evidence|join('、') if item.contradicting_evidence else '无明确反证' }}</p>
+{% else %}<p>证据不足，尚未形成有效根因候选。</p>{% endfor %}
+
+<h2>五、建议排查步骤</h2>
+<table>
+  <tr><th>优先级</th><th>动作</th><th>原因</th><th>预期结果</th></tr>
+  {% for action in result.recommended_actions or [] %}
+  <tr><td>{{ action.priority }}</td><td>{{ action.action }}</td><td>{{ action.reason }}</td><td>{{ action.expected_result }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2>六、相关代码</h2>
+<ul>
+{% for symbol in result.related_code or [] %}
+  <li>{{ symbol.kind }} <strong>{{ symbol.name }}</strong> — {{ symbol.file_path }}:{{ symbol.line_start }}-{{ symbol.line_end }}</li>
+{% else %}<li>尚未关联代码仓库或未检索到相关符号。</li>{% endfor %}
+</ul>
+
+<h2>七、缺失信息与限制</h2>
+<ul>
+{% for text in (result.missing_information or []) + (result.limitations or []) %}<li>{{ text }}</li>{% endfor %}
+</ul>
+
+<h2>八、关键证据附录</h2>
+{% for fact in result.confirmed_facts or [] %}
+  {% for evidence_id in fact.evidence_ids %}
+    {% set ev = evidence.get(evidence_id) %}
+    {% if ev %}<div class="evidence"><strong>{{ evidence_id }}</strong> {{ ev.source_file or ev.title or '' }}:{{ ev.line_start or '' }}\n{{ ev.content or ev.raw_text or '' }}</div>{% endif %}
+  {% endfor %}
+{% endfor %}
+</body>
+</html>

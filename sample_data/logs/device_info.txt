@@ -1,0 +1,4 @@
+Device Model: Demo-AP-01
+Firmware Version: V1R1-demo
+Serial Number: AP-DEMO-0001
+Collect Time: 2026-07-20 10:35:00

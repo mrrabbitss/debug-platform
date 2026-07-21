@@ -1,0 +1,42 @@
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.routes import router
+from app.core.config import get_settings
+from app.core.db import Base, SessionLocal, engine
+from app.core.security import verify_api_key
+from app.services.knowledge import seed_builtin_knowledge
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    seed_dir = Path(__file__).resolve().parent / "seed_knowledge"
+    with SessionLocal() as db:
+        seed_builtin_knowledge(db, seed_dir)
+    yield
+
+
+settings = get_settings()
+app = FastAPI(
+    title=settings.app_name,
+    version="0.1.0",
+    description="Evidence-driven GW/AP collectDebuginfo analysis, RAG and code correlation platform.",
+    lifespan=lifespan,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(router, prefix=settings.api_prefix, dependencies=[Depends(verify_api_key)])
+
+
+@app.get("/")
+def root() -> dict:
+    return {"name": settings.app_name, "docs": "/docs", "api": settings.api_prefix}

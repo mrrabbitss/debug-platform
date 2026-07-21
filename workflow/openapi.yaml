@@ -1,0 +1,62 @@
+openapi: 3.1.0
+info:
+  title: GW/AP Debug Platform Workflow API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8000/api/v1
+paths:
+  /cases:
+    post:
+      operationId: createDebugCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, device_type]
+              properties:
+                title: { type: string }
+                device_type: { type: string, enum: [GW, AP, OTHER] }
+                description: { type: string }
+                device_model: { type: string }
+                firmware_version: { type: string }
+      responses:
+        '200': { description: Created }
+  /cases/{case_id}/analyses:
+    post:
+      operationId: startDiagnosis
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Analysis job }
+  /cases/{case_id}/chat:
+    post:
+      operationId: askAboutCase
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string }
+      responses:
+        '200': { description: Evidence-grounded answer }
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+security:
+  - ApiKey: []
