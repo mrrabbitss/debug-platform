@@ -7,8 +7,8 @@ from app.core.utils import json_dumps, json_loads, new_id
 from app.models import Artifact, Case, LogEvent
 from app.services.archive import extract_archive
 from app.services.jobs import JobContext
-from app.services.log_parsers import read_text_file
 from app.services.parser_registry import registry
+from app.services.text_files import looks_like_text_file, read_text_file
 
 
 TEXT_SUFFIXES = {
@@ -36,10 +36,16 @@ def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
         db.execute(delete(LogEvent).where(LogEvent.artifact_id == artifact_id))
         db.commit()
 
-    text_files = [extract_dir / item["path"] for item in manifest.files if (extract_dir / item["path"]).suffix.lower() in TEXT_SUFFIXES]
+    text_files = []
+    for item in manifest.files:
+        candidate = extract_dir / item["path"]
+        if candidate.suffix.lower() in TEXT_SUFFIXES or looks_like_text_file(candidate):
+            text_files.append(candidate)
     parsed_files = 0
     event_count = 0
     device_info: dict[str, str] = {}
+    parser_counts: dict[str, int] = {}
+    level_counts: dict[str, int] = {}
 
     for index, path in enumerate(text_files):
         if not path.is_file():
@@ -51,8 +57,10 @@ def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
         sample = text[:20000]
         parser = registry.select(path, sample)
         events = parser.parse(path, relative, text)
+        parser_counts[parser.parser_id] = parser_counts.get(parser.parser_id, 0) + 1
         with SessionLocal() as db:
             for event in events:
+                level_counts[event.level] = level_counts.get(event.level, 0) + 1
                 db.add(LogEvent(
                     id=new_id("EVT"), case_id=case_id, artifact_id=artifact_id,
                     source_file=event.source_file, line_start=event.line_start, line_end=event.line_end,
@@ -93,6 +101,8 @@ def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
                 "extracted_bytes": manifest.total_bytes,
                 "parsed_files": parsed_files,
                 "event_count": event_count,
+                "parser_counts": parser_counts,
+                "level_counts": level_counts,
                 "device_info": device_info,
                 "extract_root": str(extract_dir),
             })

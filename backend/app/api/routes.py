@@ -27,6 +27,7 @@ from app.services.parse_service import parse_artifact_job
 from app.services.report import generate_docx, generate_html_file, generate_pdf, render_html
 from app.services.static_tools import static_analysis_job
 from app.services.storage import storage
+from app.services.text_files import read_text_file
 
 router = APIRouter()
 Db = Annotated[Session, Depends(get_db)]
@@ -213,7 +214,9 @@ def artifact_content(
         raise HTTPException(400, "Unsafe path")
     if not target.is_file():
         raise HTTPException(404, "File not found")
-    text = target.read_text(encoding="utf-8", errors="replace")
+    text = read_text_file(target)
+    if text is None:
+        raise HTTPException(415, "File is binary or exceeds the text parsing limit")
     lines = text.splitlines()
     return "\n".join(lines[start_line - 1:start_line - 1 + line_count])
 

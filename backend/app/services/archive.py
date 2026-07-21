@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.config import get_settings
+from app.services.text_files import looks_like_text_file
 
 
 class UnsafeArchiveError(ValueError):
@@ -89,11 +90,16 @@ def extract_archive(source: Path, destination: Path) -> ExtractManifest:
                 manifest.files.append({"path": str(target.relative_to(destination)), "size": target.stat().st_size})
         return manifest
 
-    if lower.endswith((".log", ".txt", ".json", ".xml", ".conf", ".cfg")):
+    known_log_suffix = lower.endswith((
+        ".log", ".txt", ".json", ".jsonl", ".xml", ".conf", ".cfg", ".out", ".err", ".trace",
+        ".ini", ".status", ".info", ".dump",
+    ))
+    if known_log_suffix or (not source.suffix and looks_like_text_file(source)):
+        _check_limits(manifest, source.stat().st_size)
         target = _safe_target(destination, source.name)
         shutil.copy2(source, target)
         manifest.total_bytes = target.stat().st_size
         manifest.files.append({"path": target.name, "size": target.stat().st_size})
         return manifest
 
-    raise UnsafeArchiveError("Unsupported archive or log file type")
+    raise UnsafeArchiveError("Unsupported archive or text log file type")

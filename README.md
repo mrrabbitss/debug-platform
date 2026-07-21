@@ -9,10 +9,11 @@
 ### P0：基础闭环
 
 - 创建 GW/AP 故障案例；
-- 上传 ZIP/TAR/TGZ 或单个日志；
+- 上传 ZIP/TAR/TGZ、常见单个日志或无后缀纯文本 collectDebuginfo；
 - 安全解压，防止 Zip Slip、符号链接和超限压缩包；
 - collectDebuginfo 文件清单与原始日志浏览；
 - 日志编码识别、时间戳标准化、敏感信息脱敏；
+- 按内容识别华为 GW/AP 采集包中的 `Start run collect command:` 命令段和 `NOTICE 2026-... 03:29:17.483` 运行日志；
 - hostapd、WLAN、DHCP、PPPoE、PON、OMCI、TR-069、内核和进程异常规则；
 - 关键事件提取与时间线；
 - 确定性规则诊断；
@@ -120,6 +121,17 @@ python scripts/seed_demo.py
 2. 上传并解析 `sample_data/collectDebuginfo_demo.zip`；
 3. 上传并索引示例 C 仓库；
 4. 运行综合诊断。
+
+### 上传华为 GW/AP 无后缀日志
+
+在案例概览中选择日志并点击“上传并解析”。文件选择器不依赖扩展名；后端会先检查文件是否为文本，再根据内容选择解析器。以下两类内容可以位于同一个文件中：
+
+```text
+Start run collect command:WAP:get wlan basic laninst 1 wlaninst6
+NOTICE 2026-03-02 03:29:17.483[90][DC]...
+```
+
+解析结果会保留命令采集边界，识别 `TRACE/DEBUG/INFO/NOTICE/WARN/ERROR/CRITICAL` 等级，并把日志时间转换为标准时间。原始文件仍可在“日志浏览”中查看。
 
 ## 4. Docker 部署
 

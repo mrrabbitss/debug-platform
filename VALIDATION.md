@@ -5,12 +5,13 @@ Validated in the generation environment:
 - Backend dependency installation: passed
 - Python compileall: passed
 - Ruff static checks: passed
-- Pytest: 3 passed
+- Pytest: 8 passed
 - Vue TypeScript build: passed
 - VS Code extension TypeScript compile: passed
 - VSIX package generation: passed
 - API health check: passed
 - Demo collectDebuginfo upload and parsing: passed
+- Extensionless Huawei GW/AP collectDebuginfo content detection and `NOTICE` parsing: passed
 - Demo repository upload and symbol indexing: passed
 - Rule + RAG diagnosis: passed
 - HTML report generation: passed

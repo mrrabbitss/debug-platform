@@ -15,6 +15,7 @@ const repositories = ref<any[]>([])
 const symbols = ref<any[]>([])
 const activeTab = ref('overview')
 const debugFile = ref<File | null>(null)
+const debugFileInput = ref<HTMLInputElement | null>(null)
 const repoFile = ref<File | null>(null)
 const currentJob = ref<Job | null>(null)
 const jobTimer = ref<number | null>(null)
@@ -61,13 +62,24 @@ async function loadEvents() {
 
 async function uploadDebug() {
   if (!debugFile.value) return ElMessage.warning('请选择 collectDebuginfo 或日志文件')
-  const data = new FormData()
-  data.append('file', debugFile.value)
-  data.append('kind', 'debug_log')
-  const artifact = (await api.post(`/cases/${caseId}/artifacts`, data)).data
-  artifacts.value.unshift(artifact)
-  debugFile.value = null
-  ElMessage.success('日志已上传，请开始解析')
+  try {
+    const data = new FormData()
+    data.append('file', debugFile.value)
+    data.append('kind', 'debug_log')
+    const artifact = (await api.post(`/cases/${caseId}/artifacts`, data)).data
+    artifacts.value.unshift(artifact)
+    const parseJob = (await api.post(`/cases/${caseId}/artifacts/${artifact.id}/parse`)).data
+    debugFile.value = null
+    if (debugFileInput.value) debugFileInput.value.value = ''
+    ElMessage.success('上传完成，正在按内容识别并解析日志')
+    watchJob(parseJob)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '日志上传或解析启动失败')
+  }
+}
+
+function selectDebugFile(event: Event) {
+  debugFile.value = (event.target as HTMLInputElement).files?.[0] || null
 }
 
 async function parseArtifact(artifactId: string) {
@@ -196,7 +208,11 @@ onMounted(loadAll)
         </div>
         <h3 class="section-title">问题现象</h3><p>{{ caseInfo.description || '未填写' }}</p>
         <h3 class="section-title">上传 collectDebuginfo</h3>
-        <div class="toolbar"><input type="file" accept=".zip,.tar,.gz,.tgz,.log,.txt,.json" @change="(e:any) => debugFile = e.target.files?.[0] || null"/><el-button type="primary" @click="uploadDebug">上传</el-button></div>
+        <div class="toolbar">
+          <input ref="debugFileInput" type="file" @change="selectDebugFile"/>
+          <el-button type="primary" @click="uploadDebug">上传并解析</el-button>
+          <span class="muted">支持 ZIP/TAR/TGZ、常见日志和无后缀纯文本 collectDebuginfo；文件类型按内容识别。</span>
+        </div>
         <el-table :data="artifacts">
           <el-table-column prop="original_name" label="文件" min-width="260" />
           <el-table-column prop="kind" label="类型" width="130" />
@@ -217,6 +233,7 @@ onMounted(loadAll)
             <el-option v-for="item in artifacts.filter(a => a.status === 'PARSED')" :key="item.id" :label="item.original_name" :value="item.id" />
           </el-select>
           <span class="muted">解析文件数：{{ fileManifest.manifest_file_count || 0 }}</span>
+          <span class="muted">解析器：{{ Object.keys(fileManifest.parser_counts || {}).join('、') || '暂无' }}</span>
         </div>
         <el-row :gutter="14">
           <el-col :span="7">
@@ -236,7 +253,7 @@ onMounted(loadAll)
 
       <el-tab-pane label="事件与时间线" name="events">
         <div class="toolbar">
-          <el-select v-model="eventFilter.level" clearable placeholder="级别" style="width:120px"><el-option v-for="x in ['CRITICAL','ERROR','WARN','INFO']" :key="x" :label="x" :value="x" /></el-select>
+          <el-select v-model="eventFilter.level" clearable placeholder="级别" style="width:120px"><el-option v-for="x in ['CRITICAL','ERROR','WARN','NOTICE','INFO','DEBUG','TRACE']" :key="x" :label="x" :value="x" /></el-select>
           <el-select v-model="eventFilter.module" clearable placeholder="模块" style="width:130px"><el-option v-for="x in modules" :key="x" :label="x" :value="x" /></el-select>
           <el-input v-model="eventFilter.search" placeholder="错误码/关键词" style="width:260px" @keyup.enter="loadEvents" />
           <el-button @click="loadEvents">筛选</el-button>

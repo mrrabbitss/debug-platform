@@ -1,20 +1,28 @@
 import re
 from pathlib import Path
 
-from charset_normalizer import from_bytes
 from dateutil import parser as date_parser
 
-from app.core.config import get_settings
 from app.core.utils import mask_sensitive
 from app.services.parser_registry import ParsedEvent, registry
 
 
 TIMESTAMP_PATTERNS = [
-    re.compile(r"(?P<ts>20\d{2}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?)"),
-    re.compile(r"(?P<ts>\b\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?\b)"),
+    re.compile(r"(?P<ts>20\d{2}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}[:;]\d{2}(?:[.,]\d{1,6})?)"),
+    re.compile(r"(?P<ts>\b\d{2}:\d{2}[:;]\d{2}(?:[.,]\d{1,6})?\b)"),
     re.compile(r"(?P<ts>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})"),
 ]
 LEVEL_PATTERN = re.compile(r"\b(TRACE|DEBUG|INFO|NOTICE|WARN(?:ING)?|ERR(?:OR)?|CRIT(?:ICAL)?|FATAL|ALERT|EMERG)\b", re.I)
+COLLECT_COMMAND_PATTERN = re.compile(
+    r"Start\s+run\s+collect\s+command\s*:\s*(?:(?P<scope>[A-Za-z0-9_-]+)\s*:\s*)?(?P<command>.+?)\s*$",
+    re.I | re.M,
+)
+HUAWEI_RUNTIME_LOG_PATTERN = re.compile(
+    r"^\s*(?P<level>TRACE|DEBUG|INFO|NOTICE|WARN(?:ING)?|ERR(?:OR)?|CRIT(?:ICAL)?|FATAL|ALERT|EMERG)\s+"
+    r"(?P<ts>20\d{2}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}[:;]\d{2}(?:[.,]\d{1,6})?)"
+    r"(?P<context>(?:\s*\[[^\]\r\n]*\])*)\s*(?P<message>.*)$",
+    re.I | re.M,
+)
 
 RULES = [
     ("KERNEL_OOPS", "KERNEL", "kernel", "CRITICAL", re.compile(r"kernel panic|oops:|BUG: unable|call trace|segmentation fault", re.I)),
@@ -33,18 +41,6 @@ RULES = [
     ("CONFIG_INVALID", "CONFIG", "config", "ERROR", re.compile(r"invalid config|configuration error|missing parameter|invalid value", re.I)),
     ("INTERFACE_STATE_CHANGE", "NETWORK", "interface", "INFO", re.compile(r"(?:eth|wan|lan|wlan|br-|pon)\S*.*(?:link is|state).*\b(up|down)\b", re.I)),
 ]
-
-
-def read_text_file(path: Path) -> str | None:
-    if path.stat().st_size > get_settings().parser_max_text_bytes:
-        return None
-    raw = path.read_bytes()
-    if b"\x00" in raw[:8192]:
-        return None
-    match = from_bytes(raw).best()
-    if match is None:
-        return raw.decode("utf-8", errors="replace")
-    return str(match)
 
 
 def _normalize_level(raw: str | None, fallback: str = "INFO") -> str:
@@ -67,10 +63,11 @@ def _extract_timestamp(line: str, date_hint: str | None = None) -> tuple[str | N
             continue
         raw = match.group("ts")
         try:
-            if re.fullmatch(r"\d{2}:\d{2}:\d{2}(?:[.,]\d+)?", raw) and date_hint:
-                raw_for_parse = f"{date_hint} {raw.replace(',', '.')}"
+            normalized_raw = raw.replace(";", ":").replace(",", ".")
+            if re.fullmatch(r"\d{2}:\d{2}[:;]\d{2}(?:[.,]\d+)?", raw) and date_hint:
+                raw_for_parse = f"{date_hint} {normalized_raw}"
             else:
-                raw_for_parse = raw.replace(",", ".")
+                raw_for_parse = normalized_raw
             value = date_parser.parse(raw_for_parse, fuzzy=True)
             return raw, value.isoformat()
         except (ValueError, OverflowError):
@@ -81,7 +78,8 @@ def _extract_timestamp(line: str, date_hint: str | None = None) -> tuple[str | N
 def _component_from_path(path: str) -> tuple[str, str]:
     lower = path.lower()
     mapping = [
-        (("hostapd", "wlan", "wifi", "wireless"), ("WLAN", "hostapd")),
+        (("hostapd",), ("WLAN", "hostapd")),
+        (("wlan", "wifi", "wireless", "wap"), ("WLAN", "wifi")),
         (("dhcp", "dnsmasq"), ("LAN", "dhcp")),
         (("pppoe", "ppp"), ("WAN", "pppoe")),
         (("omci",), ("PON", "omci")),
@@ -100,13 +98,24 @@ def _entities(line: str) -> dict:
     interface = re.search(r"\b((?:wlan|eth|wan|lan|br-|ppp|pon)\w*[.-]?\w*)\b", line, re.I)
     if interface:
         entities["interface"] = interface.group(1)
-    error_code = re.search(r"(?:errno|error|ret(?:urn)?)\s*[:=]?\s*(-?\d+)", line, re.I)
+    error_code = re.search(
+        r"(?:errno|error(?:\s+code)?|ret(?:urn)?)\s*[:=]?\s*(-?\d+)(?![\d/-])",
+        line,
+        re.I,
+    )
     if error_code:
         entities["error_code"] = error_code.group(1)
     pid = re.search(r"\bpid[=: ]+(\d+)\b", line, re.I)
     if pid:
         entities["pid"] = pid.group(1)
     return entities
+
+
+def _matching_rule(line: str) -> tuple[str, str, str, str] | None:
+    for code, module, component, fallback_level, pattern in RULES:
+        if pattern.search(line):
+            return code, module, component, fallback_level
+    return None
 
 
 class GenericLogParser:
@@ -136,11 +145,7 @@ class GenericLogParser:
                 continue
             ts_raw, ts_norm = _extract_timestamp(line, date_hint)
             level_match = LEVEL_PATTERN.search(line)
-            rule_match = None
-            for code, module, component, fallback_level, pattern in RULES:
-                if pattern.search(line):
-                    rule_match = (code, module, component, fallback_level)
-                    break
+            rule_match = _matching_rule(line)
 
             # Treat indented stack lines as part of previous event.
             if pending and not ts_raw and (line.startswith((" ", "\t")) or re.search(r"\bat\s+0x[0-9a-f]+|#\d+", line, re.I)):
@@ -185,6 +190,110 @@ class GenericLogParser:
         return events
 
 
+class HuaweiCollectDebugInfoParser:
+    parser_id = "huawei-collectdebuginfo"
+    parser_version = "1.0"
+
+    def probe(self, path: Path, sample: str) -> float:
+        score = 0.0
+        if "collectdebuginfo" in path.name.lower():
+            score += 0.35
+        if COLLECT_COMMAND_PATTERN.search(sample):
+            score += 0.5
+        if re.search(r"get\s+WLANConfiguration!", sample, re.I):
+            score += 0.15
+        if HUAWEI_RUNTIME_LOG_PATTERN.search(sample):
+            score += 0.55
+        return min(score, 0.99)
+
+    def parse(self, path: Path, relative_path: str, text: str) -> list[ParsedEvent]:
+        events: list[ParsedEvent] = []
+        pending_runtime: ParsedEvent | None = None
+
+        for line_number, raw_line in enumerate(text.splitlines(), start=1):
+            line = raw_line.rstrip("\r\n")
+            if not line.strip():
+                continue
+
+            command_match = COLLECT_COMMAND_PATTERN.search(line)
+            if command_match:
+                scope = (command_match.group("scope") or "DEVICE").upper()
+                command = command_match.group("command").strip()
+                masked_command = mask_sensitive(command)
+                module, component = _component_from_path(scope)
+                events.append(ParsedEvent(
+                    source_file=relative_path,
+                    line_start=line_number,
+                    line_end=line_number,
+                    timestamp_raw=None,
+                    timestamp_normalized=None,
+                    level="INFO",
+                    module=module,
+                    component=component,
+                    event_code="COLLECT_COMMAND",
+                    message=f"{scope}: {masked_command}"[:2000],
+                    raw_text=mask_sensitive(line)[:10000],
+                    entities={"scope": scope, "command": masked_command[:1000]},
+                    parser_id=self.parser_id,
+                    parser_version=self.parser_version,
+                    confidence=0.98,
+                ))
+                pending_runtime = None
+                continue
+
+            runtime_match = HUAWEI_RUNTIME_LOG_PATTERN.match(line)
+            if runtime_match:
+                ts_raw, ts_norm = _extract_timestamp(runtime_match.group("ts"))
+                raw_level = runtime_match.group("level")
+                level = _normalize_level(raw_level)
+                context_tokens = re.findall(r"\[([^\]]*)\]", runtime_match.group("context"))
+                component_token = next(
+                    (token.strip() for token in reversed(context_tokens) if token.strip() and not token.strip().isdigit()),
+                    "runtime",
+                )
+                module, default_component = _component_from_path(component_token)
+                component = component_token.lower() if component_token != "runtime" else default_component
+                rule_match = _matching_rule(line)
+                if rule_match:
+                    code, module, component, fallback_level = rule_match
+                    level = _normalize_level(raw_level, fallback_level)
+                    confidence = 0.96
+                else:
+                    code = "HUAWEI_RUNTIME_LOG"
+                    confidence = 0.9
+
+                message = runtime_match.group("message").strip() or line.strip()
+                entities = _entities(line)
+                if context_tokens:
+                    entities["contexts"] = mask_sensitive(",".join(context_tokens))[:500]
+                pending_runtime = ParsedEvent(
+                    source_file=relative_path,
+                    line_start=line_number,
+                    line_end=line_number,
+                    timestamp_raw=ts_raw,
+                    timestamp_normalized=ts_norm,
+                    level=level,
+                    module=module,
+                    component=component,
+                    event_code=code,
+                    message=mask_sensitive(message)[:2000],
+                    raw_text=mask_sensitive(line)[:10000],
+                    entities=entities,
+                    parser_id=self.parser_id,
+                    parser_version=self.parser_version,
+                    confidence=confidence,
+                )
+                events.append(pending_runtime)
+                continue
+
+            if pending_runtime and line.startswith((" ", "\t")):
+                pending_runtime.raw_text += "\n" + mask_sensitive(line)[:10000]
+                pending_runtime.message += " | " + mask_sensitive(line.strip())[:300]
+                pending_runtime.line_end = line_number
+
+        return events
+
+
 class JsonLineParser(GenericLogParser):
     parser_id = "json-line"
     parser_version = "1.0"
@@ -194,4 +303,5 @@ class JsonLineParser(GenericLogParser):
 
 
 registry.register(JsonLineParser())
+registry.register(HuaweiCollectDebugInfoParser())
 registry.register(GenericLogParser())
