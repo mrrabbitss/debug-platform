@@ -64,13 +64,15 @@ gw_ap_debug_platform/
 
 ## 3. 本地运行
 
-要求：Python 3.11+、Node.js 20+。
+要求：Python 3.11+、Node.js 20.19+ 或 22.12+。Python、Node.js 和 npm 需要加入 `PATH`。
 
 ### Windows
 
 ```bat
 scripts\start_local.bat
 ```
+
+该脚本使用仓库内的公开 npm registry 配置和 `package-lock.json` 执行可复现安装；依赖安装失败时会停止并保留错误提示，不会继续启动残缺的前端。
 
 ### Linux / macOS
 
@@ -100,7 +102,7 @@ uvicorn app.main:app --reload --port 8000
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
