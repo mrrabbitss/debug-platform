@@ -22,8 +22,6 @@ def looks_like_text_bytes(raw: bytes) -> bool:
         return True
     if raw.startswith(_TEXT_BOMS):
         return True
-    if b"\x00" in raw:
-        return False
     control_count = sum(byte < 32 and byte not in _ALLOWED_CONTROL_BYTES for byte in raw)
     return control_count / len(raw) <= 0.01
 
@@ -37,15 +35,20 @@ def decode_text_bytes(raw: bytes) -> str | None:
     if not looks_like_text_bytes(raw[:64 * 1024]):
         return None
     if raw.startswith(codecs.BOM_UTF8):
-        return raw.decode("utf-8-sig", errors="replace")
+        text = raw.decode("utf-8-sig", errors="replace")
+        return text.replace("\x00", "")
     if raw.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
-        return raw.decode("utf-32", errors="replace")
+        text = raw.decode("utf-32", errors="replace")
+        return text.replace("\x00", "")
     if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
-        return raw.decode("utf-16", errors="replace")
+        text = raw.decode("utf-16", errors="replace")
+        return text.replace("\x00", "")
     match = from_bytes(raw).best()
     if match is None:
-        return raw.decode("utf-8", errors="replace")
-    return str(match)
+        text = raw.decode("utf-8", errors="replace")
+    else:
+        text = str(match)
+    return text.replace("\x00", "")
 
 
 def read_text_file(path: Path) -> str | None:

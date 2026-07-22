@@ -34,3 +34,12 @@ def test_rejects_extensionless_binary_file(tmp_path: Path):
 
     with pytest.raises(UnsafeArchiveError, match="Unsupported archive or text log file type"):
         extract_archive(source, tmp_path / "out")
+
+
+def test_accepts_extensionless_text_log_with_sparse_nul_byte(tmp_path: Path):
+    source = tmp_path / "device_collectDebuginfo"
+    source.write_bytes(b"Wait\n" + b"A" * 2048 + b"\x00\nNOTICE 2026-03-02 03:29:17.483 ready\n")
+
+    manifest = extract_archive(source, tmp_path / "out")
+
+    assert manifest.files[0]["path"] == source.name

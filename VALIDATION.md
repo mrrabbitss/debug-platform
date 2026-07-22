@@ -5,7 +5,7 @@ Validated in the generation environment:
 - Backend dependency installation: passed
 - Python compileall: passed
 - Ruff static checks: passed
-- Pytest: 12 passed
+- Pytest: 15 passed
 - Vue TypeScript build: passed
 - VS Code extension TypeScript compile: passed
 - VSIX package generation: passed
@@ -15,6 +15,7 @@ Validated in the generation environment:
 - Extensionless upload name normalization to `.txt`: passed
 - Zero-readable-file parse failure state and diagnostic message: passed
 - Windows PowerShell/BAT offline log inspection on the extensionless demo file: passed
+- Sparse NUL text acceptance, sanitization, archive handling, and PowerShell reporting: passed
 - Demo repository upload and symbol indexing: passed
 - Rule + RAG diagnosis: passed
 - HTML report generation: passed

@@ -131,7 +131,7 @@ Start run collect command:WAP:get wlan basic laninst 1 wlaninst6
 NOTICE 2026-03-02 03:29:17.483[90][DC]...
 ```
 
-解析结果会保留命令采集边界，识别 `TRACE/DEBUG/INFO/NOTICE/WARN/ERROR/CRITICAL` 等级，并把日志时间转换为标准时间。原始文件仍可在“日志浏览”中查看。
+解析结果会保留命令采集边界，识别 `TRACE/DEBUG/INFO/NOTICE/WARN/ERROR/CRITICAL` 等级，并把日志时间转换为标准时间。文本中低于 1% 的孤立 NUL/控制字节不会再导致整个文件被判为二进制；解析时会清理 NUL，上传的原始文件保持不变。原始文件仍可在“日志浏览”中查看。
 
 仓库中的 `sample_data\logs\collectDebuginfo_extensionless_demo` 是可直接上传验证自动追加后缀和专用解析器的无后缀示例。
 

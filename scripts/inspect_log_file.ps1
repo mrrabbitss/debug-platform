@@ -45,7 +45,10 @@ function Get-EncodingHint {
     $oddRatio = if ($oddSlots -gt 0) { $oddNuls / $oddSlots } else { 0 }
     if ($oddRatio -ge 0.30 -and $evenRatio -le 0.05) { return "Likely UTF-16 LE without BOM" }
     if ($evenRatio -ge 0.30 -and $oddRatio -le 0.05) { return "Likely UTF-16 BE without BOM" }
-    if (($evenNuls + $oddNuls) -gt 0) { return "Mixed/binary or unsupported Unicode without BOM" }
+    $nulTotal = $evenNuls + $oddNuls
+    $nulRatio = if ($byteCount -gt 0) { $nulTotal / $byteCount } else { 0 }
+    if ($nulTotal -gt 0 -and $nulRatio -le 0.01) { return "8-bit text with sparse NUL bytes" }
+    if ($nulTotal -gt 0) { return "Mixed/binary or unsupported Unicode without BOM" }
     return "UTF-8/ASCII, ANSI/GBK, or another 8-bit encoding without BOM"
 }
 
@@ -139,9 +142,14 @@ $controlPercent = if ($probeCount -gt 0) {
 } else {
     0
 }
+$nulPercent = if ($probeCount -gt 0) {
+    [Math]::Round(100.0 * $nulCount / $probeCount, 3)
+} else {
+    0
+}
 $encodingHint = Get-EncodingHint -Bytes $sampleBytes
 $hasSupportedBom = $encodingHint -match "with BOM$"
-$appContentProbe = $hasSupportedBom -or ($nulCount -eq 0 -and $controlPercent -le 1.0)
+$appContentProbe = $hasSupportedBom -or $controlPercent -le 1.0
 $withinParserLimit = $logInfo.Length -le $parserMaxBytes
 $withinSingleFileLimit = $logInfo.Length -le $maxSingleFileBytes
 
@@ -274,6 +282,9 @@ if (-not $withinSingleFileLimit) {
 if (-not $appContentProbe) {
     $recommendations += "Current parser text probe will reject this encoding/content even after .txt is appended."
 }
+if ($nulCount -gt 0 -and $appContentProbe) {
+    $recommendations += "Sparse NUL bytes are supported and will be removed from decoded text; the uploaded original is preserved."
+}
 if ($encodingHint -like "Likely UTF-16*without BOM") {
     $recommendations += "BOM-less UTF-16 is likely. Convert a copy to UTF-8, or add BOM-less UTF-16 support."
 }
@@ -306,6 +317,7 @@ $reportLines = @(
     "First4Hex                : $($firstFour -join ' ')",
     "EncodingHint             : $encodingHint",
     "NulBytesFirst64KiB       : $nulCount",
+    "NulPercentFirst64KiB     : $nulPercent",
     "ControlPercentFirst64KiB : $controlPercent",
     "AppTextContentProbe      : $(if ($appContentProbe) { 'PASS' } else { 'FAIL' })",
     "WithinParserSizeLimit    : $(Convert-ToYesNo $withinParserLimit) ($parserMaxBytes bytes)",
