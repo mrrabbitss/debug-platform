@@ -11,4 +11,6 @@ vscode-extension/node_modules/
 vscode-extension/out/
 *.vsix
 log_check_result*.txt
+local_doctor_result*.txt
+.local_dependency_stamp
 .DS_Store

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_loads
-from app.models import CodeSymbol, KnowledgeChunk, KnowledgeDocument
+from app.models import CodeSymbol, KnowledgeChunk, KnowledgeDocument, Repository
 from app.services.retrieval_models import (
     RetrievalModelError,
     candidate_count_for_reranker,
@@ -41,7 +41,15 @@ class LocalHybridRetriever:
     It intentionally keeps exact error codes, paths and symbols competitive with natural-language matches.
     """
 
-    def search(self, query: str, *, device_type: str | None = None, module: str | None = None, top_k: int | None = None) -> list[RetrievalHit]:
+    def search(
+        self,
+        query: str,
+        *,
+        case_id: str | None = None,
+        device_type: str | None = None,
+        module: str | None = None,
+        top_k: int | None = None,
+    ) -> list[RetrievalHit]:
         top_k = top_k or get_settings().retrieval_top_k
         with SessionLocal() as db:
             rows = db.execute(
@@ -49,7 +57,16 @@ class LocalHybridRetriever:
                 .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
                 .where(KnowledgeDocument.active.is_(True))
             ).all()
-            symbols = db.scalars(select(CodeSymbol).limit(5000)).all()
+            symbol_query = select(CodeSymbol)
+            if case_id:
+                symbol_query = (
+                    symbol_query
+                    .join(Repository, CodeSymbol.repository_id == Repository.id)
+                    .where(Repository.case_id == case_id)
+                )
+            else:
+                symbol_query = symbol_query.where(False)
+            symbols = db.scalars(symbol_query.limit(5000)).all()
 
         docs: list[dict[str, Any]] = []
         for chunk, document in rows:

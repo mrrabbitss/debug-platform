@@ -1,5 +1,8 @@
 from collections.abc import Iterable
+import ipaddress
+import socket
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -27,6 +30,102 @@ MODE_BY_PROVIDER = {
     "qwen_rerank_api": "api",
 }
 
+_ALWAYS_BLOCKED_HOSTS = {
+    "metadata.google.internal",
+    "metadata.azure.internal",
+    "instance-data.ec2.internal",
+}
+
+
+def _host_is_allowlisted(host: str, entries: Iterable[str]) -> bool:
+    normalized = host.rstrip(".").lower()
+    for raw_entry in entries:
+        entry = raw_entry.strip().rstrip(".").lower()
+        if not entry:
+            continue
+        if entry.startswith("*."):
+            entry = entry[1:]
+        if entry.startswith("."):
+            if normalized == entry[1:] or normalized.endswith(entry):
+                return True
+        elif normalized == entry:
+            return True
+    return False
+
+
+def _resolved_addresses(host: str, port: int | None) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    try:
+        return {
+            ipaddress.ip_address(item[4][0].split("%", 1)[0])
+            for item in socket.getaddrinfo(host, port or 443, type=socket.SOCK_STREAM)
+        }
+    except (OSError, ValueError):
+        # A model profile may be saved while DNS or VPN is unavailable. The same
+        # validation runs again immediately before a request is sent.
+        return set()
+
+
+def _reject_unsafe_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    *,
+    allowlisted: bool,
+    allow_private: bool,
+) -> None:
+    if address.is_link_local or address.is_unspecified or address.is_multicast or address.is_reserved:
+        raise ValueError("Model endpoint resolves to a blocked network address")
+    if address.is_loopback and not allowlisted:
+        raise ValueError("Loopback model endpoints must be explicitly allowlisted")
+    if address.is_private and not (allowlisted or allow_private):
+        raise ValueError(
+            "Private-network model endpoints require MODEL_ENDPOINT_ALLOWLIST "
+            "or MODEL_ALLOW_PRIVATE_ENDPOINTS=true"
+        )
+
+
+def validate_model_endpoint(base_url: str) -> None:
+    """Reject unsafe model gateway URLs while allowing explicit intranet deployments."""
+    value = base_url.strip()
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Base URL is invalid") from exc
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("Model Base URL must use http or https")
+    if not parsed.hostname:
+        raise ValueError("Model Base URL must include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("Model Base URL must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("Model Base URL must not contain a query string or fragment")
+
+    settings = get_settings()
+    host = parsed.hostname.rstrip(".").lower()
+    allowlisted = _host_is_allowlisted(host, settings.model_endpoint_allowlist_entries)
+    if host in _ALWAYS_BLOCKED_HOSTS or host.startswith("metadata."):
+        raise ValueError("Cloud metadata endpoints cannot be used as model gateways")
+    if settings.app_env == "prod" and not allowlisted:
+        raise ValueError("Production model endpoints must be listed in MODEL_ENDPOINT_ALLOWLIST")
+    if parsed.scheme.lower() == "http" and not allowlisted:
+        raise ValueError("HTTP model endpoints must be explicitly allowlisted; use HTTPS otherwise")
+    if (host == "localhost" or host.endswith(".localhost")) and not allowlisted:
+        raise ValueError("Loopback model endpoints must be explicitly allowlisted")
+    if "." not in host and not allowlisted and not settings.model_allow_private_endpoints:
+        raise ValueError("Single-label/internal model endpoints must be explicitly allowed")
+
+    try:
+        literal_address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        addresses = set() if allowlisted else _resolved_addresses(host, port)
+    else:
+        addresses = {literal_address}
+    for address in addresses:
+        _reject_unsafe_address(
+            address,
+            allowlisted=allowlisted,
+            allow_private=settings.model_allow_private_endpoints,
+        )
+
 
 def validate_model_profile(
     task_type: str,
@@ -46,6 +145,8 @@ def validate_model_profile(
         raise ValueError("Model name or local model path is required")
     if mode == "api" and not (base_url or "").strip():
         raise ValueError("Base URL is required for API models")
+    if mode == "api":
+        validate_model_endpoint(base_url or "")
 
 
 def model_profile_to_dict(profile: ModelProfile) -> dict[str, Any]:

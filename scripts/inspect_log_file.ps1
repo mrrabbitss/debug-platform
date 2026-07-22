@@ -234,19 +234,21 @@ $backendExecutable = "N/A"
 $backendCommand = "N/A"
 $backendEntryCheck = "N/A"
 try {
-    $listener = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($null -ne $listener) {
+    $backendProcessId = $null
+    $netstatPath = Join-Path $env:SystemRoot "System32\netstat.exe"
+    foreach ($netstatLine in @(& $netstatPath -ano -p tcp 2>$null)) {
+        if ($netstatLine -match "^\s*TCP\s+\S+:8000\s+\S+\s+LISTENING\s+(\d+)\s*$") {
+            $backendProcessId = [int]$Matches[1]
+            break
+        }
+    }
+    if ($null -ne $backendProcessId) {
         $portState = "LISTENING"
-        $backendProcessId = $listener.OwningProcess
-        $backendProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $backendProcessId"
+        $backendProcess = Get-Process -Id $backendProcessId -ErrorAction SilentlyContinue
         if ($null -ne $backendProcess) {
-            $backendExecutable = [string]$backendProcess.ExecutablePath
-            $backendCommand = [string]$backendProcess.CommandLine
-            $expectedPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
-            $usesRepoPython = $backendExecutable -ieq $expectedPython
-            $usesExpectedEntry = $backendCommand -match "(?:^|\s)app\.main:app(?:\s|$)"
-            $backendEntryCheck = if ($usesRepoPython -and $usesExpectedEntry) { "PASS" } else { "CHECK_REQUIRED" }
+            try { $backendExecutable = [string]$backendProcess.Path } catch { $backendExecutable = $backendProcess.Name }
+            $backendCommand = "NOT_QUERIED (fast offline check)"
+            $backendEntryCheck = "PENDING_SERVICE_IDENTITY"
         }
     }
 } catch {
@@ -261,9 +263,11 @@ if ($portState -eq "LISTENING") {
         if ($null -ne $rootResponse.PSObject.Properties["name"]) {
             $serviceRootName = [string]$rootResponse.name
         }
+        $hasExpectedName = $serviceRootName -eq "GW/AP Intelligent Debug Platform"
         $hasExpectedApi = $null -ne $rootResponse.PSObject.Properties["api"] -and $rootResponse.api -eq "/api/v1"
         $hasExpectedDocs = $null -ne $rootResponse.PSObject.Properties["docs"] -and $rootResponse.docs -eq "/docs"
-        $serviceRootCheck = if ($hasExpectedApi -and $hasExpectedDocs) { "PASS" } else { "CHECK_REQUIRED" }
+        $serviceRootCheck = if ($hasExpectedName -and $hasExpectedApi -and $hasExpectedDocs) { "PASS" } else { "CHECK_REQUIRED" }
+        $backendEntryCheck = if ($serviceRootCheck -eq "PASS") { "PASS" } else { "CHECK_REQUIRED" }
     } catch {
         $serviceRootCheck = "REQUEST_FAILED"
     }

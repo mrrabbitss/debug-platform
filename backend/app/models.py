@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -38,7 +38,7 @@ class Artifact(Base):
     original_name: Mapped[str] = mapped_column(String(512))
     stored_path: Mapped[str] = mapped_column(Text)
     sha256: Mapped[str] = mapped_column(String(64), index=True)
-    size_bytes: Mapped[int] = mapped_column(Integer)
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(32), default="UPLOADED")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -48,6 +48,11 @@ class Artifact(Base):
 
 class LogEvent(Base):
     __tablename__ = "log_events"
+    __table_args__ = (
+        Index("ix_log_events_case_time", "case_id", "timestamp_normalized", "line_start"),
+        Index("ix_log_events_case_level", "case_id", "level"),
+        Index("ix_log_events_case_module", "case_id", "module"),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
@@ -138,6 +143,15 @@ class KnowledgeDocumentCategory(Base):
 
 class ModelProfile(Base):
     __tablename__ = "model_profiles"
+    __table_args__ = (
+        Index(
+            "uq_model_profiles_active_task",
+            "task_type",
+            unique=True,
+            sqlite_where=text("is_active = 1"),
+            postgresql_where=text("is_active = true"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
@@ -209,8 +223,10 @@ class AnalysisRun(Base):
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
     status: Mapped[str] = mapped_column(String(32), default="QUEUED", index=True)
     provider: Mapped[str] = mapped_column(String(64), default="mock")
-    model: Mapped[str] = mapped_column(String(128), default="rule-engine")
-    prompt_version: Mapped[str] = mapped_column(String(32), default="v1")
+    model: Mapped[str] = mapped_column(String(512), default="rule-engine")
+    model_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    model_config_json: Mapped[str] = mapped_column(Text, default="{}")
+    prompt_version: Mapped[str] = mapped_column(String(32), default="v2-evidence-validated")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     evidence_json: Mapped[str] = mapped_column(Text, default="[]")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

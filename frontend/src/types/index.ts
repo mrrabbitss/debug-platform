@@ -38,6 +38,7 @@ export interface Job {
 
 export interface LogEvent {
   id: string
+  artifact_id: string
   source_file: string
   line_start: number
   line_end: number
@@ -59,8 +60,12 @@ export interface Analysis {
   status: string
   provider: string
   model: string
+  model_profile_id?: string
+  model_config_json: string
+  prompt_version: string
   result_json: string
   evidence_json: string
+  error_message?: string
   created_at: string
 }
 

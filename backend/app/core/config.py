@@ -2,11 +2,21 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+BACKEND_ROOT = PROJECT_ROOT / "backend"
+DEFAULT_DATA_ROOT = BACKEND_ROOT / "data"
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     app_name: str = "GW/AP Intelligent Debug Platform"
     app_env: Literal["dev", "test", "prod"] = "dev"
@@ -33,6 +43,8 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 120
     llm_max_retries: int = 2
     model_secret_key: str = ""
+    model_endpoint_allowlist: str = ""
+    model_allow_private_endpoints: bool = False
 
     qdrant_url: str = ""
     qdrant_api_key: str = ""
@@ -41,9 +53,44 @@ class Settings(BaseSettings):
 
     report_title: str = "GW/AP 智能故障诊断报告"
 
+    @model_validator(mode="after")
+    def resolve_local_paths(self) -> "Settings":
+        """Keep local data paths stable regardless of the process working directory.
+
+        Older releases started Uvicorn from ``backend`` and documented paths such as
+        ``sqlite:///./data/gw_ap_debug.db``. Resolve those relative paths against the
+        backend directory so existing installations continue to use the same files,
+        while the repository-level .env works from every supported launcher.
+        """
+        sqlite_prefix = "sqlite:///"
+        if self.database_url.startswith(sqlite_prefix):
+            database_path = self.database_url[len(sqlite_prefix):]
+            if database_path != ":memory:":
+                path = Path(database_path)
+                if not path.is_absolute():
+                    path = (BACKEND_ROOT / path).resolve()
+                    self.database_url = f"{sqlite_prefix}{path.as_posix()}"
+        if not self.storage_root.is_absolute():
+            self.storage_root = (BACKEND_ROOT / self.storage_root).resolve()
+        else:
+            self.storage_root = self.storage_root.resolve()
+        return self
+
+    @property
+    def data_root(self) -> Path:
+        return DEFAULT_DATA_ROOT
+
+    @property
+    def model_secret_key_path(self) -> Path:
+        return self.data_root / "model_secret.key"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [x.strip() for x in self.cors_origins.split(",") if x.strip()]
+
+    @property
+    def model_endpoint_allowlist_entries(self) -> list[str]:
+        return [x.strip().lower() for x in self.model_endpoint_allowlist.split(",") if x.strip()]
 
 
 @lru_cache
@@ -51,5 +98,5 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     settings = Settings()
     settings.storage_root.mkdir(parents=True, exist_ok=True)
-    Path("./data").mkdir(parents=True, exist_ok=True)
+    settings.data_root.mkdir(parents=True, exist_ok=True)
     return settings

@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Iterable, Iterator
 from typing import Protocol
 
 
@@ -29,6 +30,14 @@ class Parser(Protocol):
     def probe(self, path: Path, sample: str) -> float: ...
 
     def parse(self, path: Path, relative_path: str, text: str) -> list[ParsedEvent]: ...
+
+    def parse_lines(
+        self,
+        path: Path,
+        relative_path: str,
+        lines: Iterable[str],
+        sample: str = "",
+    ) -> Iterator[ParsedEvent]: ...
 
 
 class ParserRegistry:

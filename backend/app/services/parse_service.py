@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import delete
+from sqlalchemy import delete, insert, select
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
@@ -11,7 +11,8 @@ from app.services.jobs import JobContext
 # Loading this module registers all built-in parsers on the shared registry.
 from app.services import log_parsers as _builtin_parsers  # noqa: F401
 from app.services.parser_registry import registry
-from app.services.text_files import looks_like_text_file, read_text_file
+from app.services.storage import storage
+from app.services.text_files import looks_like_text_file, open_text_lines, read_text_file, read_text_sample
 
 
 TEXT_SUFFIXES = {
@@ -20,7 +21,7 @@ TEXT_SUFFIXES = {
 }
 
 
-def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
+def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
     with SessionLocal() as db:
         case = db.get(Case, case_id)
         artifact = db.get(Artifact, artifact_id)
@@ -29,7 +30,7 @@ def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
         artifact.status = "PARSING"
         case.status = "PARSING"
         db.commit()
-        source = Path(artifact.stored_path)
+        source = storage.resolve_path(artifact.stored_path)
         extract_dir = source.parent / "extracted"
 
     ctx.update(5, "Validating and extracting archive")
@@ -39,42 +40,74 @@ def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
         db.execute(delete(LogEvent).where(LogEvent.artifact_id == artifact_id))
         db.commit()
 
-    text_files = []
+    text_files: list[tuple[Path, dict]] = []
     for item in manifest.files:
         candidate = extract_dir / item["path"]
         if candidate.suffix.lower() in TEXT_SUFFIXES or looks_like_text_file(candidate):
-            text_files.append(candidate)
+            text_files.append((candidate, item))
     parsed_files = 0
     event_count = 0
     device_info: dict[str, str] = {}
     parser_counts: dict[str, int] = {}
     level_counts: dict[str, int] = {}
 
-    for index, path in enumerate(text_files):
+    for index, (path, manifest_item) in enumerate(text_files):
         if not path.is_file():
             continue
         relative = str(path.relative_to(extract_dir)).replace("\\", "/")
-        text = read_text_file(path)
-        if text is None:
+        sample_result = read_text_sample(path)
+        opened = open_text_lines(path)
+        if sample_result is None or opened is None:
             continue
-        sample = text[:20000]
+        sample, sample_encoding = sample_result
+        encoding, lines = opened
         parser = registry.select(path, sample)
-        events = parser.parse(path, relative, text)
         parser_counts[parser.parser_id] = parser_counts.get(parser.parser_id, 0) + 1
+        line_count = 0
+
+        def counted_lines():
+            nonlocal line_count
+            for line in lines:
+                line_count += 1
+                yield line
+
+        if hasattr(parser, "parse_lines"):
+            events = parser.parse_lines(path, relative, counted_lines(), sample)
+        else:
+            text = read_text_file(path)
+            if text is None:
+                continue
+            line_count = len(text.splitlines())
+            events = iter(parser.parse(path, relative, text))
+
+        batch: list[dict] = []
         with SessionLocal() as db:
             for event in events:
                 level_counts[event.level] = level_counts.get(event.level, 0) + 1
-                db.add(LogEvent(
-                    id=new_id("EVT"), case_id=case_id, artifact_id=artifact_id,
-                    source_file=event.source_file, line_start=event.line_start, line_end=event.line_end,
-                    timestamp_raw=event.timestamp_raw, timestamp_normalized=event.timestamp_normalized,
-                    level=event.level, module=event.module, component=event.component,
-                    event_code=event.event_code, message=event.message, raw_text=event.raw_text,
-                    entities_json=json_dumps(event.entities), parser_id=event.parser_id,
-                    parser_version=event.parser_version, confidence=event.confidence,
-                ))
-            db.commit()
-        event_count += len(events)
+                batch.append({
+                    "id": new_id("EVT"), "case_id": case_id, "artifact_id": artifact_id,
+                    "source_file": event.source_file, "line_start": event.line_start, "line_end": event.line_end,
+                    "timestamp_raw": event.timestamp_raw, "timestamp_normalized": event.timestamp_normalized,
+                    "level": event.level, "module": event.module, "component": event.component,
+                    "event_code": event.event_code, "message": event.message, "raw_text": event.raw_text,
+                    "entities_json": json_dumps(event.entities), "parser_id": event.parser_id,
+                    "parser_version": event.parser_version, "confidence": event.confidence,
+                })
+                if len(batch) >= 1000:
+                    db.execute(insert(LogEvent), batch)
+                    db.commit()
+                    event_count += len(batch)
+                    batch.clear()
+                    ctx.update(
+                        10 + int(80 * index / max(len(text_files), 1)),
+                        f"Parsing {relative}: {line_count} lines, {event_count} events",
+                    )
+            if batch:
+                db.execute(insert(LogEvent), batch)
+                db.commit()
+                event_count += len(batch)
+        manifest_item["line_count"] = line_count
+        manifest_item["encoding"] = encoding or sample_encoding
         parsed_files += 1
         lower_text = sample.lower()
         for key, patterns in {
@@ -115,7 +148,7 @@ def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
                 "parser_counts": parser_counts,
                 "level_counts": level_counts,
                 "device_info": device_info,
-                "extract_root": str(extract_dir),
+                "extract_root": storage.storage_key(extract_dir),
             })
             if parse_error:
                 meta["parse_error"] = parse_error
@@ -142,3 +175,29 @@ def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
         "events": event_count,
         "device_info": device_info,
     }
+
+
+def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
+    try:
+        return _parse_artifact_impl(ctx, case_id, artifact_id)
+    except Exception as exc:
+        with SessionLocal() as db:
+            artifact = db.get(Artifact, artifact_id)
+            case = db.get(Case, case_id)
+            if artifact:
+                db.execute(delete(LogEvent).where(LogEvent.artifact_id == artifact_id))
+                metadata = json_loads(artifact.metadata_json, {})
+                metadata.setdefault("parse_error", str(exc)[:2000] or type(exc).__name__)
+                artifact.metadata_json = json_dumps(metadata)
+                artifact.status = "PARSE_FAILED"
+            if case:
+                has_parsed_artifact = db.scalar(
+                    select(Artifact.id).where(
+                        Artifact.case_id == case_id,
+                        Artifact.id != artifact_id,
+                        Artifact.status == "PARSED",
+                    ).limit(1)
+                )
+                case.status = "PARSED" if has_parsed_artifact else "UPLOADED"
+            db.commit()
+        raise

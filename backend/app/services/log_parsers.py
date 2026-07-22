@@ -1,4 +1,5 @@
 import re
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from dateutil import parser as date_parser
@@ -30,13 +31,13 @@ RULES = [
     ("WATCHDOG_RESTART", "SYSTEM", "watchdog", "WARN", re.compile(r"watchdog.*(?:restart|timeout|reset)|restarting service", re.I)),
     ("HOSTAPD_START_FAILED", "WLAN", "hostapd", "ERROR", re.compile(r"hostapd.*(?:failed|error)|failed to set beacon|could not configure driver", re.I)),
     ("WLAN_DISCONNECTED", "WLAN", "wifi", "WARN", re.compile(r"deauth|disassoc|disconnect|wlan\d+.*down", re.I)),
-    ("AUTH_FAILED", "WLAN", "authentication", "ERROR", re.compile(r"authentication failed|4-way handshake failed|eap.*fail", re.I)),
     ("DHCP_FAILED", "LAN", "dhcp", "ERROR", re.compile(r"dhcp.*(?:fail|timeout|nak)|no lease|discover timeout", re.I)),
-    ("PPPOE_FAILED", "WAN", "pppoe", "ERROR", re.compile(r"pppoe.*(?:fail|timeout|terminated)|PADI timeout|authentication failed", re.I)),
+    ("PPPOE_FAILED", "WAN", "pppoe", "ERROR", re.compile(r"pppoe.*(?:fail|timeout|terminated|authentication)|PADI timeout|(?:PAP|CHAP).*fail", re.I)),
+    ("AUTH_FAILED", "WLAN", "authentication", "ERROR", re.compile(r"authentication failed|4-way handshake failed|eap.*fail", re.I)),
     ("WAN_LINK_DOWN", "WAN", "network", "WARN", re.compile(r"wan.*link.*down|carrier lost|no carrier", re.I)),
     ("PON_LOS", "PON", "pon", "CRITICAL", re.compile(r"\bLOS\b|loss of signal|pon.*down|optical.*alarm", re.I)),
     ("OMCI_ERROR", "PON", "omci", "ERROR", re.compile(r"omci.*(?:error|fail|timeout|mismatch)", re.I)),
-    ("TR069_ERROR", "MANAGEMENT", "tr069", "ERROR", re.compile(r"tr-?069|cwmp", re.I)),
+    ("TR069_ERROR", "MANAGEMENT", "tr069", "ERROR", re.compile(r"(?:tr-?069|cwmp).*(?:error|fail|timeout|reject|invalid)", re.I)),
     ("MEMORY_PRESSURE", "SYSTEM", "memory", "ERROR", re.compile(r"out of memory|oom-killer|cannot allocate memory|memory leak", re.I)),
     ("CONFIG_INVALID", "CONFIG", "config", "ERROR", re.compile(r"invalid config|configuration error|missing parameter|invalid value", re.I)),
     ("INTERFACE_STATE_CHANGE", "NETWORK", "interface", "INFO", re.compile(r"(?:eth|wan|lan|wlan|br-|pon)\S*.*(?:link is|state).*\b(up|down)\b", re.I)),
@@ -64,10 +65,10 @@ def _extract_timestamp(line: str, date_hint: str | None = None) -> tuple[str | N
         raw = match.group("ts")
         try:
             normalized_raw = raw.replace(";", ":").replace(",", ".")
-            if re.fullmatch(r"\d{2}:\d{2}[:;]\d{2}(?:[.,]\d+)?", raw) and date_hint:
-                raw_for_parse = f"{date_hint} {normalized_raw}"
-            else:
-                raw_for_parse = normalized_raw
+            is_time_only = bool(re.fullmatch(r"\d{2}:\d{2}[:;]\d{2}(?:[.,]\d+)?", raw))
+            if is_time_only and not date_hint:
+                return raw, None
+            raw_for_parse = f"{date_hint} {normalized_raw}" if is_time_only else normalized_raw
             value = date_parser.parse(raw_for_parse, fuzzy=True)
             return raw, value.isoformat()
         except (ValueError, OverflowError):
@@ -133,13 +134,21 @@ class GenericLogParser:
         return score
 
     def parse(self, path: Path, relative_path: str, text: str) -> list[ParsedEvent]:
-        events: list[ParsedEvent] = []
+        return list(self.parse_lines(path, relative_path, text.splitlines(), text[:10000]))
+
+    def parse_lines(
+        self,
+        path: Path,
+        relative_path: str,
+        lines: Iterable[str],
+        sample: str = "",
+    ) -> Iterator[ParsedEvent]:
         module_by_path, component_by_path = _component_from_path(relative_path)
-        date_hint_match = re.search(r"20\d{2}[-/]\d{2}[-/]\d{2}", text[:10000])
+        date_hint_match = re.search(r"20\d{2}[-/]\d{2}[-/]\d{2}", sample[:10000])
         date_hint = date_hint_match.group(0).replace("/", "-") if date_hint_match else None
         pending: ParsedEvent | None = None
 
-        for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        for line_number, raw_line in enumerate(lines, start=1):
             line = raw_line.rstrip("\r\n")
             if not line.strip():
                 continue
@@ -153,6 +162,10 @@ class GenericLogParser:
                 pending.message += " | " + mask_sensitive(line.strip())[:300]
                 pending.line_end = line_number
                 continue
+
+            if pending:
+                yield pending
+                pending = None
 
             if rule_match:
                 code, module, component, fallback_level = rule_match
@@ -186,8 +199,8 @@ class GenericLogParser:
                 parser_version=self.parser_version,
                 confidence=confidence,
             )
-            events.append(pending)
-        return events
+        if pending:
+            yield pending
 
 
 class HuaweiCollectDebugInfoParser:
@@ -207,21 +220,32 @@ class HuaweiCollectDebugInfoParser:
         return min(score, 0.99)
 
     def parse(self, path: Path, relative_path: str, text: str) -> list[ParsedEvent]:
-        events: list[ParsedEvent] = []
+        return list(self.parse_lines(path, relative_path, text.splitlines(), text[:10000]))
+
+    def parse_lines(
+        self,
+        path: Path,
+        relative_path: str,
+        lines: Iterable[str],
+        sample: str = "",
+    ) -> Iterator[ParsedEvent]:
         pending_runtime: ParsedEvent | None = None
 
-        for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        for line_number, raw_line in enumerate(lines, start=1):
             line = raw_line.rstrip("\r\n")
             if not line.strip():
                 continue
 
             command_match = COLLECT_COMMAND_PATTERN.search(line)
             if command_match:
+                if pending_runtime:
+                    yield pending_runtime
+                    pending_runtime = None
                 scope = (command_match.group("scope") or "DEVICE").upper()
                 command = command_match.group("command").strip()
                 masked_command = mask_sensitive(command)
                 module, component = _component_from_path(scope)
-                events.append(ParsedEvent(
+                yield ParsedEvent(
                     source_file=relative_path,
                     line_start=line_number,
                     line_end=line_number,
@@ -237,12 +261,13 @@ class HuaweiCollectDebugInfoParser:
                     parser_id=self.parser_id,
                     parser_version=self.parser_version,
                     confidence=0.98,
-                ))
-                pending_runtime = None
+                )
                 continue
 
             runtime_match = HUAWEI_RUNTIME_LOG_PATTERN.match(line)
             if runtime_match:
+                if pending_runtime:
+                    yield pending_runtime
                 ts_raw, ts_norm = _extract_timestamp(runtime_match.group("ts"))
                 raw_level = runtime_match.group("level")
                 level = _normalize_level(raw_level)
@@ -283,15 +308,20 @@ class HuaweiCollectDebugInfoParser:
                     parser_version=self.parser_version,
                     confidence=confidence,
                 )
-                events.append(pending_runtime)
                 continue
 
             if pending_runtime and line.startswith((" ", "\t")):
                 pending_runtime.raw_text += "\n" + mask_sensitive(line)[:10000]
                 pending_runtime.message += " | " + mask_sensitive(line.strip())[:300]
                 pending_runtime.line_end = line_number
+                continue
 
-        return events
+            if pending_runtime:
+                yield pending_runtime
+                pending_runtime = None
+
+        if pending_runtime:
+            yield pending_runtime
 
 
 class JsonLineParser(GenericLogParser):

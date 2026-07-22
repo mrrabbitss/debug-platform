@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
 import type { Analysis, Artifact, CaseItem, Job, LogEvent } from '../types'
 
@@ -13,6 +13,14 @@ const events = ref<LogEvent[]>([])
 const analyses = ref<Analysis[]>([])
 const repositories = ref<any[]>([])
 const symbols = ref<any[]>([])
+const eventStats = ref<{total:number, filtered_total:number, level_counts:Record<string,number>, module_counts:Record<string,number>}>({
+  total: 0, filtered_total: 0, level_counts: {}, module_counts: {}
+})
+const eventPage = ref(1)
+const eventPageSize = ref(200)
+const eventView = ref('table')
+const timelineItems = ref<any[]>([])
+const timelineModuleCounts = ref<Record<string, number>>({})
 const activeTab = ref('overview')
 const debugFile = ref<File | null>(null)
 const debugFileInput = ref<HTMLInputElement | null>(null)
@@ -29,12 +37,24 @@ const fileManifest = ref<any>({})
 const rawLog = ref('')
 const selectedArtifact = ref<string>('')
 const selectedLogPath = ref('')
+const rawStartLine = ref(1)
+const rawReturnedLines = ref(0)
+const rawTotalLines = ref(0)
+const rawHasMore = ref(false)
+const rawEncoding = ref('')
+const rawJumpLine = ref(1)
 const symbolSearch = ref('')
 
 const latestAnalysis = computed(() => analyses.value.find(item => item.status === 'COMPLETED'))
-const criticalCount = computed(() => events.value.filter(e => e.level === 'CRITICAL').length)
-const errorCount = computed(() => events.value.filter(e => e.level === 'ERROR').length)
-const modules = computed(() => [...new Set(events.value.map(e => e.module))].sort())
+const eventDrawerVisible = computed({
+  get: () => selectedEvent.value !== null,
+  set: (visible: boolean) => {
+    if (!visible) selectedEvent.value = null
+  }
+})
+const criticalCount = computed(() => eventStats.value.level_counts.CRITICAL || 0)
+const errorCount = computed(() => eventStats.value.level_counts.ERROR || 0)
+const modules = computed(() => Object.keys(eventStats.value.module_counts || {}).sort())
 
 async function loadAll() {
   const [caseRes, artifactRes, analysisRes, repoRes] = await Promise.all([
@@ -50,14 +70,37 @@ async function loadAll() {
     await loadReportPreview(latestAnalysis.value.id)
   }
   await loadEvents()
+  await loadTimeline()
 }
 
-async function loadEvents() {
-  const params: any = { limit: 1000 }
+async function loadEvents(resetPage = false) {
+  if (resetPage) eventPage.value = 1
+  const params: any = {
+    limit: eventPageSize.value,
+    offset: (eventPage.value - 1) * eventPageSize.value
+  }
   if (eventFilter.level) params.level = eventFilter.level
   if (eventFilter.module) params.module = eventFilter.module
   if (eventFilter.search) params.search = eventFilter.search
-  events.value = (await api.get(`/cases/${caseId}/events`, { params })).data
+  const [eventsResponse, statsResponse] = await Promise.all([
+    api.get(`/cases/${caseId}/events`, { params }),
+    api.get(`/cases/${caseId}/events/stats`, { params })
+  ])
+  events.value = eventsResponse.data
+  eventStats.value = statsResponse.data
+}
+
+async function loadTimeline() {
+  const { data } = await api.get(`/cases/${caseId}/timeline`, { params: { limit: 300 } })
+  timelineItems.value = data.items || []
+  timelineModuleCounts.value = data.module_counts || {}
+}
+
+function timelineType(level: string): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
+  const types: Record<string, 'primary' | 'success' | 'warning' | 'danger' | 'info'> = {
+    CRITICAL: 'danger', ERROR: 'danger', WARN: 'warning', NOTICE: 'primary', INFO: 'success'
+  }
+  return types[level] || 'info'
 }
 
 async function uploadDebug() {
@@ -89,6 +132,21 @@ async function parseArtifact(artifactId: string) {
   watchJob(data)
 }
 
+async function deleteArtifact(artifact: Artifact) {
+  try {
+    await ElMessageBox.confirm(`确认删除“${artifact.original_name}”及其解析结果？`, '删除日志', { type: 'warning' })
+    const { data } = await api.delete(`/cases/${caseId}/artifacts/${artifact.id}`)
+    if (data.storage_cleanup_errors?.length) {
+      ElMessage.warning('数据库记录已删除，但部分文件清理失败，请检查后端日志')
+    } else {
+      ElMessage.success('日志及解析结果已删除')
+    }
+    await loadAll()
+  } catch (error: any) {
+    if (error !== 'cancel') ElMessage.error(error?.response?.data?.detail || error?.message || '删除失败')
+  }
+}
+
 async function analyze() {
   const { data } = await api.post(`/cases/${caseId}/analyses`)
   watchJob(data)
@@ -115,10 +173,43 @@ async function loadManifest(artifactId: string) {
   activeTab.value = 'logs'
 }
 
-async function loadRawLog(path: string) {
+async function loadRawLog(path: string, startLine = 1) {
   if (!selectedArtifact.value) return
   selectedLogPath.value = path
-  rawLog.value = (await api.get(`/artifacts/${selectedArtifact.value}/content`, { params: { path, start_line: 1, line_count: 5000 } })).data
+  const response = await api.get(`/artifacts/${selectedArtifact.value}/content`, {
+    params: { path, start_line: Math.max(1, startLine), line_count: 1000 }
+  })
+  rawLog.value = response.data
+  rawStartLine.value = Number(response.headers['x-start-line'] || startLine)
+  rawReturnedLines.value = Number(response.headers['x-returned-lines'] || 0)
+  rawTotalLines.value = Number(response.headers['x-total-lines'] || 0)
+  rawHasMore.value = String(response.headers['x-has-more'] || 'false') === 'true'
+  rawEncoding.value = String(response.headers['x-text-encoding'] || '')
+  rawJumpLine.value = rawStartLine.value
+}
+
+async function previousRawPage() {
+  await loadRawLog(selectedLogPath.value, Math.max(1, rawStartLine.value - 1000))
+}
+
+async function nextRawPage() {
+  await loadRawLog(selectedLogPath.value, rawStartLine.value + Math.max(rawReturnedLines.value, 1))
+}
+
+async function jumpToRawLine() {
+  const maximum = rawTotalLines.value || Number.MAX_SAFE_INTEGER
+  await loadRawLog(selectedLogPath.value, Math.min(Math.max(1, rawJumpLine.value), maximum))
+}
+
+async function openEventSource(event: LogEvent) {
+  selectedEvent.value = null
+  await loadManifest(event.artifact_id)
+  await loadRawLog(event.source_file, Math.max(1, event.line_start - 20))
+}
+
+async function openTimelineSource(item: any) {
+  await loadManifest(item.artifact_id)
+  await loadRawLog(item.source_file, Math.max(1, Number(item.line_start || 1) - 20))
 }
 
 async function loadReportPreview(analysisId: string) {
@@ -181,6 +272,9 @@ async function suggestPatch(symbolId: string) {
 }
 
 onMounted(loadAll)
+onBeforeUnmount(() => {
+  if (jobTimer.value) window.clearInterval(jobTimer.value)
+})
 </script>
 
 <template>
@@ -203,7 +297,7 @@ onMounted(loadAll)
     <el-tabs v-model="activeTab" type="border-card">
       <el-tab-pane label="案例概览" name="overview">
         <div class="card-grid">
-          <div class="stat-card"><div class="muted">关键事件</div><strong style="font-size:28px">{{ events.length }}</strong></div>
+          <div class="stat-card"><div class="muted">关键事件</div><strong style="font-size:28px">{{ eventStats.total }}</strong></div>
           <div class="stat-card"><div class="muted">严重事件</div><strong style="font-size:28px;color:#991b1b">{{ criticalCount }}</strong></div>
           <div class="stat-card"><div class="muted">错误事件</div><strong style="font-size:28px;color:#dc2626">{{ errorCount }}</strong></div>
           <div class="stat-card"><div class="muted">知识增强</div><strong style="font-size:28px">{{ diagnosis.retrieved_knowledge?.length || 0 }}</strong></div>
@@ -220,10 +314,11 @@ onMounted(loadAll)
           <el-table-column prop="kind" label="类型" width="130" />
           <el-table-column prop="size_bytes" label="大小(B)" width="120" />
           <el-table-column prop="status" label="状态" width="120" />
-          <el-table-column label="操作" width="210">
+          <el-table-column label="操作" width="250">
             <template #default="scope">
               <el-button link type="primary" @click="parseArtifact(scope.row.id)">解析</el-button>
               <el-button link @click="loadManifest(scope.row.id)">文件树</el-button>
+               <el-button link type="danger" @click="deleteArtifact(scope.row as Artifact)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -241,24 +336,37 @@ onMounted(loadAll)
           <el-col :span="7">
             <el-card header="文件目录" style="height:650px;overflow:auto">
               <div v-for="item in fileManifest.manifest || []" :key="item.path" style="padding:5px 0;cursor:pointer" @click="loadRawLog(item.path)">
-                <span class="mono">{{ item.path }}</span> <small class="muted">{{ item.size }}</small>
+                <span class="mono">{{ item.path }}</span> <small class="muted">{{ item.line_count ? `${item.line_count} 行` : `${item.size} B` }}</small>
               </div>
             </el-card>
           </el-col>
           <el-col :span="17">
             <el-card :header="selectedLogPath || '原始日志'" style="height:650px">
-              <pre class="mono" style="height:570px;overflow:auto">{{ rawLog || '选择左侧文件查看，原始数据不会被 LLM 输出覆盖。' }}</pre>
+              <div v-if="selectedLogPath" class="toolbar" style="margin-bottom:8px">
+                <el-button :disabled="rawStartLine <= 1" @click="previousRawPage">上一页</el-button>
+                <el-button :disabled="!rawHasMore" @click="nextRawPage">下一页</el-button>
+                <el-input-number v-model="rawJumpLine" :min="1" :max="rawTotalLines || undefined" controls-position="right" style="width:150px" />
+                <el-button @click="jumpToRawLine">跳转</el-button>
+                <span class="muted">第 {{ rawStartLine }}–{{ rawStartLine + Math.max(rawReturnedLines - 1, 0) }} 行 / {{ rawTotalLines || '未知总行数' }} · {{ rawEncoding }}</span>
+              </div>
+              <pre class="mono" style="height:520px;overflow:auto">{{ rawLog || '选择左侧文件查看，原始数据不会被 LLM 输出覆盖。' }}</pre>
             </el-card>
           </el-col>
         </el-row>
       </el-tab-pane>
 
       <el-tab-pane label="事件与时间线" name="events">
+        <el-tabs v-model="eventView">
+          <el-tab-pane label="事件列表" name="table" />
+          <el-tab-pane label="时间线" name="timeline" />
+        </el-tabs>
+        <template v-if="eventView === 'table'">
         <div class="toolbar">
           <el-select v-model="eventFilter.level" clearable placeholder="级别" style="width:120px"><el-option v-for="x in ['CRITICAL','ERROR','WARN','NOTICE','INFO','DEBUG','TRACE']" :key="x" :label="x" :value="x" /></el-select>
           <el-select v-model="eventFilter.module" clearable placeholder="模块" style="width:130px"><el-option v-for="x in modules" :key="x" :label="x" :value="x" /></el-select>
           <el-input v-model="eventFilter.search" placeholder="错误码/关键词" style="width:260px" @keyup.enter="loadEvents" />
-          <el-button @click="loadEvents">筛选</el-button>
+          <el-button @click="loadEvents(true)">筛选</el-button>
+          <span class="muted">匹配 {{ eventStats.filtered_total }} / 总计 {{ eventStats.total }}</span>
         </div>
         <el-table :data="events" height="590" @row-click="(row:LogEvent) => selectedEvent = row">
           <el-table-column prop="timestamp_normalized" label="时间" width="190" />
@@ -269,12 +377,50 @@ onMounted(loadAll)
           <el-table-column prop="message" label="日志内容" min-width="400" show-overflow-tooltip />
           <el-table-column prop="source_file" label="来源" width="210" show-overflow-tooltip />
         </el-table>
-        <el-drawer v-model="selectedEvent" title="事件证据详情" size="52%">
+        <el-pagination
+          v-model:current-page="eventPage"
+          v-model:page-size="eventPageSize"
+          :total="eventStats.filtered_total"
+          :page-sizes="[100, 200, 500, 1000]"
+          layout="total, sizes, prev, pager, next, jumper"
+          style="margin-top:12px;justify-content:flex-end"
+          @current-change="loadEvents()"
+          @size-change="loadEvents(true)"
+        />
+        <el-drawer v-model="eventDrawerVisible" title="事件证据详情" size="52%">
           <div v-if="selectedEvent">
             <el-descriptions :column="2" border><el-descriptions-item label="证据编号">{{ selectedEvent.id }}</el-descriptions-item><el-descriptions-item label="可信度">{{ selectedEvent.confidence }}</el-descriptions-item><el-descriptions-item label="文件">{{ selectedEvent.source_file }}</el-descriptions-item><el-descriptions-item label="行号">{{ selectedEvent.line_start }}-{{ selectedEvent.line_end }}</el-descriptions-item></el-descriptions>
             <pre class="mono evidence-box">{{ selectedEvent.raw_text }}</pre>
+            <el-button type="primary" @click="openEventSource(selectedEvent)">查看原始日志第 {{ selectedEvent.line_start }} 行</el-button>
           </div>
         </el-drawer>
+        </template>
+        <template v-else>
+          <el-alert
+            type="info"
+            :closable="false"
+            :title="`按时间展示前 ${timelineItems.length} 条关键事件；完整事件请使用事件列表分页查看。`"
+            style="margin-bottom:14px"
+          />
+          <div class="toolbar">
+            <el-tag v-for="(count, moduleName) in timelineModuleCounts" :key="moduleName" effect="plain">{{ moduleName }} {{ count }}</el-tag>
+          </div>
+          <el-timeline style="max-height:620px;overflow:auto;padding:12px 24px">
+            <el-timeline-item
+              v-for="item in timelineItems"
+              :key="item.id"
+              :timestamp="item.time || '无绝对时间'"
+              :type="timelineType(item.level)"
+              placement="top"
+            >
+              <el-card shadow="hover" style="cursor:pointer" @click="openTimelineSource(item)">
+                <div class="toolbar" style="margin-bottom:4px"><el-tag size="small">{{ item.level }}</el-tag><strong>{{ item.module }} / {{ item.component }}</strong><span class="mono">{{ item.event_code }}</span></div>
+                <div>{{ item.message }}</div>
+                <div class="muted">{{ item.source_file }}:{{ item.line_start }}</div>
+              </el-card>
+            </el-timeline-item>
+          </el-timeline>
+        </template>
       </el-tab-pane>
 
       <el-tab-pane label="综合诊断" name="diagnosis">

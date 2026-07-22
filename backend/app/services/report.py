@@ -55,7 +55,7 @@ def _next_version(case_id: str, analysis_id: str, fmt: str) -> int:
 def _record_report(case_id: str, analysis_id: str, fmt: str, path: Path, version: int) -> Report:
     report = Report(
         id=new_id("RPT"), case_id=case_id, analysis_run_id=analysis_id,
-        format=fmt, version=version, stored_path=str(path), sha256=sha256_file(path),
+        format=fmt, version=version, stored_path=storage.storage_key(path), sha256=sha256_file(path),
     )
     with SessionLocal() as db:
         db.add(report)

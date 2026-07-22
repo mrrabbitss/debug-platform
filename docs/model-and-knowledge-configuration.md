@@ -36,6 +36,20 @@
 
 API 模式会传输业务内容：诊断大模型接收案例证据，Embedding API 在重建索引时接收知识分块，Reranker API 接收检索问题和候选知识。只能配置公司批准且允许接收这些数据的端点；生产环境应同时启用 HTTPS 和后端鉴权。
 
+后端会在保存、启用和每次实际调用前验证 Base URL：
+
+- 仅支持 `http://` 和 `https://`，不允许 URL 内嵌账号密码、查询串或片段；
+- 云元数据、链路本地、未授权的回环/私网地址会被拒绝；
+- HTTP、回环地址以及 `APP_ENV=prod` 下的所有 API 地址必须显式加入 `MODEL_ENDPOINT_ALLOWLIST`；
+- 内网主机较多时可临时设置 `MODEL_ALLOW_PRIVATE_ENDPOINTS=true`，但回环和危险系统地址仍受限制，生产环境优先维护精确白名单。
+
+示例：
+
+```env
+MODEL_ENDPOINT_ALLOWLIST=model-gateway.corp.example,.approved-models.corp.example
+MODEL_ALLOW_PRIVATE_ENDPOINTS=false
+```
+
 ## 3. 知识分类层次
 
 首次启动会自动建立以下分类：
@@ -81,6 +95,8 @@ API 模式会传输业务内容：诊断大模型接收案例证据，Embedding 
 - Temperature 和超时。
 
 保存后先点击“测试”，成功后点击“切换使用”。系统允许保存多套 Qwen、GLM 或内部兼容网关配置，但同一时间只有一个诊断模型处于激活状态。已有 `.env` 中的 `LLM_*` 配置会在首次升级启动时导入为一个模型配置，作为兼容路径。
+
+诊断结果不是直接信任模型返回值：后端会检查固定 JSON 结构、置信度范围以及每个事实/假设引用的 `evidence_id`。如果模型引用不存在的证据、返回非法 JSON 或调用失败，诊断会保留规则与 RAG 的确定性结果并记录警告。历史诊断还会保存当时模型名称、配置 ID、Base URL 和非密钥参数快照，API Key 永远不会进入该快照。
 
 ## 5. 本地 BGE Embedding
 

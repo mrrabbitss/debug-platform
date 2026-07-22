@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from abc import ABC, abstractmethod
 from typing import Any
@@ -8,7 +9,14 @@ from openai import AsyncOpenAI
 from app.core.config import get_settings
 from app.core.utils import json_loads
 from app.models import ModelProfile
-from app.services.model_profiles import get_active_model_profile, get_profile_api_key
+from app.services.model_profiles import (
+    get_active_model_profile,
+    get_profile_api_key,
+    validate_model_endpoint,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 class LLMError(RuntimeError):
@@ -50,6 +58,10 @@ class OpenAICompatibleProvider(LLMProvider):
         model_name = profile.model_name if profile else settings.llm_model
         if not api_key or not base_url or not model_name:
             raise LLMError("API key, Base URL and model name are required")
+        try:
+            validate_model_endpoint(base_url)
+        except ValueError as exc:
+            raise LLMError(str(exc)) from exc
         self.model_name = model_name
         self.temperature = float(config.get("temperature", settings.llm_temperature))
         self.client = AsyncOpenAI(
@@ -60,28 +72,36 @@ class OpenAICompatibleProvider(LLMProvider):
         )
 
     async def generate_json(self, system: str, user: str, schema_name: str = "diagnosis") -> dict[str, Any]:
-        response = await self.client.chat.completions.create(
-            model=self.model_name,
-            temperature=self.temperature,
-            messages=[
-                {"role": "system", "content": system + "\n只输出合法 JSON，不要使用 Markdown 代码块。"},
-                {"role": "user", "content": user},
-            ],
-        )
-        content = response.choices[0].message.content or "{}"
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model_name,
+                temperature=self.temperature,
+                messages=[
+                    {"role": "system", "content": system + "\n只输出合法 JSON，不要使用 Markdown 代码块。"},
+                    {"role": "user", "content": user},
+                ],
+            )
+            content = response.choices[0].message.content or "{}"
+        except Exception as exc:
+            logger.exception("OpenAI-compatible JSON request failed")
+            raise LLMError(f"Model request failed ({type(exc).__name__})") from exc
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.I)
         try:
             return json.loads(content)
         except json.JSONDecodeError as exc:
-            raise LLMError(f"Model returned invalid JSON: {content[:500]}") from exc
+            raise LLMError("Model returned invalid JSON") from exc
 
     async def generate_text(self, system: str, user: str) -> str:
-        response = await self.client.chat.completions.create(
-            model=self.model_name,
-            temperature=self.temperature,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        )
-        return response.choices[0].message.content or ""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model_name,
+                temperature=self.temperature,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            )
+            return response.choices[0].message.content or ""
+        except Exception as exc:
+            logger.exception("OpenAI-compatible text request failed")
+            raise LLMError(f"Model request failed ({type(exc).__name__})") from exc
 
 
 def get_llm_provider(profile: ModelProfile | None = None) -> LLMProvider:
@@ -95,7 +115,7 @@ def get_llm_provider(profile: ModelProfile | None = None) -> LLMProvider:
     return MockProvider()
 
 
-def get_active_chat_model_info() -> dict[str, str | bool]:
+def get_active_chat_model_info() -> dict[str, Any]:
     profile = get_active_model_profile("chat")
     if profile:
         return {
@@ -103,6 +123,9 @@ def get_active_chat_model_info() -> dict[str, str | bool]:
             "profile_name": profile.name,
             "provider": profile.provider,
             "model": profile.model_name,
+            "mode": profile.mode,
+            "base_url": profile.base_url,
+            "config": json_loads(profile.config_json, {}),
             "is_mock": profile.provider == "mock",
         }
     settings = get_settings()
@@ -111,5 +134,12 @@ def get_active_chat_model_info() -> dict[str, str | bool]:
         "profile_name": "Environment fallback",
         "provider": settings.llm_provider,
         "model": settings.llm_model or "rule-engine",
+        "mode": "api" if settings.llm_provider == "openai_compatible" else "builtin",
+        "base_url": settings.llm_base_url or None,
+        "config": {
+            "temperature": settings.llm_temperature,
+            "timeout_seconds": settings.llm_timeout_seconds,
+            "max_retries": settings.llm_max_retries,
+        },
         "is_mock": settings.llm_provider == "mock",
     }

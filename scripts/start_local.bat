@@ -1,25 +1,48 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 cd /d "%~dp0\.."
 set "ROOT=%CD%"
-set "PYTHON_CMD="
+set "EXPECTED_STAMP="
+set "INSTALLED_STAMP="
+set "NEED_BOOTSTRAP=0"
 
-where python >nul 2>&1
-if not errorlevel 1 set "PYTHON_CMD=python"
-
-if not defined PYTHON_CMD (
-  where py >nul 2>&1
-  if not errorlevel 1 set "PYTHON_CMD=py -3"
+if not exist .env (
+  copy .env.example .env >nul
+  if errorlevel 1 (
+    set "FAIL_STEP=Could not create .env from .env.example."
+    goto :fail
+  )
 )
 
-if not defined PYTHON_CMD (
-  set "FAIL_STEP=Python 3.11 or newer was not found in PATH."
+call :dependency_stamp
+if errorlevel 1 (
+  set "FAIL_STEP=Could not calculate the local dependency fingerprint."
   goto :fail
 )
 
-%PYTHON_CMD% -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
+if not exist ".venv\Scripts\python.exe" set "NEED_BOOTSTRAP=1"
+if not exist "frontend\node_modules\.package-lock.json" set "NEED_BOOTSTRAP=1"
+if not exist ".local_dependency_stamp" (
+  set "NEED_BOOTSTRAP=1"
+) else (
+  set /p "INSTALLED_STAMP="<".local_dependency_stamp"
+)
+if not "%INSTALLED_STAMP%"=="%EXPECTED_STAMP%" set "NEED_BOOTSTRAP=1"
+
+if "%NEED_BOOTSTRAP%"=="1" (
+  echo [INFO] Dependencies are missing or changed. Running one-time bootstrap...
+  call "%ROOT%\scripts\bootstrap_local.bat" --no-pause
+  if errorlevel 1 (
+    set "FAIL_STEP=Local dependency bootstrap failed."
+    goto :fail
+  )
+) else (
+  echo [INFO] Dependencies are already installed; skipping pip and npm installation.
+)
+
+".venv\Scripts\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
 if errorlevel 1 (
-  set "FAIL_STEP=Python 3.11 or newer is required."
+  set "FAIL_STEP=The local virtual environment must use Python 3.11 or newer."
   goto :fail
 )
 
@@ -41,45 +64,28 @@ if errorlevel 1 (
   goto :fail
 )
 
-if not exist .env (
-  copy .env.example .env >nul
-  if errorlevel 1 (
-    set "FAIL_STEP=Could not create .env from .env.example."
-    goto :fail
-  )
+call :backend_ready
+if not errorlevel 1 (
+  echo [INFO] A healthy GW/AP Debug backend is already running on http://127.0.0.1:8000.
+  goto :start_frontend
 )
 
-if not exist .venv\Scripts\python.exe (
-  %PYTHON_CMD% -m venv .venv
-  if errorlevel 1 (
-    set "FAIL_STEP=Could not create the Python virtual environment."
-    goto :fail
-  )
-)
-
-".venv\Scripts\python.exe" -m pip install -e "backend[dev]"
-if errorlevel 1 (
-  set "FAIL_STEP=Backend dependency installation failed."
+powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"
+if not errorlevel 1 (
+  set "FAIL_STEP=Port 8000 is occupied by another service. Stop that service or change its port; it will not be reused as this backend."
   goto :fail
 )
 
-pushd frontend
-call npm ci
+echo [INFO] Starting backend at http://127.0.0.1:8000
+start "GW-AP Backend" /D "%ROOT%\backend" cmd /k ""%ROOT%\.venv\Scripts\python.exe" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(45); do { try { $r=Invoke-RestMethod -Uri 'http://127.0.0.1:8000/' -TimeoutSec 2; if ($r.name -eq 'GW/AP Intelligent Debug Platform' -and $r.api -eq '/api/v1') { exit 0 } } catch {}; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1"
 if errorlevel 1 (
-  popd
-  set "FAIL_STEP=Frontend dependency installation failed."
+  set "FAIL_STEP=Backend did not become healthy within 45 seconds. Review the GW-AP Backend window."
   goto :fail
 )
-popd
 
-netstat -ano | findstr /R /C:":8000 .*LISTENING" >nul
-if errorlevel 1 (
-  start "GW-AP Backend" /D "%ROOT%\backend" cmd /k ""%ROOT%\.venv\Scripts\python.exe" -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
-) else (
-  echo [WARN] Port 8000 is already in use; the existing backend will be reused.
-  echo [WARN] Close the old backend process first if you need to restart it.
-)
-
+:start_frontend
 echo [INFO] Starting frontend at http://127.0.0.1:5173
 pushd frontend
 call npm run dev
@@ -90,6 +96,15 @@ if errorlevel 1 (
 )
 popd
 exit /b 0
+
+:dependency_stamp
+for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths=@('backend\pyproject.toml','frontend\package-lock.json'); $hashes=$paths | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }; [Console]::Write([string]::Join('-', $hashes))"`) do set "EXPECTED_STAMP=%%H"
+if not defined EXPECTED_STAMP exit /b 1
+exit /b 0
+
+:backend_ready
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-RestMethod -Uri 'http://127.0.0.1:8000/' -TimeoutSec 2; if ($r.name -eq 'GW/AP Intelligent Debug Platform' -and $r.api -eq '/api/v1') { exit 0 } } catch {}; exit 1"
+exit /b %errorlevel%
 
 :fail
 echo.

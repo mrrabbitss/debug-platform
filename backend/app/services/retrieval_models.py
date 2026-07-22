@@ -16,7 +16,11 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id
 from app.models import KnowledgeChunk, KnowledgeEmbedding, ModelProfile
-from app.services.model_profiles import get_active_model_profile, get_profile_api_key
+from app.services.model_profiles import (
+    get_active_model_profile,
+    get_profile_api_key,
+    validate_model_endpoint,
+)
 
 
 HASHING_VECTOR_SIZE = 384
@@ -175,6 +179,7 @@ def embed_texts(profile: ModelProfile, texts: list[str]) -> list[list[float]]:
         return [_normalize(vector) for vector in vectors.tolist()]
     if profile.provider == "openai_compatible":
         try:
+            validate_model_endpoint(profile.base_url or "")
             client = OpenAI(
                 api_key=get_profile_api_key(profile),
                 base_url=profile.base_url,
@@ -333,6 +338,10 @@ def rerank_documents(
             raise RetrievalModelError(f"Local reranking failed: {exc}") from exc
         return sorted(enumerate(values), key=lambda item: item[1], reverse=True)[:top_n]
     if profile.provider == "qwen_rerank_api":
+        try:
+            validate_model_endpoint(profile.base_url or "")
+        except ValueError as exc:
+            raise RetrievalModelError(str(exc)) from exc
         endpoint = (profile.base_url or "").rstrip("/")
         if not endpoint.endswith("/reranks"):
             endpoint += "/reranks"

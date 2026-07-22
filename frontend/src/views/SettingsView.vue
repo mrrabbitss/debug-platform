@@ -224,7 +224,7 @@ async function testProfile(profile: ModelProfile) {
 
 async function pollJob(job: Job) {
   let current = job
-  while (!['SUCCEEDED', 'FAILED'].includes(current.status)) {
+  while (!['COMPLETED', 'FAILED'].includes(current.status)) {
     await new Promise(resolve => setTimeout(resolve, 1000))
     current = (await api.get(`/jobs/${job.id}`)).data
   }
@@ -316,10 +316,10 @@ onMounted(load)
         <el-table-column label="API Key" width="110"><template #default="scope">{{ scope.row.api_key_configured ? scope.row.api_key_hint || '已配置' : '—' }}</template></el-table-column>
         <el-table-column label="操作" width="250" fixed="right">
           <template #default="scope">
-            <el-button v-if="!scope.row.is_active" link type="primary" @click="activate(scope.row)">切换使用</el-button>
-            <el-button link :loading="testingId === scope.row.id" @click="testProfile(scope.row)">测试</el-button>
-            <el-button link @click="openEdit(scope.row)">修改</el-button>
-            <el-button v-if="!scope.row.is_active && !scope.row.config?.builtin" link type="danger" @click="removeProfile(scope.row)">删除</el-button>
+            <el-button v-if="!scope.row.is_active" link type="primary" @click="activate(scope.row as ModelProfile)">切换使用</el-button>
+            <el-button link :loading="testingId === scope.row.id" @click="testProfile(scope.row as ModelProfile)">测试</el-button>
+            <el-button link @click="openEdit(scope.row as ModelProfile)">修改</el-button>
+            <el-button v-if="!scope.row.is_active && !scope.row.config?.builtin" link type="danger" @click="removeProfile(scope.row as ModelProfile)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

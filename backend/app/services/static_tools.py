@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.models import Repository
 from app.services.jobs import JobContext
+from app.services.storage import storage
 
 
 ALLOWED_TOOLS = {"cppcheck", "clang-tidy"}
@@ -36,7 +37,7 @@ def static_analysis_job(ctx: JobContext, repository_id: str, tools: list[str]) -
         repository = db.get(Repository, repository_id)
         if not repository:
             raise ValueError("Repository not found")
-        root = Path(repository.root_path)
+        root = storage.resolve_path(repository.root_path)
     results = []
     selected = [tool for tool in tools if tool in ALLOWED_TOOLS]
     for idx, tool in enumerate(selected):

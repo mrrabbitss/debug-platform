@@ -343,7 +343,7 @@ onMounted(load)
           <el-table-column prop="module" label="模块" width="100" />
           <el-table-column label="可信级别" width="100"><template #default="scope"><el-tag :type="scope.row.trust_level === 'HIGH' ? 'success' : scope.row.trust_level === 'LOW' ? 'warning' : 'info'">{{ scope.row.trust_level }}</el-tag></template></el-table-column>
           <el-table-column label="索引" width="100"><template #default="scope"><el-tooltip v-if="scope.row.metadata?.embedding_error" :content="scope.row.metadata.embedding_error"><el-tag type="danger">向量失败</el-tag></el-tooltip><el-tag v-else type="success">{{ scope.row.chunk_count }} 分块</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openEditDocument(scope.row)">修改</el-button><el-button link type="danger" @click="removeDocument(scope.row)">删除</el-button></template></el-table-column>
+          <el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openEditDocument(scope.row as KnowledgeDocument)">修改</el-button><el-button link type="danger" @click="removeDocument(scope.row as KnowledgeDocument)">删除</el-button></template></el-table-column>
         </el-table>
       </el-card>
     </div>

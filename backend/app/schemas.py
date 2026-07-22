@@ -203,6 +203,8 @@ class AnalysisOut(ORMModel):
     status: str
     provider: str
     model: str
+    model_profile_id: str | None
+    model_config_json: str
     prompt_version: str
     result_json: str
     evidence_json: str

@@ -41,10 +41,16 @@ from app.services.retrieval_models import (
 )
 from app.services.static_tools import static_analysis_job
 from app.services.storage import normalize_debug_log_filename, storage
-from app.services.text_files import read_text_file
+from app.services.text_files import read_text_range
 
 router = APIRouter()
 Db = Annotated[Session, Depends(get_db)]
+
+job_runner.register("parse_artifact", parse_artifact_job, ("case_id", "artifact_id"))
+job_runner.register("analyze_case", analyze_case_job, ("case_id",))
+job_runner.register("reindex_knowledge", reindex_knowledge_job, ("profile_id",))
+job_runner.register("index_repository", index_repository_job, ("repository_id",))
+job_runner.register("static_analysis", static_analysis_job, ("repository_id", "tools"))
 
 
 @router.get("/health")
@@ -99,9 +105,12 @@ def delete_case(case_id: str, db: Db) -> dict:
     case = db.get(Case, case_id)
     if not case:
         raise HTTPException(404, "Case not found")
+    artifact_ids = list(db.scalars(select(Artifact.id).where(Artifact.case_id == case_id)).all())
+    repository_ids = list(db.scalars(select(Repository.id).where(Repository.case_id == case_id)).all())
     db.delete(case)
     db.commit()
-    return {"deleted": case_id}
+    cleanup_errors = storage.cleanup_case(artifact_ids, repository_ids, case_id)
+    return {"deleted": case_id, "storage_cleanup_errors": cleanup_errors}
 
 
 @router.post("/cases/{case_id}/artifacts", response_model=ArtifactOut)
@@ -124,10 +133,11 @@ async def upload_artifact(
     try:
         path, size, digest = await storage.save_upload(file, artifact_id, target_name=stored_name)
     except ValueError as exc:
+        storage.remove_artifact(artifact_id)
         raise HTTPException(413, str(exc)) from exc
     artifact = Artifact(
         id=artifact_id, case_id=case_id, kind=kind, original_name=stored_name,
-        stored_path=str(path), sha256=digest, size_bytes=size, status="UPLOADED",
+        stored_path=storage.storage_key(path), sha256=digest, size_bytes=size, status="UPLOADED",
         metadata_json=json_dumps({
             "uploaded_original_name": uploaded_name,
             "filename_normalized": uploaded_name != stored_name,
@@ -143,6 +153,29 @@ async def upload_artifact(
 @router.get("/cases/{case_id}/artifacts", response_model=list[ArtifactOut])
 def list_artifacts(case_id: str, db: Db) -> list[Artifact]:
     return list(db.scalars(select(Artifact).where(Artifact.case_id == case_id).order_by(Artifact.created_at.desc())).all())
+
+
+@router.delete("/cases/{case_id}/artifacts/{artifact_id}")
+def delete_artifact(case_id: str, artifact_id: str, db: Db) -> dict:
+    artifact = db.get(Artifact, artifact_id)
+    if not artifact or artifact.case_id != case_id:
+        raise HTTPException(404, "Artifact not found")
+    repository_ids = list(db.scalars(
+        select(Repository.id).where(Repository.artifact_id == artifact_id)
+    ).all())
+    db.delete(artifact)
+    db.commit()
+    cleanup_errors: list[str] = []
+    try:
+        storage.remove_artifact(artifact_id)
+    except (OSError, ValueError) as exc:
+        cleanup_errors.append(str(exc))
+    for repository_id in repository_ids:
+        try:
+            storage.remove_repository(repository_id)
+        except (OSError, ValueError) as exc:
+            cleanup_errors.append(str(exc))
+    return {"deleted": artifact_id, "storage_cleanup_errors": cleanup_errors}
 
 
 @router.post("/cases/{case_id}/artifacts/{artifact_id}/parse", response_model=JobOut)
@@ -164,6 +197,28 @@ def list_events(
     limit: int = Query(default=500, ge=1, le=5000),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict]:
+    query = _filtered_event_query(case_id, level, module, component, search)
+    rows = db.scalars(query.order_by(LogEvent.timestamp_normalized.asc().nullslast(), LogEvent.line_start.asc()).offset(offset).limit(limit)).all()
+    return [
+        {
+            "id": row.id, "artifact_id": row.artifact_id,
+            "source_file": row.source_file, "line_start": row.line_start, "line_end": row.line_end,
+            "timestamp_raw": row.timestamp_raw, "timestamp_normalized": row.timestamp_normalized,
+            "level": row.level, "module": row.module, "component": row.component,
+            "event_code": row.event_code, "message": row.message, "raw_text": row.raw_text,
+            "entities": json_loads(row.entities_json, {}), "confidence": row.confidence,
+        }
+        for row in rows
+    ]
+
+
+def _filtered_event_query(
+    case_id: str,
+    level: str | None = None,
+    module: str | None = None,
+    component: str | None = None,
+    search: str | None = None,
+):
     query = select(LogEvent).where(LogEvent.case_id == case_id)
     if level:
         query = query.where(LogEvent.level == level.upper())
@@ -173,17 +228,39 @@ def list_events(
         query = query.where(LogEvent.component.ilike(f"%{component}%"))
     if search:
         query = query.where((LogEvent.message.ilike(f"%{search}%")) | (LogEvent.event_code.ilike(f"%{search}%")))
-    rows = db.scalars(query.order_by(LogEvent.timestamp_normalized.asc().nullslast(), LogEvent.line_start.asc()).offset(offset).limit(limit)).all()
-    return [
-        {
-            "id": row.id, "source_file": row.source_file, "line_start": row.line_start, "line_end": row.line_end,
-            "timestamp_raw": row.timestamp_raw, "timestamp_normalized": row.timestamp_normalized,
-            "level": row.level, "module": row.module, "component": row.component,
-            "event_code": row.event_code, "message": row.message, "raw_text": row.raw_text,
-            "entities": json_loads(row.entities_json, {}), "confidence": row.confidence,
-        }
-        for row in rows
-    ]
+    return query
+
+
+@router.get("/cases/{case_id}/events/stats")
+def event_stats(
+    case_id: str,
+    db: Db,
+    level: str | None = None,
+    module: str | None = None,
+    component: str | None = None,
+    search: str | None = None,
+) -> dict:
+    filtered = _filtered_event_query(case_id, level, module, component, search).subquery()
+    filtered_total = int(db.scalar(select(func.count()).select_from(filtered)) or 0)
+    total = int(db.scalar(
+        select(func.count(LogEvent.id)).where(LogEvent.case_id == case_id)
+    ) or 0)
+    level_counts = dict(db.execute(
+        select(LogEvent.level, func.count(LogEvent.id))
+        .where(LogEvent.case_id == case_id)
+        .group_by(LogEvent.level)
+    ).all())
+    module_counts = dict(db.execute(
+        select(LogEvent.module, func.count(LogEvent.id))
+        .where(LogEvent.case_id == case_id)
+        .group_by(LogEvent.module)
+    ).all())
+    return {
+        "total": total,
+        "filtered_total": filtered_total,
+        "level_counts": level_counts,
+        "module_counts": module_counts,
+    }
 
 
 @router.get("/cases/{case_id}/timeline")
@@ -199,7 +276,8 @@ def timeline(case_id: str, db: Db, limit: int = Query(default=1000, ge=1, le=500
     return {
         "items": [
             {
-                "id": row.id, "time": row.timestamp_normalized or row.timestamp_raw,
+                "id": row.id, "artifact_id": row.artifact_id,
+                "time": row.timestamp_normalized or row.timestamp_raw,
                 "module": row.module, "component": row.component, "level": row.level,
                 "event_code": row.event_code, "message": row.message,
                 "source_file": row.source_file, "line_start": row.line_start,
@@ -225,7 +303,7 @@ def artifact_content(
     path: str = Query(...),
     start_line: int = Query(default=1, ge=1),
     line_count: int = Query(default=500, ge=1, le=5000),
-) -> str:
+) -> PlainTextResponse:
     artifact = db.get(Artifact, artifact_id)
     if not artifact:
         raise HTTPException(404, "Artifact not found")
@@ -233,17 +311,34 @@ def artifact_content(
     root_text = meta.get("extract_root")
     if not root_text:
         raise HTTPException(409, "Artifact has not been parsed")
-    root = Path(root_text).resolve()
+    try:
+        root = storage.resolve_path(root_text)
+    except ValueError as exc:
+        raise HTTPException(400, "Unsafe stored path") from exc
     target = (root / path).resolve()
     if root not in target.parents and target != root:
         raise HTTPException(400, "Unsafe path")
     if not target.is_file():
         raise HTTPException(404, "File not found")
-    text = read_text_file(target)
-    if text is None:
+    selected = read_text_range(target, start_line, line_count)
+    if selected is None:
         raise HTTPException(415, "File is binary or exceeds the text parsing limit")
-    lines = text.splitlines()
-    return "\n".join(lines[start_line - 1:start_line - 1 + line_count])
+    manifest_item = next(
+        (item for item in meta.get("manifest", []) if item.get("path", "").replace("\\", "/") == path.replace("\\", "/")),
+        {},
+    )
+    total_lines = int(manifest_item.get("line_count") or 0)
+    has_more = selected.has_more or bool(total_lines and start_line - 1 + selected.returned_lines < total_lines)
+    return PlainTextResponse(
+        selected.text,
+        headers={
+            "X-Start-Line": str(start_line),
+            "X-Returned-Lines": str(selected.returned_lines),
+            "X-Total-Lines": str(total_lines),
+            "X-Has-More": "true" if has_more else "false",
+            "X-Text-Encoding": selected.encoding,
+        },
+    )
 
 
 @router.post("/cases/{case_id}/analyses", response_model=JobOut)
@@ -297,10 +392,11 @@ def generate_report(case_id: str, analysis_id: str, fmt: str, db: Db) -> dict:
 @router.get("/reports/{report_id}/download")
 def download_report(report_id: str, db: Db) -> FileResponse:
     report = db.get(Report, report_id)
-    if not report or not Path(report.stored_path).is_file():
+    report_path = storage.resolve_path(report.stored_path) if report else None
+    if not report or not report_path or not report_path.is_file():
         raise HTTPException(404, "Report not found")
     media = {"html": "text/html", "pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
-    return FileResponse(report.stored_path, media_type=media.get(report.format, "application/octet-stream"), filename=Path(report.stored_path).name)
+    return FileResponse(report_path, media_type=media.get(report.format, "application/octet-stream"), filename=report_path.name)
 
 
 def _knowledge_to_dict(
@@ -597,22 +693,29 @@ async def upload_repository(case_id: str, db: Db, file: UploadFile = File(...)) 
         raise HTTPException(404, "Case not found")
     artifact_id = new_id("ART")
     repository_id = new_id("REPO")
+    uploaded_name = Path((file.filename or "repository.zip").replace("\\", "/")).name
     try:
-        path, size, digest = await storage.save_upload(file, artifact_id)
+        path, size, digest = await storage.save_upload(file, artifact_id, target_name=uploaded_name)
         destination = storage.repository_dir(repository_id)
         manifest = extract_archive(path, destination)
     except (ValueError, UnsafeArchiveError) as exc:
+        storage.remove_artifact(artifact_id)
+        storage.remove_repository(repository_id)
         raise HTTPException(400, str(exc)) from exc
     artifact = Artifact(
-        id=artifact_id, case_id=case_id, kind="source_repository", original_name=file.filename or path.name,
-        stored_path=str(path), sha256=digest, size_bytes=size, status="EXTRACTED",
+        id=artifact_id, case_id=case_id, kind="source_repository", original_name=uploaded_name[:512],
+        stored_path=storage.storage_key(path), sha256=digest, size_bytes=size, status="EXTRACTED",
         metadata_json=json_dumps({"manifest_file_count": len(manifest.files), "extracted_bytes": manifest.total_bytes}),
     )
     repository = Repository(
         id=repository_id, case_id=case_id, artifact_id=artifact_id,
-        name=Path(file.filename or "repository").stem, root_path=str(destination), status="UPLOADED",
+        name=Path(uploaded_name).stem[:255] or "repository",
+        root_path=storage.storage_key(destination),
+        status="UPLOADED",
     )
-    db.add_all([artifact, repository])
+    db.add(artifact)
+    db.flush()
+    db.add(repository)
     db.commit()
     return {"repository_id": repository_id, "artifact_id": artifact_id, "files": len(manifest.files)}
 
@@ -668,7 +771,8 @@ def run_static_analysis(repository_id: str, payload: StaticAnalysisRequest, db: 
 async def patch_suggestion(case_id: str, payload: PatchRequest, db: Db) -> dict:
     case = db.get(Case, case_id)
     symbol = db.get(CodeSymbol, payload.symbol_id)
-    if not case or not symbol:
+    repository = db.get(Repository, symbol.repository_id) if symbol else None
+    if not case or not symbol or not repository or repository.case_id != case_id:
         raise HTTPException(404, "Case or symbol not found")
     latest = db.scalars(
         select(AnalysisRun).where(AnalysisRun.case_id == case_id, AnalysisRun.status == "COMPLETED")

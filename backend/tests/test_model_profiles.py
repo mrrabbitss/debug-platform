@@ -1,4 +1,6 @@
+import ipaddress
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
@@ -7,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
 from app.models import KnowledgeCategory, KnowledgeDocument, KnowledgeEmbedding, ModelProfile
-from app.services import retrieval_models, secrets
+from app.services import model_profiles, retrieval_models, secrets
 from app.services.knowledge import index_document
 from app.services.knowledge_taxonomy import (
     assign_uncategorized_documents,
@@ -21,6 +23,7 @@ from app.services.model_profiles import (
     model_profile_to_dict,
     seed_model_profiles,
     set_profile_api_key,
+    validate_model_endpoint,
 )
 from app.services.retrieval_models import rerank_documents
 
@@ -147,3 +150,51 @@ def test_qwen_reranker_api_uses_compatible_reranks_endpoint(monkeypatch):
     assert captured["url"] == "https://example.invalid/compatible-api/v1/reranks"
     assert captured["json"]["model"] == "qwen3-rerank"
     assert captured["headers"]["Authorization"] == "Bearer sk-test"
+
+
+def _endpoint_settings(*, allowlist: str = "", allow_private: bool = False, app_env: str = "dev"):
+    return SimpleNamespace(
+        app_env=app_env,
+        model_endpoint_allowlist_entries=[item.strip() for item in allowlist.split(",") if item.strip()],
+        model_allow_private_endpoints=allow_private,
+    )
+
+
+def test_model_endpoint_validation_blocks_unsafe_urls(monkeypatch):
+    monkeypatch.setattr(model_profiles, "get_settings", lambda: _endpoint_settings())
+    monkeypatch.setattr(
+        model_profiles,
+        "_resolved_addresses",
+        lambda host, port: {ipaddress.ip_address("8.8.8.8")},
+    )
+
+    validate_model_endpoint("https://api.example.com/v1")
+    with pytest.raises(ValueError, match="http or https"):
+        validate_model_endpoint("file:///etc/passwd")
+    with pytest.raises(ValueError, match="metadata"):
+        validate_model_endpoint("http://metadata.google.internal/latest")
+    with pytest.raises(ValueError, match="Loopback"):
+        validate_model_endpoint("https://127.0.0.1:8000/v1")
+    with pytest.raises(ValueError, match="HTTP model endpoints"):
+        validate_model_endpoint("http://api.example.com/v1")
+    with pytest.raises(ValueError, match="credentials"):
+        validate_model_endpoint("https://user:password@api.example.com/v1")
+
+
+def test_allowlisted_internal_model_endpoint_is_supported(monkeypatch):
+    monkeypatch.setattr(
+        model_profiles,
+        "get_settings",
+        lambda: _endpoint_settings(allowlist="model-gateway.corp.local", app_env="prod"),
+    )
+    validate_model_endpoint("http://model-gateway.corp.local:8080/v1")
+
+
+def test_production_model_endpoint_requires_allowlist(monkeypatch):
+    monkeypatch.setattr(
+        model_profiles,
+        "get_settings",
+        lambda: _endpoint_settings(app_env="prod"),
+    )
+    with pytest.raises(ValueError, match="Production"):
+        validate_model_endpoint("https://api.example.com/v1")

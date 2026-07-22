@@ -1,6 +1,6 @@
 .PHONY: backend frontend test demo docker
 backend:
-	cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	cd backend && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 frontend:
 	cd frontend && npm run dev
 test:

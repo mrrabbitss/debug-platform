@@ -1,32 +1,48 @@
 # Validation Record
 
-Validated in the generation environment:
+Last validated: 2026-07-22 on Windows 11 with Python 3.14 and Node.js 24.
 
-- Backend dependency installation: passed
-- Python compileall: passed
-- Ruff static checks: passed
-- Pytest: 21 passed
-- Vue TypeScript build: passed
-- VS Code extension TypeScript compile: passed
-- VSIX package generation: passed
-- API health check: passed
-- Demo collectDebuginfo upload and parsing: passed
-- Extensionless Huawei GW/AP collectDebuginfo content detection and `NOTICE` parsing: passed
-- Extensionless upload name normalization to `.txt`: passed
-- Zero-readable-file parse failure state and diagnostic message: passed
-- Windows PowerShell/BAT offline log inspection on the extensionless demo file: passed
-- Sparse NUL text acceptance, sanitization, archive handling, and PowerShell reporting: passed
-- Fresh-process built-in parser registration and Huawei parser selection: passed
-- Multi-profile Chat/Embedding/Reranker configuration and encrypted API-key redaction: passed
-- SQLite embedding persistence and Qwen-compatible reranker request shape: passed
-- Layered knowledge taxonomy, document detail/update, and vector reindex API integration: passed
-- Browser interaction check for model tabs, BGE profile, category tree, filtering, and knowledge edit dialogs: passed
-- Demo repository upload and symbol indexing: passed
-- Rule + RAG diagnosis: passed
-- HTML report generation: passed
-- PDF report generation: passed
-- DOCX report generation: passed
+## Clean-install and build checks
 
-Demo diagnosis extracted 10 high-signal events and linked the failure to hostapd/configuration evidence and related C functions.
+- Backend dependency consistency (`pip check`): passed;
+- Frontend reproducible install (`npm ci`): passed, 0 vulnerabilities;
+- VS Code extension reproducible install (`npm ci`): passed, 0 vulnerabilities;
+- Python compileall: passed;
+- Ruff static checks: passed;
+- Pytest: 54 passed;
+- Vue TypeScript and production Vite build: passed;
+- VS Code extension TypeScript compile: passed.
 
-External Qwen/GLM calls were not executed because no API credentials were supplied. The OpenAI-compatible provider code path is included and can be tested after approved credentials are configured.
+Pytest emits one upstream Starlette warning about the future `httpx2` test client. It does not affect the application runtime or current tests.
+
+## Runtime checks
+
+- Fresh isolated SQLite database upgraded through Alembic revisions 0001, 0002 and 0003;
+- Isolated backend health check on an alternate loopback port: passed;
+- Isolated frontend startup and `/api` proxy to that backend: passed;
+- Case create/read API round trip through the frontend proxy: passed;
+- In-app browser navigation: cases, case detail, event pagination, timeline, layered knowledge tree, knowledge edit dialog, model settings and model tabs passed;
+- Browser console errors during the interactive checks: none;
+- Windows environment doctor: executed successfully and correctly rejected an unrelated service occupying port 8000;
+- Offline log inspector: sparse-NUL text test passed in under the 60-second regression limit.
+
+The reusable command for the isolated runtime check is `scripts\runtime_smoke.bat`. It uses temporary storage and does not modify the normal project database.
+
+## Functional regression coverage
+
+- Extensionless upload normalization to `.txt`;
+- Huawei collectDebuginfo content detection and parser registration;
+- Exact 110,904-line streaming parse, batched database inserts and raw-line range reads;
+- Server-side event pagination, facets, artifact IDs and timeline data;
+- Parser failure and diagnosis failure state recovery;
+- Persistent job restart recovery and duplicate active-job prevention;
+- Fresh and legacy database migration paths;
+- SQLite foreign keys, case cascade deletion and managed storage cleanup;
+- Cross-case code retrieval and patch-suggestion isolation;
+- Model endpoint protocol/private-network/metadata/production allowlist validation;
+- LLM JSON schema, confidence and evidence-ID validation with deterministic fallback;
+- Safe per-analysis model configuration snapshots without API keys;
+- Multi-profile Chat, Embedding and Reranker switching and encrypted key redaction;
+- Layered knowledge taxonomy, knowledge editing and vector reindex behavior.
+
+External Qwen/GLM/BGE API calls were not made because approved credentials were not supplied. Their adapters and validation paths are covered with mocked request/response tests; use the model-profile “测试” action with an approved company endpoint before production use.

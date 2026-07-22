@@ -7,6 +7,7 @@ from app.core.db import SessionLocal
 from app.core.utils import json_dumps, new_id
 from app.models import CodeSymbol, Repository
 from app.services.jobs import JobContext
+from app.services.storage import storage
 
 
 SOURCE_SUFFIXES = {".c", ".h", ".cc", ".cpp", ".hpp", ".mk", ".cmake", ".py", ".sh"}
@@ -93,7 +94,7 @@ def extract_symbols(path: Path, root: Path) -> list[dict]:
     return symbols
 
 
-def index_repository_job(ctx: JobContext, repository_id: str) -> dict:
+def _index_repository_impl(ctx: JobContext, repository_id: str) -> dict:
     with SessionLocal() as db:
         repository = db.get(Repository, repository_id)
         if not repository:
@@ -101,7 +102,7 @@ def index_repository_job(ctx: JobContext, repository_id: str) -> dict:
         repository.status = "INDEXING"
         db.execute(delete(CodeSymbol).where(CodeSymbol.repository_id == repository_id))
         db.commit()
-        root = Path(repository.root_path)
+        root = storage.resolve_path(repository.root_path)
 
     files = [
         path for path in root.rglob("*")
@@ -129,3 +130,15 @@ def index_repository_job(ctx: JobContext, repository_id: str) -> dict:
             repository.status = "INDEXED"
             db.commit()
     return {"repository_id": repository_id, "files_scanned": len(files), "symbols": count}
+
+
+def index_repository_job(ctx: JobContext, repository_id: str) -> dict:
+    try:
+        return _index_repository_impl(ctx, repository_id)
+    except Exception:
+        with SessionLocal() as db:
+            repository = db.get(Repository, repository_id)
+            if repository:
+                repository.status = "INDEX_FAILED"
+                db.commit()
+        raise

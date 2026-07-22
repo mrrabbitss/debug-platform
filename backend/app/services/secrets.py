@@ -1,5 +1,4 @@
 from functools import lru_cache
-from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -16,7 +15,7 @@ def _get_fernet() -> Fernet:
     if configured_key:
         key = configured_key.encode("ascii")
     else:
-        key_path = Path("./data/model_secret.key")
+        key_path = get_settings().model_secret_key_path
         key_path.parent.mkdir(parents=True, exist_ok=True)
         if key_path.is_file():
             key = key_path.read_bytes().strip()

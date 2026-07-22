@@ -15,8 +15,8 @@ def normalize_debug_log_filename(filename: str | None) -> tuple[str, str]:
 
 
 class StorageService:
-    def __init__(self) -> None:
-        self.root = get_settings().storage_root.resolve()
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = (root or get_settings().storage_root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def artifact_dir(self, artifact_id: str) -> Path:
@@ -33,6 +33,64 @@ class StorageService:
         path = self.root / "reports" / case_id
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def storage_key(self, path: Path) -> str:
+        """Persist portable relative keys for files below the configured root.
+
+        Absolute paths are retained only for legacy/test artifacts that live
+        outside the managed storage root.
+        """
+        resolved = path.resolve()
+        if resolved == self.root:
+            return "."
+        if self.root in resolved.parents:
+            return resolved.relative_to(self.root).as_posix()
+        return str(resolved)
+
+    def resolve_path(self, value: str | Path) -> Path:
+        path = Path(value)
+        if path.is_absolute():
+            return path.resolve()
+        resolved = (self.root / path).resolve()
+        if resolved != self.root and self.root not in resolved.parents:
+            raise ValueError("Stored path escapes the configured storage root")
+        return resolved
+
+    def _remove_managed_tree(self, path: Path) -> bool:
+        resolved = path.resolve()
+        if resolved == self.root or self.root not in resolved.parents:
+            raise ValueError("Refusing to remove a path outside the managed storage root")
+        if not resolved.exists():
+            return False
+        shutil.rmtree(resolved)
+        return True
+
+    def remove_artifact(self, artifact_id: str) -> bool:
+        return self._remove_managed_tree(self.root / "artifacts" / artifact_id)
+
+    def remove_repository(self, repository_id: str) -> bool:
+        return self._remove_managed_tree(self.root / "repositories" / repository_id)
+
+    def remove_case_reports(self, case_id: str) -> bool:
+        return self._remove_managed_tree(self.root / "reports" / case_id)
+
+    def cleanup_case(self, artifact_ids: list[str], repository_ids: list[str], case_id: str) -> list[str]:
+        errors: list[str] = []
+        for artifact_id in artifact_ids:
+            try:
+                self.remove_artifact(artifact_id)
+            except (OSError, ValueError) as exc:
+                errors.append(f"artifact {artifact_id}: {exc}")
+        for repository_id in repository_ids:
+            try:
+                self.remove_repository(repository_id)
+            except (OSError, ValueError) as exc:
+                errors.append(f"repository {repository_id}: {exc}")
+        try:
+            self.remove_case_reports(case_id)
+        except (OSError, ValueError) as exc:
+            errors.append(f"reports {case_id}: {exc}")
+        return errors
 
     async def save_upload(
         self,

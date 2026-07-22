@@ -78,7 +78,23 @@ gw_ap_debug_platform/
 scripts\start_local.bat
 ```
 
-该脚本使用仓库内的公开 npm registry 配置和 `package-lock.json` 执行可复现安装；依赖安装失败时会停止并保留错误提示，不会继续启动残缺的前端。
+首次运行会自动调用 `scripts\bootstrap_local.bat` 创建 `.venv`、执行可复现的 `npm ci` 并安装后端依赖；以后仅当 `backend\pyproject.toml` 或 `frontend\package-lock.json` 改变时才重新安装。脚本会等待后端健康检查通过后再启动前端，并拒绝把占用 8000 端口的其他服务误当成本项目后端。
+
+换电脑、更新代码或启动失败时，可先双击：
+
+```bat
+scripts\doctor_local.bat
+```
+
+它会检查 Win11、Python/Node/npm 版本、依赖指纹、后端导入、数据目录写权限和 8000/5173 端口，并在仓库根目录生成 `local_doctor_result.txt`。该报告不读取 `.env` 的值、API Key、数据库正文或日志正文。
+
+需要做完整但不污染现有数据库的启动冒烟测试时，可运行：
+
+```bat
+scripts\runtime_smoke.bat
+```
+
+它会在系统临时目录创建隔离数据库，使用 18000/15173 端口启动后端和前端，验证迁移、前端 API 代理以及案例创建/读取闭环，然后自动停止进程。成功时输出一行 `"ok":true` 的 JSON。需要切换测试端口时可直接运行 `runtime_smoke.ps1` 并传入参数。
 
 ### Linux / macOS
 
@@ -136,7 +152,7 @@ Start run collect command:WAP:get wlan basic laninst 1 wlaninst6
 NOTICE 2026-03-02 03:29:17.483[90][DC]...
 ```
 
-解析结果会保留命令采集边界，识别 `TRACE/DEBUG/INFO/NOTICE/WARN/ERROR/CRITICAL` 等级，并把日志时间转换为标准时间。文本中低于 1% 的孤立 NUL/控制字节不会再导致整个文件被判为二进制；解析时会清理 NUL，上传的原始文件保持不变。原始文件仍可在“日志浏览”中查看。
+解析结果会保留命令采集边界，识别 `TRACE/DEBUG/INFO/NOTICE/WARN/ERROR/CRITICAL` 等级，并把日志时间转换为标准时间。文本中低于 1% 的孤立 NUL/控制字节不会再导致整个文件被判为二进制；解析时会清理 NUL，上传的原始文件保持不变。解析器逐行读取并分批写入数据库，不会把 110,904 行文件一次性载入内存；前端事件、时间线和原始日志均采用服务端分页，并可从事件直接跳转到对应原始行。
 
 仓库中的 `sample_data\logs\collectDebuginfo_extensionless_demo` 是可直接上传验证自动追加后缀和专用解析器的无后缀示例。
 
@@ -210,6 +226,15 @@ scripts\install_local_models.bat
 - Base URL 是否位于内网或受控网络；
 - API Key 不得写入前端、Git 或报告。
 
+模型网关地址会在保存、启用和实际请求前校验。默认只允许公开 HTTPS 地址，并拒绝 `file://`、云元数据、链路本地、未授权回环和私网地址。公司内网模型请在 `.env` 明确列出主机名：
+
+```env
+MODEL_ENDPOINT_ALLOWLIST=model-gateway.corp.example,.approved-models.corp.example
+MODEL_ALLOW_PRIVATE_ENDPOINTS=false
+```
+
+白名单中的端点可以使用内网 HTTP（仍建议优先 HTTPS）。`APP_ENV=prod` 时所有 API 模型端点都必须在白名单内；不要为了省事开启整个私网，优先逐个列出批准的网关主机。
+
 ## 6. 核心数据流
 
 ```text
@@ -220,12 +245,14 @@ scripts\install_local_models.bat
   → 标准化 LogEvent
   → 事件时间线和规则诊断
   → 检索协议/产品/历史案例/代码符号
-  → 受控 LLM 综合分析
+  → 受控 LLM 综合分析与 evidence_id 校验
   → 结构化诊断 JSON
   → HTML / PDF / Word 报告
 ```
 
-原始日志、结构化事实、知识库证据和 LLM 推测在数据库中分开保存。LLM 不能直接修改原始日志或代码。
+原始日志、结构化事实、知识库证据和 LLM 推测在数据库中分开保存。LLM 不能直接修改原始日志或代码；模型返回的结构、置信度和证据编号会由后端校验，引用不存在证据时自动保留确定性规则结果。每次诊断会保存模型配置快照（不含 API Key），后续切换模型不会改变历史诊断的审计信息。
+
+后台解析、索引和诊断任务的状态保存在数据库中。后端重启后会恢复未完成任务；同一种输入的活动任务会去重，失败任务会恢复案例/制品状态并保留可读错误信息。
 
 ## 7. API 概览
 
@@ -266,8 +293,9 @@ class VendorGwParser:
     def probe(self, path, sample):
         return 0.95 if "vendor-marker" in sample else 0.0
 
-    def parse(self, path, relative_path, text):
-        return [ParsedEvent(...)]
+    def parse_lines(self, path, relative_path, lines):
+        for line_number, text in enumerate(lines, start=1):
+            yield ParsedEvent(line_start=line_number, raw_text=text, ...)
 
 registry.register(VendorGwParser())
 ```
@@ -286,6 +314,10 @@ registry.register(VendorGwParser())
 - 原始文件与报告哈希；
 - 静态工具白名单和执行超时；
 - IP、MAC、SN、密码和 Token 基础脱敏；
+- 模型网关协议、主机白名单和私网/元数据地址校验；
+- LLM 输出结构、置信度范围和 evidence_id 完整性校验；
+- 案例代码检索和候选补丁的跨案例隔离；
+- SQLite 外键、WAL、忙等待和 Alembic 自动迁移；
 - 补丁不自动应用。
 
 生产部署仍需补充：
@@ -305,19 +337,22 @@ cd backend
 pytest -q
 
 cd ../frontend
-npm install
+npm ci
 npm run build
 
 cd ../vscode-extension
-npm install
+npm ci
 npm run compile
 ```
+
+后端启动时会自动执行 Alembic 数据库迁移。升级前仍建议备份 `backend\data`；不要手工修改 `alembic_version` 表。
 
 ## 11. 已知限制
 
 - 内置解析器是面向常见 GW/AP 语义的通用实现，真实产品日志格式仍需根据公司内部样例扩展；
 - 本地检索使用 BM25/精确词项、当前 Embedding 向量和可选 Reranker；SQLite 保存向量回退，配置 Qdrant 后会同步写入按模型隔离的 collection；
 - 当前知识层次是分类树和文档型故障树，尚未构建实体—关系知识图谱；
+- 本地后台任务适合当前单机/单后端进程；若扩展为多实例部署，应换用带租约的 Redis/Celery 或专用队列；
 - 静态分析是否可运行取决于后端环境是否安装工具和项目是否具备编译数据库；
 - 报告中的根因候选用于辅助人工排查，不替代工程师确认；
 - 示例仓库故意包含不完整校验和 `sprintf`，用于演示静态分析及候选补丁流程。

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.services.log_parsers import GenericLogParser
+from app.services.log_parsers import GenericLogParser, _extract_timestamp
 from app.services.parser_registry import registry
 
 
@@ -42,3 +42,28 @@ ERROR 2026-03-02 03:29:18.004[91][WAP]hostapd: Failed to set beacon parameters e
     assert events[1].timestamp_normalized == "2026-03-02T03:29:17.483000"
     assert events[2].event_code == "HOSTAPD_START_FAILED"
     assert events[2].entities["error_code"] == "-22"
+
+
+def test_pppoe_authentication_failure_is_not_classified_as_wlan(tmp_path: Path):
+    path = tmp_path / "pppoe.log"
+    events = GenericLogParser().parse(
+        path,
+        "wan/pppoe.log",
+        "2026-07-20 10:32:18 ERROR PPPoE authentication failed\n",
+    )
+
+    assert len(events) == 1
+    assert events[0].event_code == "PPPOE_FAILED"
+    assert events[0].module == "WAN"
+
+
+def test_time_only_timestamp_is_not_assigned_the_ingestion_date():
+    raw, normalized = _extract_timestamp("NOTICE 03:29:17.483 service ready")
+    assert raw == "03:29:17.483"
+    assert normalized is None
+
+    _, normalized_with_hint = _extract_timestamp(
+        "NOTICE 03:29:17.483 service ready",
+        "2026-03-02",
+    )
+    assert normalized_with_hint == "2026-03-02T03:29:17.483000"
