@@ -4,12 +4,11 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import AnalysisRun, Case, CodeSymbol, ConversationMessage, LogEvent, Repository
 from app.services.jobs import JobContext
-from app.services.llm import LLMError, get_llm_provider
+from app.services.llm import LLMError, get_active_chat_model_info, get_llm_provider
 from app.services.rag import RetrievalHit, retriever
 
 
@@ -222,7 +221,7 @@ def _find_related_symbols(case_id: str, events: list[LogEvent]) -> list[CodeSymb
 
 async def _augment_with_llm(case: Case, result: dict, evidence: list[dict]) -> dict:
     provider = get_llm_provider()
-    if get_settings().llm_provider == "mock":
+    if provider.is_mock:
         return result
     compact_evidence = evidence[:40]
     prompt = {
@@ -253,6 +252,7 @@ async def _augment_with_llm(case: Case, result: dict, evidence: list[dict]) -> d
 
 
 def analyze_case_job(ctx: JobContext, case_id: str) -> dict:
+    model_info = get_active_chat_model_info()
     with SessionLocal() as db:
         case = db.get(Case, case_id)
         if not case:
@@ -260,8 +260,8 @@ def analyze_case_job(ctx: JobContext, case_id: str) -> dict:
         case.status = "ANALYZING"
         run = AnalysisRun(
             id=new_id("RUN"), case_id=case_id, status="RUNNING",
-            provider=get_settings().llm_provider,
-            model=get_settings().llm_model or "rule-engine",
+            provider=str(model_info["provider"]),
+            model=str(model_info["model"]),
         )
         db.add(run)
         db.commit()
@@ -323,7 +323,7 @@ async def chat_about_case(case_id: str, question: str) -> tuple[str, list[dict]]
         citations.insert(0, {"evidence_id": latest.id, "source_type": "analysis", "title": "最新诊断结果", "content": latest.result_json[:5000]})
 
     provider = get_llm_provider()
-    if get_settings().llm_provider == "mock":
+    if provider.is_mock:
         hypothesis_text = "；".join(item.get("title", "") for item in diagnosis.get("hypotheses", [])[:3]) or "暂无明确根因"
         answer = f"基于当前案例，主要根因候选为：{hypothesis_text}。你的问题是“{question}”。建议结合引用证据逐条核验；当前为 Mock 模式，未进行额外模型推理。"
     else:

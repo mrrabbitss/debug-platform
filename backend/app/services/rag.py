@@ -10,7 +10,12 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_loads
 from app.models import CodeSymbol, KnowledgeChunk, KnowledgeDocument
-from app.services.vector_store import get_vector_store
+from app.services.retrieval_models import (
+    RetrievalModelError,
+    candidate_count_for_reranker,
+    embedding_scores,
+    rerank_documents,
+)
 
 
 TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.:/-]*|[\u4e00-\u9fff]{1,4}|-?\d+")
@@ -95,7 +100,13 @@ class LocalHybridRetriever:
             df.update(set(tokens))
 
         exact_terms = set(query_tokens)
-        vector_scores = get_vector_store().search(query, limit=max(top_k * 3, 20))
+        try:
+            vector_scores = embedding_scores(
+                query,
+                {str(doc["id"]) for doc in docs if doc["source_type"] != "code_symbol"},
+            )
+        except RetrievalModelError:
+            vector_scores = {}
         results: list[RetrievalHit] = []
         k1, b = 1.5, 0.75
         for doc, tokens in zip(docs, doc_tokens, strict=True):
@@ -120,7 +131,31 @@ class LocalHybridRetriever:
                     evidence_id=doc["id"], source_type=doc["source_type"], title=doc["title"],
                     content=doc["content"], score=round(score, 6), metadata=doc["metadata"],
                 ))
-        return sorted(results, key=lambda item: item.score, reverse=True)[:top_k]
+        candidate_count = candidate_count_for_reranker(max(top_k * 3, 20))
+        candidates = sorted(results, key=lambda item: item.score, reverse=True)[:candidate_count]
+        try:
+            ranking = rerank_documents(
+                query,
+                [f"{item.title}\n{item.content}" for item in candidates],
+                top_k,
+            )
+        except RetrievalModelError:
+            ranking = None
+        if ranking is None:
+            return candidates[:top_k]
+        reranked: list[RetrievalHit] = []
+        for index, reranker_score in ranking:
+            if index < 0 or index >= len(candidates):
+                continue
+            item = candidates[index]
+            item.metadata = {
+                **item.metadata,
+                "hybrid_score": item.score,
+                "reranker_score": reranker_score,
+            }
+            item.score = round(reranker_score, 6)
+            reranked.append(item)
+        return reranked[:top_k]
 
 
 retriever = LocalHybridRetriever()

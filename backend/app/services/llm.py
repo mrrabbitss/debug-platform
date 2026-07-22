@@ -6,6 +6,9 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
+from app.core.utils import json_loads
+from app.models import ModelProfile
+from app.services.model_profiles import get_active_model_profile, get_profile_api_key
 
 
 class LLMError(RuntimeError):
@@ -13,6 +16,10 @@ class LLMError(RuntimeError):
 
 
 class LLMProvider(ABC):
+    provider_id: str
+    model_name: str
+    is_mock: bool = False
+
     @abstractmethod
     async def generate_json(self, system: str, user: str, schema_name: str = "diagnosis") -> dict[str, Any]: ...
 
@@ -21,6 +28,10 @@ class LLMProvider(ABC):
 
 
 class MockProvider(LLMProvider):
+    provider_id = "mock"
+    model_name = "rule-engine"
+    is_mock = True
+
     async def generate_json(self, system: str, user: str, schema_name: str = "diagnosis") -> dict[str, Any]:
         return {"mock": True, "schema": schema_name, "summary": "Mock provider does not replace deterministic diagnosis."}
 
@@ -29,22 +40,28 @@ class MockProvider(LLMProvider):
 
 
 class OpenAICompatibleProvider(LLMProvider):
-    def __init__(self) -> None:
+    provider_id = "openai_compatible"
+
+    def __init__(self, profile: ModelProfile | None = None) -> None:
         settings = get_settings()
-        if not settings.llm_api_key or not settings.llm_base_url or not settings.llm_model:
-            raise LLMError("LLM_API_KEY, LLM_BASE_URL and LLM_MODEL are required")
-        self.model = settings.llm_model
-        self.temperature = settings.llm_temperature
+        config = json_loads(profile.config_json, {}) if profile else {}
+        api_key = get_profile_api_key(profile) if profile else settings.llm_api_key
+        base_url = profile.base_url if profile else settings.llm_base_url
+        model_name = profile.model_name if profile else settings.llm_model
+        if not api_key or not base_url or not model_name:
+            raise LLMError("API key, Base URL and model name are required")
+        self.model_name = model_name
+        self.temperature = float(config.get("temperature", settings.llm_temperature))
         self.client = AsyncOpenAI(
-            api_key=settings.llm_api_key,
-            base_url=settings.llm_base_url,
-            timeout=settings.llm_timeout_seconds,
-            max_retries=settings.llm_max_retries,
+            api_key=api_key,
+            base_url=base_url,
+            timeout=float(config.get("timeout_seconds", settings.llm_timeout_seconds)),
+            max_retries=int(config.get("max_retries", settings.llm_max_retries)),
         )
 
     async def generate_json(self, system: str, user: str, schema_name: str = "diagnosis") -> dict[str, Any]:
         response = await self.client.chat.completions.create(
-            model=self.model,
+            model=self.model_name,
             temperature=self.temperature,
             messages=[
                 {"role": "system", "content": system + "\n只输出合法 JSON，不要使用 Markdown 代码块。"},
@@ -60,14 +77,39 @@ class OpenAICompatibleProvider(LLMProvider):
 
     async def generate_text(self, system: str, user: str) -> str:
         response = await self.client.chat.completions.create(
-            model=self.model,
+            model=self.model_name,
             temperature=self.temperature,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         )
         return response.choices[0].message.content or ""
 
 
-def get_llm_provider() -> LLMProvider:
+def get_llm_provider(profile: ModelProfile | None = None) -> LLMProvider:
+    selected = profile or get_active_model_profile("chat")
+    if selected:
+        if selected.provider == "openai_compatible":
+            return OpenAICompatibleProvider(selected)
+        return MockProvider()
     if get_settings().llm_provider == "openai_compatible":
         return OpenAICompatibleProvider()
     return MockProvider()
+
+
+def get_active_chat_model_info() -> dict[str, str | bool]:
+    profile = get_active_model_profile("chat")
+    if profile:
+        return {
+            "profile_id": profile.id,
+            "profile_name": profile.name,
+            "provider": profile.provider,
+            "model": profile.model_name,
+            "is_mock": profile.provider == "mock",
+        }
+    settings = get_settings()
+    return {
+        "profile_id": "environment",
+        "profile_name": "Environment fallback",
+        "provider": settings.llm_provider,
+        "model": settings.llm_model or "rule-engine",
+        "is_mock": settings.llm_provider == "mock",
+    }

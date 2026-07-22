@@ -86,6 +86,22 @@ class KnowledgeCreate(BaseModel):
     confidentiality: str = "INTERNAL"
     content: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    category_id: str | None = None
+
+
+class KnowledgeUpdate(BaseModel):
+    title: str | None = None
+    source_type: str | None = None
+    device_type: str | None = None
+    device_model: str | None = None
+    firmware_range: str | None = None
+    module: str | None = None
+    trust_level: str | None = None
+    confidentiality: str | None = None
+    content: str | None = None
+    metadata: dict[str, Any] | None = None
+    category_id: str | None = None
+    active: bool | None = None
 
 
 class KnowledgeOut(ORMModel):
@@ -97,8 +113,88 @@ class KnowledgeOut(ORMModel):
     firmware_range: str | None
     module: str | None
     trust_level: str
+    confidentiality: str
     active: bool
+    category_id: str | None = None
+    category_name: str | None = None
+    chunk_count: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeDetailOut(KnowledgeOut):
+    content: str
+
+
+class KnowledgeCategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    parent_id: str | None = None
+    description: str = ""
+    sort_order: int = 0
+
+
+class KnowledgeCategoryUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    parent_id: str | None = None
+    description: str | None = None
+    sort_order: int | None = None
+    active: bool | None = None
+
+
+class KnowledgeCategoryOut(ORMModel):
+    id: str
+    name: str
+    code: str
+    parent_id: str | None
+    description: str
+    sort_order: int
+    system: bool
+    active: bool
+    document_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ModelProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    task_type: Literal["chat", "embedding", "reranker"]
+    mode: Literal["builtin", "local", "api"]
+    provider: str
+    model_name: str = ""
+    base_url: str | None = None
+    api_key: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class ModelProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    mode: Literal["builtin", "local", "api"] | None = None
+    provider: str | None = None
+    model_name: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    clear_api_key: bool = False
+    config: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class ModelProfileOut(ORMModel):
+    id: str
+    name: str
+    task_type: str
+    mode: str
+    provider: str
+    model_name: str
+    base_url: str | None
+    api_key_configured: bool = False
+    api_key_hint: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
 
 
 class AnalysisOut(ORMModel):

@@ -5,7 +5,7 @@ Validated in the generation environment:
 - Backend dependency installation: passed
 - Python compileall: passed
 - Ruff static checks: passed
-- Pytest: 16 passed
+- Pytest: 21 passed
 - Vue TypeScript build: passed
 - VS Code extension TypeScript compile: passed
 - VSIX package generation: passed
@@ -17,6 +17,10 @@ Validated in the generation environment:
 - Windows PowerShell/BAT offline log inspection on the extensionless demo file: passed
 - Sparse NUL text acceptance, sanitization, archive handling, and PowerShell reporting: passed
 - Fresh-process built-in parser registration and Huawei parser selection: passed
+- Multi-profile Chat/Embedding/Reranker configuration and encrypted API-key redaction: passed
+- SQLite embedding persistence and Qwen-compatible reranker request shape: passed
+- Layered knowledge taxonomy, document detail/update, and vector reindex API integration: passed
+- Browser interaction check for model tabs, BGE profile, category tree, filtering, and knowledge edit dialogs: passed
 - Demo repository upload and symbol indexing: passed
 - Rule + RAG diagnosis: passed
 - HTML report generation: passed

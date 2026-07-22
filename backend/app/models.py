@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -105,6 +105,70 @@ class KnowledgeChunk(Base):
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
 
     document: Mapped[KnowledgeDocument] = relationship(back_populates="chunks")
+    embeddings: Mapped[list["KnowledgeEmbedding"]] = relationship(cascade="all, delete-orphan")
+
+
+class KnowledgeCategory(Base):
+    __tablename__ = "knowledge_categories"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    code: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_categories.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    description: Mapped[str] = mapped_column(Text, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    system: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class KnowledgeDocumentCategory(Base):
+    __tablename__ = "knowledge_document_categories"
+
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    category_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_categories.id", ondelete="RESTRICT"), index=True
+    )
+
+
+class ModelProfile(Base):
+    __tablename__ = "model_profiles"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    task_type: Mapped[str] = mapped_column(String(32), index=True)
+    mode: Mapped[str] = mapped_column(String(16))
+    provider: Mapped[str] = mapped_column(String(64))
+    model_name: Mapped[str] = mapped_column(String(512), default="")
+    base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    api_key_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    api_key_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class KnowledgeEmbedding(Base):
+    __tablename__ = "knowledge_embeddings"
+    __table_args__ = (UniqueConstraint("chunk_id", "profile_id", name="uq_knowledge_embedding_profile"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    chunk_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_chunks.id", ondelete="CASCADE"), index=True
+    )
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("model_profiles.id", ondelete="CASCADE"), index=True
+    )
+    dimension: Mapped[int] = mapped_column(Integer)
+    vector_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Repository(Base):

@@ -22,11 +22,16 @@
 ### P1：可信诊断与知识增强
 
 - 产品文档、协议文档、测试规范、历史案例知识库；
+- 诊断规则、故障树、解决方案和参考资料的分层分类管理；
+- 知识正文新增、上传、修改、删除和修改后自动重建索引；
 - 按章节和段落切分；
 - 错误码、函数名、文件路径、中文语义共同参与的本地混合检索；
+- 可切换的内置 Hashing、本地 BGE、OpenAI-Compatible Embedding；
+- 可切换的本地 Qwen3 Reranker 和 Qwen Rerank API；
 - 设备类型、模块和可信等级元数据；
 - 证据 ID、支持证据、反证、不确定性和缺失信息；
 - Qwen、GLM 和内部模型的统一 OpenAI-Compatible 适配器；
+- 前端保存多套模型配置、连接测试和运行时切换；
 - Mock 降级、模型连接检测、超时和重试；
 - 基于当前案例的多轮问答。
 
@@ -188,6 +193,16 @@ LLM_MODEL=your-model-name
 
 Qwen、GLM 或内部模型只要提供兼容的 `/chat/completions` 接口即可接入。业务代码不会直接依赖厂商 SDK。
 
+也可以直接在“系统设置 → 模型网关”中添加多套诊断模型、Embedding 和 Reranker 配置并切换。前端提交的模型 API Key 由后端加密保存，不会通过查询接口回显。`.env` 的 `LLM_*` 配置保留为首次升级和无人值守部署的兼容入口。
+
+本地 BGE Embedding 和 Qwen3 Reranker 属于可选大型依赖，先运行：
+
+```bat
+scripts\install_local_models.bat
+```
+
+详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。
+
 企业环境中必须确认：
 
 - 模型服务是否经过公司批准；
@@ -223,6 +238,13 @@ GET  /api/v1/cases/{case_id}/timeline
 POST /api/v1/cases/{case_id}/analyses
 POST /api/v1/cases/{case_id}/chat
 POST /api/v1/knowledge/upload
+PATCH /api/v1/knowledge/{document_id}
+GET   /api/v1/knowledge/categories
+POST  /api/v1/knowledge/reindex
+GET   /api/v1/system/models
+POST  /api/v1/system/models
+POST  /api/v1/system/models/{profile_id}/activate
+POST  /api/v1/system/models/{profile_id}/test
 POST /api/v1/cases/{case_id}/repositories
 POST /api/v1/repositories/{repository_id}/index
 POST /api/v1/repositories/{repository_id}/static-analysis
@@ -294,7 +316,8 @@ npm run compile
 ## 11. 已知限制
 
 - 内置解析器是面向常见 GW/AP 语义的通用实现，真实产品日志格式仍需根据公司内部样例扩展；
-- 本地检索为可运行的 BM25/精确词项混合实现，生产环境可替换为 Qdrant、OpenSearch 或内部检索服务；
+- 本地检索使用 BM25/精确词项、当前 Embedding 向量和可选 Reranker；SQLite 保存向量回退，配置 Qdrant 后会同步写入按模型隔离的 collection；
+- 当前知识层次是分类树和文档型故障树，尚未构建实体—关系知识图谱；
 - 静态分析是否可运行取决于后端环境是否安装工具和项目是否具备编译数据库；
 - 报告中的根因候选用于辅助人工排查，不替代工程师确认；
 - 示例仓库故意包含不完整校验和 `sprintf`，用于演示静态分析及候选补丁流程。

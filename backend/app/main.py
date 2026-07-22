@@ -9,6 +9,9 @@ from app.core.config import get_settings
 from app.core.db import Base, SessionLocal, engine
 from app.core.security import verify_api_key
 from app.services.knowledge import seed_builtin_knowledge
+from app.services.knowledge_taxonomy import assign_uncategorized_documents, seed_knowledge_categories
+from app.services.model_profiles import seed_model_profiles
+from app.services.retrieval_models import ensure_builtin_embedding_index
 
 
 @asynccontextmanager
@@ -16,7 +19,11 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     seed_dir = Path(__file__).resolve().parent / "seed_knowledge"
     with SessionLocal() as db:
+        seed_knowledge_categories(db)
+        seed_model_profiles(db)
         seed_builtin_knowledge(db, seed_dir)
+        assign_uncategorized_documents(db)
+        ensure_builtin_embedding_index(db)
     yield
 
 

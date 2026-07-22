@@ -25,6 +25,7 @@ dependencies = [
   "python-dateutil>=2.9,<3.0",
   "pyyaml>=6.0.2,<7.0",
   "psycopg[binary]>=3.2,<4.0",
+  "cryptography>=45,<47",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,10 @@ dev = [
   "pytest>=8.4,<9.0",
   "pytest-asyncio>=1.0,<2.0",
   "ruff>=0.12,<1.0",
+]
+local-models = [
+  "sentence-transformers>=5.0,<6.0",
+  "transformers>=4.51,<6.0",
 ]
 
 [tool.setuptools.packages.find]

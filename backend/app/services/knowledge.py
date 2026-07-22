@@ -4,9 +4,11 @@ from pathlib import Path
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.core.utils import json_dumps, new_id
-from app.models import KnowledgeChunk, KnowledgeDocument
-from app.services.vector_store import get_vector_store
+from app.core.db import SessionLocal
+from app.core.utils import json_dumps, json_loads, new_id
+from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeEmbedding, ModelProfile
+from app.services.jobs import JobContext
+from app.services.retrieval_models import RetrievalModelError, index_active_embeddings, reindex_all_embeddings
 
 
 def chunk_document(content: str, max_chars: int = 1800, overlap_chars: int = 180) -> list[tuple[str | None, str]]:
@@ -44,6 +46,8 @@ def chunk_document(content: str, max_chars: int = 1800, overlap_chars: int = 180
 
 
 def index_document(db: Session, document: KnowledgeDocument) -> int:
+    old_chunk_ids = select(KnowledgeChunk.id).where(KnowledgeChunk.document_id == document.id)
+    db.execute(delete(KnowledgeEmbedding).where(KnowledgeEmbedding.chunk_id.in_(old_chunk_ids)))
     db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id))
     chunks = chunk_document(document.content)
     for index, (heading, content) in enumerate(chunks):
@@ -54,11 +58,48 @@ def index_document(db: Session, document: KnowledgeDocument) -> int:
         ))
     db.commit()
     persisted = db.scalars(select(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id)).all()
-    store = get_vector_store()
-    if store.enabled:
-        store.delete_document(document.id)
-        store.upsert({"id": chunk.id, "text": chunk.content, "payload": {"document_id": document.id, "title": document.title, "module": document.module}} for chunk in persisted)
+    try:
+        indexed_vectors = index_active_embeddings(db, persisted)
+        metadata = json_loads(document.metadata_json, {})
+        metadata["embedding_status"] = "INDEXED"
+        metadata["embedding_vector_count"] = indexed_vectors
+        metadata.pop("embedding_error", None)
+        document.metadata_json = json_dumps(metadata)
+        db.commit()
+    except RetrievalModelError as exc:
+        db.rollback()
+        document = db.get(KnowledgeDocument, document.id)
+        if document:
+            metadata = json_loads(document.metadata_json, {})
+            metadata["embedding_status"] = "FAILED"
+            metadata["embedding_error"] = str(exc)
+            document.metadata_json = json_dumps(metadata)
+            db.commit()
     return len(chunks)
+
+
+def reindex_knowledge_job(ctx: JobContext, profile_id: str) -> dict:
+    with SessionLocal() as db:
+        profile = db.get(ModelProfile, profile_id)
+        if not profile or profile.task_type != "embedding":
+            raise ValueError("Embedding model profile not found")
+
+        def update_progress(completed: int, total: int) -> None:
+            progress = 10 + int(80 * completed / max(total, 1))
+            ctx.update(progress, f"Embedding knowledge chunks: {completed}/{total}")
+
+        ctx.update(5, f"Loading embedding model: {profile.name}")
+        count = reindex_all_embeddings(db, profile, update_progress)
+        documents = list(db.scalars(select(KnowledgeDocument)).all())
+        for document in documents:
+            metadata = json_loads(document.metadata_json, {})
+            metadata["embedding_status"] = "INDEXED"
+            metadata["embedding_profile_id"] = profile.id
+            metadata.pop("embedding_error", None)
+            document.metadata_json = json_dumps(metadata)
+        db.commit()
+    ctx.update(95, "Knowledge embedding index rebuilt")
+    return {"profile_id": profile_id, "vectors": count}
 
 
 def seed_builtin_knowledge(db: Session, seed_dir: Path) -> int:

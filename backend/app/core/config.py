@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_timeout_seconds: int = 120
     llm_max_retries: int = 2
+    model_secret_key: str = ""
 
     qdrant_url: str = ""
     qdrant_api_key: str = ""
