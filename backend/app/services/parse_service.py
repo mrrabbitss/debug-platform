@@ -8,6 +8,8 @@ from app.core.utils import json_dumps, json_loads, new_id
 from app.models import Artifact, Case, LogEvent
 from app.services.archive import extract_archive
 from app.services.jobs import JobContext
+# Loading this module registers all built-in parsers on the shared registry.
+from app.services import log_parsers as _builtin_parsers  # noqa: F401
 from app.services.parser_registry import registry
 from app.services.text_files import looks_like_text_file, read_text_file
 
