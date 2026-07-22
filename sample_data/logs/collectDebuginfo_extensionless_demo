@@ -1,0 +1,8 @@
+============================================================
+Start run collect command:WAP:get wlan basic laninst 1 wlaninst6
+get wlan basic laninst 1 wlaninst6
+get WLANConfiguration!
+Name      :ath5
+Enable    :0
+NOTICE 2026-03-02 03:29:17.483[90][DC]DC radio state initialized
+ERROR 2026-03-02 03:29:18.004[91][WAP]hostapd: Failed to set beacon parameters errno=-22

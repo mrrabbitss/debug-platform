@@ -8,6 +8,12 @@ from app.core.config import get_settings
 from app.core.utils import sha256_file
 
 
+def normalize_debug_log_filename(filename: str | None) -> tuple[str, str]:
+    original_name = Path((filename or "collectDebuginfo").replace("\\", "/")).name
+    normalized_name = original_name if Path(original_name).suffix else f"{original_name}.txt"
+    return original_name, normalized_name
+
+
 class StorageService:
     def __init__(self) -> None:
         self.root = get_settings().storage_root.resolve()
@@ -28,9 +34,14 @@ class StorageService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    async def save_upload(self, upload: UploadFile, artifact_id: str) -> tuple[Path, int, str]:
+    async def save_upload(
+        self,
+        upload: UploadFile,
+        artifact_id: str,
+        target_name: str | None = None,
+    ) -> tuple[Path, int, str]:
         target_dir = self.artifact_dir(artifact_id)
-        safe_name = Path(upload.filename or "upload.bin").name
+        safe_name = Path(target_name or upload.filename or "upload.bin").name
         target = target_dir / safe_name
         max_size = get_settings().max_upload_bytes
         size = 0

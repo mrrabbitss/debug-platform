@@ -10,4 +10,5 @@ frontend/dist/
 vscode-extension/node_modules/
 vscode-extension/out/
 *.vsix
+log_check_result*.txt
 .DS_Store

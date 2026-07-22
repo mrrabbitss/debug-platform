@@ -26,7 +26,7 @@ from app.services.llm import get_llm_provider
 from app.services.parse_service import parse_artifact_job
 from app.services.report import generate_docx, generate_html_file, generate_pdf, render_html
 from app.services.static_tools import static_analysis_job
-from app.services.storage import storage
+from app.services.storage import normalize_debug_log_filename, storage
 from app.services.text_files import read_text_file
 
 router = APIRouter()
@@ -100,13 +100,23 @@ async def upload_artifact(
     if not case:
         raise HTTPException(404, "Case not found")
     artifact_id = new_id("ART")
+    raw_uploaded_name = file.filename or "collectDebuginfo"
+    if kind == "debug_log":
+        uploaded_name, stored_name = normalize_debug_log_filename(raw_uploaded_name)
+    else:
+        uploaded_name = Path(raw_uploaded_name.replace("\\", "/")).name
+        stored_name = uploaded_name
     try:
-        path, size, digest = await storage.save_upload(file, artifact_id)
+        path, size, digest = await storage.save_upload(file, artifact_id, target_name=stored_name)
     except ValueError as exc:
         raise HTTPException(413, str(exc)) from exc
     artifact = Artifact(
-        id=artifact_id, case_id=case_id, kind=kind, original_name=file.filename or path.name,
+        id=artifact_id, case_id=case_id, kind=kind, original_name=stored_name,
         stored_path=str(path), sha256=digest, size_bytes=size, status="UPLOADED",
+        metadata_json=json_dumps({
+            "uploaded_original_name": uploaded_name,
+            "filename_normalized": uploaded_name != stored_name,
+        }),
     )
     db.add(artifact)
     case.status = "UPLOADED"

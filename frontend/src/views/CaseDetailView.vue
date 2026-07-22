@@ -63,6 +63,7 @@ async function loadEvents() {
 async function uploadDebug() {
   if (!debugFile.value) return ElMessage.warning('请选择 collectDebuginfo 或日志文件')
   try {
+    const selectedName = debugFile.value.name
     const data = new FormData()
     data.append('file', debugFile.value)
     data.append('kind', 'debug_log')
@@ -71,7 +72,8 @@ async function uploadDebug() {
     const parseJob = (await api.post(`/cases/${caseId}/artifacts/${artifact.id}/parse`)).data
     debugFile.value = null
     if (debugFileInput.value) debugFileInput.value.value = ''
-    ElMessage.success('上传完成，正在按内容识别并解析日志')
+    const normalized = artifact.original_name !== selectedName
+    ElMessage.success(normalized ? `无后缀文件已按 ${artifact.original_name} 上传，正在解析` : '上传完成，正在按内容识别并解析日志')
     watchJob(parseJob)
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || error?.message || '日志上传或解析启动失败')
@@ -211,7 +213,7 @@ onMounted(loadAll)
         <div class="toolbar">
           <input ref="debugFileInput" type="file" @change="selectDebugFile"/>
           <el-button type="primary" @click="uploadDebug">上传并解析</el-button>
-          <span class="muted">支持 ZIP/TAR/TGZ、常见日志和无后缀纯文本 collectDebuginfo；文件类型按内容识别。</span>
+          <span class="muted">支持 ZIP/TAR/TGZ、常见日志和无后缀纯文本 collectDebuginfo；无后缀日志上传时会自动追加 .txt。</span>
         </div>
         <el-table :data="artifacts">
           <el-table-column prop="original_name" label="文件" min-width="260" />

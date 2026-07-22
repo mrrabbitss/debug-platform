@@ -124,7 +124,7 @@ python scripts/seed_demo.py
 
 ### 上传华为 GW/AP 无后缀日志
 
-在案例概览中选择日志并点击“上传并解析”。文件选择器不依赖扩展名；后端会先检查文件是否为文本，再根据内容选择解析器。以下两类内容可以位于同一个文件中：
+在案例概览中选择日志并点击“上传并解析”。无后缀日志会由后端自动追加 `.txt` 后缀，原始文件名和是否改名会保存在制品元数据中；前端、VS Code 扩展和直接调用上传接口都使用同一规则。以下两类内容可以位于同一个文件中：
 
 ```text
 Start run collect command:WAP:get wlan basic laninst 1 wlaninst6
@@ -132,6 +132,37 @@ NOTICE 2026-03-02 03:29:17.483[90][DC]...
 ```
 
 解析结果会保留命令采集边界，识别 `TRACE/DEBUG/INFO/NOTICE/WARN/ERROR/CRITICAL` 等级，并把日志时间转换为标准时间。原始文件仍可在“日志浏览”中查看。
+
+仓库中的 `sample_data\logs\collectDebuginfo_extensionless_demo` 是可直接上传验证自动追加后缀和专用解析器的无后缀示例。
+
+如果没有任何可读取文本文件，任务会明确失败并把制品状态设置为 `PARSE_FAILED`，不会再出现“解析成功但解析文件数为 0”。
+
+### 内网电脑一键检查日志
+
+仓库提供了不输出日志正文的离线检查工具。最便捷的用法是把日志文件拖到以下文件上：
+
+```text
+scripts\inspect_log_file.bat
+```
+
+也可以双击该文件并粘贴日志完整路径，或者在终端执行：
+
+```bat
+scripts\inspect_log_file.bat "D:\logs\your_collectDebuginfo_file"
+```
+
+检查完成后，仓库根目录会生成被 Git 忽略的 `log_check_result.txt`。报告只包含：
+
+- 文件大小、行数、扩展名和自动追加后的名称；
+- 前 4 个字节、编码推测、前 64 KiB 的 NUL/控制字节统计；
+- 128 MiB 解析限制和 512 MiB 单文件安全限制；
+- 前 1 MiB 中是否出现采集命令、WLAN 配置和等级日志标记；
+- 预计使用的解析器；
+- 当前 Git 提交、分支、与本地 `origin/main` 是否一致；
+- 8000 端口进程、Python 路径、Uvicorn 入口和服务根接口检查；
+- 根据检查结果生成的简短处理建议。
+
+报告不包含日志正文，但文件路径和文件名也可能属于内部信息，对外发送前仍应人工检查。PowerShell 用户也可以直接运行 `scripts\inspect_log_file.ps1`，并使用 `-SkipLineCount` 跳过完整行数统计。
 
 ## 4. Docker 部署
 

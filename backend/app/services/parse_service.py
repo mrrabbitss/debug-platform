@@ -2,6 +2,7 @@ from pathlib import Path
 
 from sqlalchemy import delete
 
+from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id
 from app.models import Artifact, Case, LogEvent
@@ -90,6 +91,14 @@ def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
                     break
         ctx.update(10 + int(80 * (index + 1) / max(len(text_files), 1)), f"Parsed {relative}")
 
+    parse_error = None
+    if parsed_files == 0:
+        max_mib = get_settings().parser_max_text_bytes // (1024 * 1024)
+        parse_error = (
+            "No readable text log files were parsed. The file may use an unsupported encoding, contain "
+            f"binary/control bytes, or exceed {max_mib} MiB. Run scripts\\inspect_log_file.bat."
+        )
+
     with SessionLocal() as db:
         artifact = db.get(Artifact, artifact_id)
         case = db.get(Case, case_id)
@@ -106,14 +115,22 @@ def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
                 "device_info": device_info,
                 "extract_root": str(extract_dir),
             })
+            if parse_error:
+                meta["parse_error"] = parse_error
+            else:
+                meta.pop("parse_error", None)
             artifact.metadata_json = json_dumps(meta)
-            artifact.status = "PARSED"
-            case.status = "PARSED"
+            artifact.status = "PARSE_FAILED" if parse_error else "PARSED"
+            case.status = "UPLOADED" if parse_error else "PARSED"
             if not case.device_model and device_info.get("model"):
                 case.device_model = device_info["model"]
             if not case.firmware_version and device_info.get("firmware"):
                 case.firmware_version = device_info["firmware"]
             db.commit()
+
+    if parse_error:
+        ctx.update(95, parse_error)
+        raise ValueError(parse_error)
 
     ctx.update(95, "Building timeline")
     return {
