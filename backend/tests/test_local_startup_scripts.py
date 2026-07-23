@@ -63,7 +63,7 @@ def test_runtime_smoke_uses_isolated_database_and_alternate_ports() -> None:
 def test_local_model_installer_uses_project_layout_and_hf_mirror() -> None:
     batch = (PROJECT_ROOT / "scripts" / "install_local_models.bat").read_text(encoding="utf-8")
     script = (PROJECT_ROOT / "scripts" / "install_local_models.ps1").read_text(encoding="utf-8")
-    downloader = (PROJECT_ROOT / "scripts" / "download_local_models.py").read_text(
+    validator = (PROJECT_ROOT / "scripts" / "validate_local_models.py").read_text(
         encoding="utf-8"
     )
     gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -71,8 +71,16 @@ def test_local_model_installer_uses_project_layout_and_hf_mirror() -> None:
     assert "-ExecutionPolicy Bypass" in batch
     assert "https://hf-mirror.com" in script
     assert 'foreach ($folder in @("inference", "reranker", "embedding"))' in script
+    assert "$env:HF_ENDPOINT = $normalizedMirror" in script
     assert "HF_HUB_DOWNLOAD_TIMEOUT" in script
+    assert "& $hfCli download $Repository" in script
+    assert "--local-dir $Destination" in script
+    assert '"embedding\\bge-base-zh-v1.5"' in script
+    assert '"reranker\\Qwen3-Reranker-0.6B"' in script
+    assert script.index("$env:HF_ENDPOINT = $normalizedMirror") < script.index(
+        'Invoke-HfDownload `\n            -Repository "BAAI/bge-base-zh-v1.5"'
+    )
     assert "verify_local_models.py" in script
-    assert "BAAI/bge-base-zh-v1.5" in downloader
-    assert "Qwen/Qwen3-Reranker-0.6B" in downloader
+    assert "BAAI/bge-base-zh-v1.5" in validator
+    assert "Qwen/Qwen3-Reranker-0.6B" in validator
     assert "/models/" in gitignore

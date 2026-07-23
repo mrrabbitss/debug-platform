@@ -263,13 +263,25 @@ Qwen、GLM 或内部模型只要提供兼容的 `/chat/completions` 接口即可
 scripts\install_local_models.bat
 ```
 
-安装器默认使用 `https://hf-mirror.com`，支持断点续传，并完成 Python 运行库安装、文件完整性检查以及项目适配器真实加载测试。它会创建以下目录：
+安装器默认使用 `https://hf-mirror.com`，先设置 `HF_ENDPOINT`，再通过官方 `hf download --local-dir` 下载模型。重复运行可复用已经完成的文件，并会继续完成 Python 运行库安装、文件完整性检查以及项目适配器真实加载测试。它会创建以下目录：
 
 ```text
 models/
 ├─ inference/                         # 预留给后续本地诊断推理模型
 ├─ embedding/bge-base-zh-v1.5/       # BAAI/bge-base-zh-v1.5
 └─ reranker/Qwen3-Reranker-0.6B/     # Qwen/Qwen3-Reranker-0.6B
+```
+
+对应的核心下载命令如下。为了保持“推理 / Reranker / Embedding”三级目录，Qwen 模型放在 `models\reranker` 下，而不是直接放在 `models` 根目录：
+
+```powershell
+$env:HF_ENDPOINT = "https://hf-mirror.com"
+
+.\.venv\Scripts\hf.exe download BAAI/bge-base-zh-v1.5 `
+  --local-dir .\models\embedding\bge-base-zh-v1.5
+
+.\.venv\Scripts\hf.exe download Qwen/Qwen3-Reranker-0.6B `
+  --local-dir .\models\reranker\Qwen3-Reranker-0.6B
 ```
 
 `models` 已被 Git 忽略，模型权重不会被提交或上传。建议至少预留 6 GiB 磁盘空间；CPU 可以运行，但首次加载 Qwen Reranker 可能需要几分钟。下载中断后重新运行同一个 BAT 文件即可复用已经完成的文件。
@@ -288,7 +300,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models
 
 如果公司使用其他 Hugging Face 镜像，可通过 `-Mirror` 指定；如果 Python 包已经由管理员统一安装，可增加 `-SkipRuntimeInstall`。本地 Qwen3 Reranker 的“排序指令”和“推理批量”、BGE 的“检索查询指令”和批量大小均可在系统设置中调整。普通 Win11 CPU 建议先保持默认小批量。
 
-详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。
+详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
 
 企业环境中必须确认：
 

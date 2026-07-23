@@ -13,6 +13,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$hfCli = Join-Path $projectRoot ".venv\Scripts\hf.exe"
 $modelsRoot = Join-Path $projectRoot "models"
 
 function Invoke-CheckedPython {
@@ -21,6 +22,34 @@ function Invoke-CheckedPython {
     if ($LASTEXITCODE -ne 0) {
         throw "Python command failed with exit code $LASTEXITCODE."
     }
+}
+
+function Invoke-HfDownload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Repository,
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Write-Host (
+            "[INFO] hf download $Repository --local-dir `"$Destination`" " +
+            "(attempt $attempt/3)"
+        )
+        & $hfCli download $Repository `
+            --local-dir $Destination `
+            --max-workers $MaxWorkers
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        if ($attempt -lt 3) {
+            $retryDelay = 5 * $attempt
+            Write-Host "[WARN] Download failed; retrying in $retryDelay seconds..."
+            Start-Sleep -Seconds $retryDelay
+        }
+    }
+    throw "hf download failed for $Repository after 3 attempts."
 }
 
 Write-Host "[INFO] Project root: $projectRoot"
@@ -44,6 +73,38 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     exit 1
 }
 
+$normalizedMirror = $Mirror.Trim().TrimEnd("/")
+try {
+    $mirrorUri = [System.Uri]$normalizedMirror
+} catch {
+    Write-Host "[ERROR] Mirror must be a valid HTTP(S) URL."
+    exit 1
+}
+if (
+    -not $mirrorUri.IsAbsoluteUri -or
+    $mirrorUri.Scheme -notin @("http", "https") -or
+    [string]::IsNullOrWhiteSpace($mirrorUri.Host) -or
+    -not [string]::IsNullOrWhiteSpace($mirrorUri.UserInfo) -or
+    -not [string]::IsNullOrWhiteSpace($mirrorUri.Query) -or
+    -not [string]::IsNullOrWhiteSpace($mirrorUri.Fragment)
+) {
+    Write-Host (
+        "[ERROR] Mirror must be an HTTP(S) URL with a hostname and no credentials, " +
+        "query, or fragment."
+    )
+    exit 1
+}
+
+$env:PYTHONUTF8 = "1"
+$env:HF_ENDPOINT = $normalizedMirror
+$env:HF_HOME = Join-Path $modelsRoot ".cache\huggingface"
+$env:HF_HUB_DOWNLOAD_TIMEOUT = "120"
+$env:HF_HUB_ETAG_TIMEOUT = "30"
+$env:HF_HUB_DISABLE_IMPLICIT_TOKEN = "1"
+$env:HF_HUB_DISABLE_TELEMETRY = "1"
+$env:DO_NOT_TRACK = "1"
+Write-Host "[INFO] HF_ENDPOINT=$env:HF_ENDPOINT"
+
 $scriptExitCode = 0
 Push-Location $projectRoot
 try {
@@ -52,25 +113,26 @@ try {
         Invoke-CheckedPython @("-m", "pip", "install", "-e", "backend[local-models]")
     }
 
-    $env:PYTHONUTF8 = "1"
-    $env:HF_ENDPOINT = $Mirror.TrimEnd("/")
-    $env:HF_HOME = Join-Path $modelsRoot ".cache\huggingface"
-    $env:HF_HUB_DOWNLOAD_TIMEOUT = "120"
-    $env:HF_HUB_ETAG_TIMEOUT = "30"
-    $env:HF_HUB_DISABLE_IMPLICIT_TOKEN = "1"
-    $env:HF_HUB_DISABLE_TELEMETRY = "1"
-    $env:DO_NOT_TRACK = "1"
-
-    $downloadArguments = @(
-        (Join-Path $PSScriptRoot "download_local_models.py"),
-        "--models-root", $modelsRoot,
-        "--endpoint", $env:HF_ENDPOINT,
-        "--max-workers", [string]$MaxWorkers
-    )
-    if ($VerifyOnly) {
-        $downloadArguments += "--verify-only"
+    if (-not $VerifyOnly) {
+        if (-not (Test-Path -LiteralPath $hfCli -PathType Leaf)) {
+            throw (
+                "Hugging Face CLI was not found at $hfCli. " +
+                "Remove -SkipRuntimeInstall or install backend[local-models] first."
+            )
+        }
+        Invoke-HfDownload `
+            -Repository "BAAI/bge-base-zh-v1.5" `
+            -Destination (Join-Path $modelsRoot "embedding\bge-base-zh-v1.5")
+        Invoke-HfDownload `
+            -Repository "Qwen/Qwen3-Reranker-0.6B" `
+            -Destination (Join-Path $modelsRoot "reranker\Qwen3-Reranker-0.6B")
     }
-    Invoke-CheckedPython $downloadArguments
+
+    Invoke-CheckedPython @(
+        (Join-Path $PSScriptRoot "validate_local_models.py"),
+        "--models-root", $modelsRoot,
+        "--endpoint", $env:HF_ENDPOINT
+    )
 
     if (-not $SkipCompatibilityTest) {
         Write-Host "[INFO] Loading both models through the application adapters..."

@@ -106,11 +106,14 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 scripts\install_local_models.bat
 ```
 
-该脚本使用 `hf-mirror.com` 下载并验证：
+该脚本先设置 `HF_ENDPOINT=https://hf-mirror.com`，再使用 `.venv\Scripts\hf.exe download --local-dir` 下载并验证：
 
 ```text
 BAAI/bge-base-zh-v1.5
 → models/embedding/bge-base-zh-v1.5
+
+Qwen/Qwen3-Reranker-0.6B
+→ models/reranker/Qwen3-Reranker-0.6B
 ```
 
 然后在“系统设置 → Embedding 模型”中测试并激活“本地 BGE Base 中文向量（项目 models 目录）”。激活后必须执行“重建向量索引”。项目会把仓库相对路径稳定地解析到项目根目录，不受从 BAT、终端或 IDE 启动的当前目录影响。
