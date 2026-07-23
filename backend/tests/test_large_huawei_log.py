@@ -1,3 +1,4 @@
+import os
 import time
 from pathlib import Path
 
@@ -67,8 +68,17 @@ def test_streams_and_batches_110904_line_huawei_log(tmp_path: Path, monkeypatch)
     elapsed = time.monotonic() - started
 
     assert result["events"] == LINE_COUNT - 1
-    assert elapsed < 60
-    assert any("1000 events" in message for _, message in context.updates)
+    # GitHub's hosted Windows filesystem is substantially slower than local
+    # SSDs and Linux runners. This remains a regression guard against a hung or
+    # accidentally quadratic parser without making runner I/O variance flaky.
+    parse_budget_seconds = 180 if os.name == "nt" else 60
+    assert elapsed < parse_budget_seconds, (
+        f"110,904-line parse took {elapsed:.2f}s (budget: {parse_budget_seconds}s)"
+    )
+    assert any(
+        f"{parse_service.EVENT_INSERT_BATCH_SIZE} events" in message
+        for _, message in context.updates
+    )
     with session_factory() as db:
         artifact = db.get(Artifact, "ART-large")
         event_count = int(db.scalar(

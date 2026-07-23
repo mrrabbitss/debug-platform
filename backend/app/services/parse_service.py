@@ -20,6 +20,10 @@ TEXT_SUFFIXES = {
     ".ini", ".status", ".info", ".dump", "",
 }
 
+# Keep transactions large enough to avoid excessive SQLite fsync overhead on
+# Windows, while still publishing progress and cancellation checkpoints often.
+EVENT_INSERT_BATCH_SIZE = 5000
+
 
 def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str, parse_run_id: str) -> dict:
     with SessionLocal() as db:
@@ -104,7 +108,7 @@ def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str, parse_
                     "entities_json": json_dumps(event.entities), "parser_id": event.parser_id,
                     "parser_version": event.parser_version, "confidence": event.confidence,
                 })
-                if len(batch) >= 1000:
+                if len(batch) >= EVENT_INSERT_BATCH_SIZE:
                     db.execute(insert(LogEvent), batch)
                     db.commit()
                     event_count += len(batch)
