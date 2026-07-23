@@ -63,24 +63,53 @@ def test_runtime_smoke_uses_isolated_database_and_alternate_ports() -> None:
 def test_local_model_installer_uses_project_layout_and_hf_mirror() -> None:
     batch = (PROJECT_ROOT / "scripts" / "install_local_models.bat").read_text(encoding="utf-8")
     script = (PROJECT_ROOT / "scripts" / "install_local_models.ps1").read_text(encoding="utf-8")
+    access_batch = (PROJECT_ROOT / "scripts" / "check_hf_model_access.bat").read_text(
+        encoding="utf-8"
+    )
+    access_check = (PROJECT_ROOT / "scripts" / "check_hf_model_access.ps1").read_text(
+        encoding="utf-8"
+    )
+    tools = (PROJECT_ROOT / "scripts" / "hf_model_tools.ps1").read_text(encoding="utf-8")
     validator = (PROJECT_ROOT / "scripts" / "validate_local_models.py").read_text(
         encoding="utf-8"
     )
+    pyproject = (PROJECT_ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
     gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
 
     assert "-ExecutionPolicy Bypass" in batch
+    assert "-ExecutionPolicy Bypass" in access_batch
     assert "https://hf-mirror.com" in script
     assert 'foreach ($folder in @("inference", "reranker", "embedding"))' in script
-    assert "$env:HF_ENDPOINT = $normalizedMirror" in script
-    assert "HF_HUB_DOWNLOAD_TIMEOUT" in script
-    assert "& $hfCli download $Repository" in script
-    assert "--local-dir $Destination" in script
+    assert 'ValidateSet("Auto", "HfCli", "Curl")' in script
+    assert "Set-HfOnlineEnvironment" in script
+    assert '$env:HF_ENDPOINT = $Endpoint' in tools
+    assert '$env:HF_HUB_OFFLINE = "0"' in tools
+    assert '$env:TRANSFORMERS_OFFLINE = "0"' in tools
+    assert '$env:HF_HUB_DISABLE_XET = "1"' in tools
+    assert "function Invoke-HfCliCommand" in script
+    assert "$output = @(& $hfCli @Arguments 2>&1)" in script
+    assert '$ErrorActionPreference = "Continue"' in script
+    assert '"--local-dir"' in script
+    assert '"--revision"' in script
     assert '"embedding\\bge-base-zh-v1.5"' in script
     assert '"reranker\\Qwen3-Reranker-0.6B"' in script
-    assert script.index("$env:HF_ENDPOINT = $normalizedMirror") < script.index(
-        'Invoke-HfDownload `\n            -Repository "BAAI/bge-base-zh-v1.5"'
+    assert script.index("Set-HfOnlineEnvironment") < script.index(
+        '$embeddingMethod = Invoke-ModelDownload `'
     )
+    assert "Invoke-HfCurlRepositoryDownload" in script
+    assert "scripts\\check_hf_model_access.bat" in script
+    assert "?blobs=true" in tools
+    assert "--continue-at -" in tools
+    assert "Get-FileHash -LiteralPath $Path -Algorithm SHA256" in tools
+    assert "Resolve-HfSafeChildPath" in tools
+    assert "[INFO] Preflight: hf download $Repository config.json" in script
+    assert '"config.json",' in script
+    assert "PASS_CURL_FALLBACK" in access_check
+    assert "hf_model_access_report_" in access_check
     assert "verify_local_models.py" in script
     assert "BAAI/bge-base-zh-v1.5" in validator
     assert "Qwen/Qwen3-Reranker-0.6B" in validator
+    assert '"huggingface-hub==0.36.2"' in pyproject
+    assert '"transformers>=4.51,<5.0"' in pyproject
     assert "/models/" in gitignore
+    assert "hf_model_access_report*.txt" in gitignore

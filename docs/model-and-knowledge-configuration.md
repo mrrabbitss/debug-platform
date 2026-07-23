@@ -100,13 +100,21 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 
 ## 5. 本地 BGE Embedding
 
-默认启动不会安装 PyTorch 或下载大型模型。先启动过一次项目以建立 `.venv`，关闭服务窗口，然后运行：
+默认启动不会安装 PyTorch 或下载大型模型。先启动过一次项目以建立 `.venv`，关闭服务窗口。可先运行不会下载权重的网络检测：
+
+```bat
+scripts\check_hf_model_access.bat
+```
+
+检测会分别验证镜像 API、`curl.exe` 小文件下载和 Hugging Face CLI，并生成 `hf_model_access_report_*.txt`。`PASS_HF_CLI` 和 `PASS_CURL_FALLBACK` 都表示正式安装器存在可用下载路径。
+
+然后运行：
 
 ```bat
 scripts\install_local_models.bat
 ```
 
-该脚本先设置 `HF_ENDPOINT=https://hf-mirror.com`，再使用 `.venv\Scripts\hf.exe download --local-dir` 下载并验证：
+该脚本会设置 `HF_ENDPOINT=https://hf-mirror.com`、关闭 `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`，固定兼容版 Hub 和模型 revision，再优先使用 `.venv\Scripts\hf.exe download --local-dir` 下载并验证：
 
 ```text
 BAAI/bge-base-zh-v1.5
@@ -115,6 +123,8 @@ BAAI/bge-base-zh-v1.5
 Qwen/Qwen3-Reranker-0.6B
 → models/reranker/Qwen3-Reranker-0.6B
 ```
+
+如果 CLI 因公司代理、TLS 检查或镜像 HEAD 元数据响应报 `LocalEntryNotFoundError`，`Auto` 模式会自动改用 Win11 自带的 `curl.exe`。回退路径从镜像 API 读取固定 revision 的文件清单，以 `.partial` 文件断点续传，拒绝不安全路径，并校验大小和 LFS 权重 SHA-256。也可以使用 `-DownloadMode Curl` 强制走该路径。
 
 然后在“系统设置 → Embedding 模型”中测试并激活“本地 BGE Base 中文向量（项目 models 目录）”。激活后必须执行“重建向量索引”。项目会把仓库相对路径稳定地解析到项目根目录，不受从 BAT、终端或 IDE 启动的当前目录影响。
 

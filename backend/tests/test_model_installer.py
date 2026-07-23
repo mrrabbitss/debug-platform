@@ -45,6 +45,7 @@ def test_model_installer_creates_expected_layout_and_validates_snapshots(tmp_pat
     (target / "model.safetensors").write_bytes(b"safe-model-placeholder")
     result = installer.verify_model_dir(spec, target)
     assert result["repo_id"] == "BAAI/bge-base-zh-v1.5"
+    assert result["revision"] == "f03589ceff5aac7111bd60cfc7d497ca17ecac65"
     assert result["file_count"] == 3
 
 
@@ -73,11 +74,16 @@ def test_model_installer_writes_hf_cli_manifest(tmp_path: Path):
     manifest_path = installer.write_manifest(
         tmp_path,
         endpoint="https://hf-mirror.com",
+        download_method="curl-fallback",
         models=models,
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["download_method"] == "hf download --local-dir"
+    assert manifest["download_method"] == "curl-fallback"
     assert [model["repo_id"] for model in manifest["models"]] == [
         "BAAI/bge-base-zh-v1.5",
         "Qwen/Qwen3-Reranker-0.6B",
+    ]
+    assert [model["revision"] for model in manifest["models"]] == [
+        "f03589ceff5aac7111bd60cfc7d497ca17ecac65",
+        "e61197ed45024b0ed8a2d74b80b4d909f1255473",
     ]

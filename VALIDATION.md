@@ -7,11 +7,13 @@ Last validated: 2026-07-23 on Windows 11 with Python 3.14 and Node.js 24.
 - Backend dependency consistency (`pip check`): passed;
 - Ruff static checks across backend, tests and Python utility scripts: passed;
 - Python compileall: passed;
-- Pytest: 87 passed, 1 external-service test skipped locally;
+- Pytest: 86 passed, 1 external-service test skipped locally;
 - Vue TypeScript check and production Vite build: passed;
 - VS Code extension TypeScript compile: passed;
 - Python, frontend and extension dependency audit: 0 known vulnerabilities after applying current fixes;
 - Isolated Win11 runtime smoke: passed.
+- Hugging Face access probe: mirror API and verified curl fallback passed; the
+  local `hf` CLI reproduced `LocalEntryNotFoundError` as expected.
 
 The test environment includes Starlette's supported `httpx2` test client; the suite completes without deprecation warnings.
 
@@ -52,4 +54,4 @@ Docker is not installed on this validation computer, so PostgreSQL/Qdrant contai
 
 External Qwen/GLM/BGE endpoints were not called because approved credentials were not supplied. Their adapters and validation paths use mocked responses in the local suite; use the model-profile “测试” action with an approved company endpoint before production use.
 
-The optional `backend[local-models]` dependency set resolved successfully on Python 3.14, including current Windows wheels for PyTorch, Sentence Transformers, Transformers and Hugging Face Hub. This validation computer could not connect to `hf-mirror.com`, so the multi-gigabyte model snapshots were not downloaded here. The installer directory creation, incomplete-download rejection, retry/verification logic and application-adapter probes are covered by automated tests; running `scripts\install_local_models.bat` in the target company network performs the final real download and load test.
+The optional `backend[local-models]` dependency set resolved successfully on Python 3.14, including current Windows wheels for PyTorch, Sentence Transformers, Transformers and the pinned Hugging Face Hub 0.36.2. Both approved model manifests and their pinned revisions were read from `hf-mirror.com`; `config.json` was downloaded and validated through the new curl path for both BGE and Qwen. The multi-gigabyte weights were intentionally not downloaded on this validation computer. The installer directory creation, CLI preflight, automatic fallback, path safety, resume/integrity checks and application-adapter probes are covered by automated tests; running `scripts\install_local_models.bat` in the target company network performs the final real weight download and load test.

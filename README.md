@@ -257,13 +257,21 @@ Qwen、GLM 或内部模型只要提供兼容的 `/chat/completions` 接口即可
 
 也可以直接在“系统设置 → 模型网关”中添加多套诊断模型、Embedding 和 Reranker 配置并切换。前端提交的模型 API Key 由后端加密保存，不会通过查询接口回显。`.env` 的 `LLM_*` 配置保留为首次升级和无人值守部署的兼容入口。
 
-本地 BGE Embedding 和 Qwen3 Reranker 属于可选大型依赖。先启动过一次项目以建立 `.venv`，关闭服务窗口，然后运行：
+本地 BGE Embedding 和 Qwen3 Reranker 属于可选大型依赖。先启动过一次项目以建立 `.venv`，关闭服务窗口。公司网络、代理或镜像情况不确定时，可以先双击以下检测脚本：
+
+```bat
+scripts\check_hf_model_access.bat
+```
+
+它只下载 BGE 的 `config.json`，不会下载模型权重，并在项目根目录生成 `hf_model_access_report_*.txt`。结果为 `PASS_HF_CLI` 表示官方 CLI 可用；`PASS_CURL_FALLBACK` 表示 CLI 的元数据请求失败，但正式安装器可以自动使用 `curl.exe` 回退。
+
+然后运行：
 
 ```bat
 scripts\install_local_models.bat
 ```
 
-安装器默认使用 `https://hf-mirror.com`，先设置 `HF_ENDPOINT`，再通过官方 `hf download --local-dir` 下载模型。重复运行可复用已经完成的文件，并会继续完成 Python 运行库安装、文件完整性检查以及项目适配器真实加载测试。它会创建以下目录：
+安装器默认使用 `https://hf-mirror.com` 和 `Auto` 下载模式。它会关闭误继承的离线模式、安装固定兼容版 Hugging Face Hub、锁定两个模型的 revision，并先用 `hf download --local-dir` 下载小型 `config.json` 作为预检。若公司代理或镜像导致 `LocalEntryNotFoundError`，则自动切换到 Win11 内置 `curl.exe`：从镜像 API 读取文件清单，支持 `.partial` 断点续传，并校验文件大小和权重 SHA-256。完成后还会执行项目适配器真实加载测试。它会创建以下目录：
 
 ```text
 models/
@@ -272,7 +280,7 @@ models/
 └─ reranker/Qwen3-Reranker-0.6B/     # Qwen/Qwen3-Reranker-0.6B
 ```
 
-对应的核心下载命令如下。为了保持“推理 / Reranker / Embedding”三级目录，Qwen 模型放在 `models\reranker` 下，而不是直接放在 `models` 根目录：
+对应的首选下载命令如下。为了保持“推理 / Reranker / Embedding”三级目录，Qwen 模型放在 `models\reranker` 下，而不是直接放在 `models` 根目录：
 
 ```powershell
 $env:HF_ENDPOINT = "https://hf-mirror.com"
@@ -286,6 +294,16 @@ $env:HF_ENDPOINT = "https://hf-mirror.com"
 
 `models` 已被 Git 忽略，模型权重不会被提交或上传。建议至少预留 6 GiB 磁盘空间；CPU 可以运行，但首次加载 Qwen Reranker 可能需要几分钟。下载中断后重新运行同一个 BAT 文件即可复用已经完成的文件。
 
+如需强制指定下载路径：
+
+```powershell
+# 跳过 hf CLI，直接使用可续传并校验哈希的 curl.exe 路径
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -DownloadMode Curl
+
+# 只允许 hf CLI；CLI 失败时不自动回退
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -DownloadMode HfCli
+```
+
 安装完成后重新运行 `scripts\start_local.bat`，打开“系统设置”：
 
 1. 在“Embedding 模型”中测试并激活带“项目 models 目录”的 BGE Base 配置；
@@ -298,7 +316,7 @@ $env:HF_ENDPOINT = "https://hf-mirror.com"
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -VerifyOnly
 ```
 
-如果公司使用其他 Hugging Face 镜像，可通过 `-Mirror` 指定；如果 Python 包已经由管理员统一安装，可增加 `-SkipRuntimeInstall`。本地 Qwen3 Reranker 的“排序指令”和“推理批量”、BGE 的“检索查询指令”和批量大小均可在系统设置中调整。普通 Win11 CPU 建议先保持默认小批量。
+如果公司使用其他 Hugging Face 镜像，可通过 `-Mirror` 指定；如果 Python 包已经由管理员统一安装，可增加 `-SkipRuntimeInstall`。检测报告只记录软件版本、端点、离线开关、代理是否存在以及下载错误，不记录代理地址、API Key、日志或数据库内容。本地 Qwen3 Reranker 的“排序指令”和“推理批量”、BGE 的“检索查询指令”和批量大小均可在系统设置中调整。普通 Win11 CPU 建议先保持默认小批量。
 
 详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
 
