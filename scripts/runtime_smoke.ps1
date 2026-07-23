@@ -78,6 +78,7 @@ $oldStorage = $env:STORAGE_ROOT
 $oldProxy = $env:VITE_BACKEND_PROXY
 $oldAppEnv = $env:APP_ENV
 $oldApiKey = $env:API_KEY
+$oldAuthMode = $env:AUTH_MODE
 $oldLlmProvider = $env:LLM_PROVIDER
 $oldLlmApiKey = $env:LLM_API_KEY
 $oldLlmBaseUrl = $env:LLM_BASE_URL
@@ -88,6 +89,7 @@ try {
     $env:STORAGE_ROOT = $StoragePath
     $env:APP_ENV = "test"
     $env:API_KEY = ""
+    $env:AUTH_MODE = "local"
     $env:LLM_PROVIDER = "mock"
     $env:LLM_API_KEY = ""
     $env:LLM_BASE_URL = ""
@@ -165,6 +167,7 @@ try {
     Restore-EnvironmentValue "VITE_BACKEND_PROXY" $oldProxy
     Restore-EnvironmentValue "APP_ENV" $oldAppEnv
     Restore-EnvironmentValue "API_KEY" $oldApiKey
+    Restore-EnvironmentValue "AUTH_MODE" $oldAuthMode
     Restore-EnvironmentValue "LLM_PROVIDER" $oldLlmProvider
     Restore-EnvironmentValue "LLM_API_KEY" $oldLlmApiKey
     Restore-EnvironmentValue "LLM_BASE_URL" $oldLlmBaseUrl

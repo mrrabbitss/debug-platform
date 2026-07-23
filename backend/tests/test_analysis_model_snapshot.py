@@ -13,6 +13,9 @@ class _JobContext:
     def update(self, progress: int, message: str) -> None:
         pass
 
+    def complete_in_transaction(self, db, result, message: str = "Completed") -> None:
+        pass
+
 
 def test_analysis_records_safe_model_configuration_snapshot(tmp_path: Path, monkeypatch) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'model-snapshot.db'}")

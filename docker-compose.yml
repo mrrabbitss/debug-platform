@@ -1,40 +1,58 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17.10-alpine3.24
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: gwap
-      POSTGRES_PASSWORD: gwap
-      POSTGRES_DB: gwap
+      POSTGRES_USER: ${POSTGRES_USER:-gwap}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gwap-local-only}
+      POSTGRES_DB: ${POSTGRES_DB:-gwap}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gwap -d gwap"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 20
 
+  qdrant:
+    image: qdrant/qdrant:v1.18.3-unprivileged
+    restart: unless-stopped
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
   backend:
     build: ./backend
-    env_file: .env
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: false
     environment:
-      DATABASE_URL: postgresql+psycopg://gwap:gwap@postgres:5432/gwap
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql+psycopg://gwap:gwap-local-only@postgres:5432/gwap}
       STORAGE_ROOT: /app/data/storage
-      CORS_ORIGINS: http://localhost:8080
+      QDRANT_URL: ${DOCKER_QDRANT_URL:-http://qdrant:6333}
+      CORS_ORIGINS: http://127.0.0.1:${FRONTEND_PORT:-8080},http://localhost:${FRONTEND_PORT:-8080}
     volumes:
       - backend_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
-      - "8080:80"
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"
 
 volumes:
   postgres_data:
+  qdrant_data:
   backend_data:

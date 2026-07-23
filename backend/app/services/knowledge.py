@@ -97,9 +97,10 @@ def reindex_knowledge_job(ctx: JobContext, profile_id: str) -> dict:
             metadata["embedding_profile_id"] = profile.id
             metadata.pop("embedding_error", None)
             document.metadata_json = json_dumps(metadata)
+        job_result = {"profile_id": profile_id, "vectors": count}
+        ctx.complete_in_transaction(db, job_result)
         db.commit()
-    ctx.update(95, "Knowledge embedding index rebuilt")
-    return {"profile_id": profile_id, "vectors": count}
+    return job_result
 
 
 def seed_builtin_knowledge(db: Session, seed_dir: Path) -> int:

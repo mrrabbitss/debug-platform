@@ -6,8 +6,8 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-BACKEND_ROOT = PROJECT_ROOT / "backend"
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = BACKEND_ROOT.parent
 DEFAULT_DATA_ROOT = BACKEND_ROOT / "data"
 
 
@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     storage_root: Path = Path("./data/storage")
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     api_key: str | None = None
+    auth_mode: Literal["local", "api_key", "rbac"] = "local"
+    auth_allow_legacy_admin: bool = True
 
     max_upload_bytes: int = 2 * 1024 * 1024 * 1024
     max_extracted_bytes: int = 8 * 1024 * 1024 * 1024
@@ -32,6 +34,8 @@ class Settings(BaseSettings):
     max_single_file_bytes: int = 512 * 1024 * 1024
     max_archive_depth: int = 20
     parser_max_text_bytes: int = 128 * 1024 * 1024
+    text_line_index_stride: int = 500
+    text_search_max_scan_lines: int = 250000
     job_workers: int = 4
     tool_timeout_seconds: int = 300
 
@@ -74,6 +78,10 @@ class Settings(BaseSettings):
             self.storage_root = (BACKEND_ROOT / self.storage_root).resolve()
         else:
             self.storage_root = self.storage_root.resolve()
+        if self.app_env == "prod" and self.auth_mode == "local":
+            raise ValueError("AUTH_MODE=local is not allowed in APP_ENV=prod")
+        if self.auth_mode == "api_key" and not self.api_key:
+            raise ValueError("API_KEY is required when AUTH_MODE=api_key")
         return self
 
     @property

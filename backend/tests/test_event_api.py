@@ -9,6 +9,7 @@ from app.api.routes import router
 from app.core.db import Base, get_db
 from app.core.utils import json_dumps
 from app.models import Artifact, Case, LogEvent
+from app.services.text_files import open_text_lines
 
 
 def test_event_pagination_stats_and_artifact_id(tmp_path: Path) -> None:
@@ -22,6 +23,11 @@ def test_event_pagination_stats_and_artifact_id(tmp_path: Path) -> None:
     extract_root.mkdir()
     log_path = extract_root / "system.log"
     log_path.write_text("".join(f"line {index}\n" for index in range(1, 13)), encoding="utf-8")
+    line_index: list[list[int]] = []
+    opened = open_text_lines(log_path, index_stride=5, line_index=line_index)
+    assert opened is not None
+    encoding, lines = opened
+    assert len(list(lines)) == 12
     with session_factory() as db:
         db.add(Case(id="CASE-events", title="events", description=""))
         db.add(Artifact(
@@ -34,7 +40,13 @@ def test_event_pagination_stats_and_artifact_id(tmp_path: Path) -> None:
             status="PARSED",
             metadata_json=json_dumps({
                 "extract_root": str(extract_root),
-                "manifest": [{"path": "system.log", "size": log_path.stat().st_size, "line_count": 12}],
+                "manifest": [{
+                    "path": "system.log",
+                    "size": log_path.stat().st_size,
+                    "line_count": 12,
+                    "line_index": line_index,
+                    "encoding": encoding,
+                }],
             }),
         ))
         for index in range(12):
@@ -82,5 +94,13 @@ def test_event_pagination_stats_and_artifact_id(tmp_path: Path) -> None:
         assert content.headers["x-returned-lines"] == "2"
         assert content.headers["x-total-lines"] == "12"
         assert content.headers["x-has-more"] == "true"
+
+        search = client.get(
+            "/api/v1/artifacts/ART-events/search",
+            params={"path": "system.log", "query": "line 11"},
+        )
+        assert search.status_code == 200
+        assert search.json()["matches"] == [{"line_number": 11, "text": "line 11"}]
+        assert search.json()["has_more"] is False
 
     engine.dispose()

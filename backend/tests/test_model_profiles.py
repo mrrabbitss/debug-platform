@@ -8,8 +8,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
-from app.models import KnowledgeCategory, KnowledgeDocument, KnowledgeEmbedding, ModelProfile
-from app.services import model_profiles, retrieval_models, secrets
+from app.models import Job, KnowledgeCategory, KnowledgeDocument, KnowledgeEmbedding, ModelProfile
+from app.services import jobs, knowledge, model_profiles, retrieval_models, secrets
 from app.services.knowledge import index_document
 from app.services.knowledge_taxonomy import (
     assign_uncategorized_documents,
@@ -133,6 +133,11 @@ def test_qwen_reranker_api_uses_compatible_reranks_endpoint(monkeypatch):
 
     monkeypatch.setattr(retrieval_models.httpx, "post", fake_post)
     monkeypatch.setattr(retrieval_models, "get_profile_api_key", lambda profile: "sk-test")
+    monkeypatch.setattr(
+        retrieval_models,
+        "record_model_egress",
+        lambda profile, **details: captured.update({"audit": details}),
+    )
     profile = ModelProfile(
         id="MODEL-rerank-api",
         name="Qwen rerank API",
@@ -150,6 +155,84 @@ def test_qwen_reranker_api_uses_compatible_reranks_endpoint(monkeypatch):
     assert captured["url"] == "https://example.invalid/compatible-api/v1/reranks"
     assert captured["json"]["model"] == "qwen3-rerank"
     assert captured["headers"]["Authorization"] == "Bearer sk-test"
+    assert captured["audit"]["outcome"] == "SUCCESS"
+    assert captured["audit"]["request_items"] == 3
+    assert captured["audit"]["request_chars"] == len("authentication failurecolorcheck EAP logs")
+
+
+def test_local_qwen_reranker_uses_instruction_and_bounded_batch(monkeypatch):
+    captured = {}
+
+    class FakeCrossEncoder:
+        def predict(self, pairs, **kwargs):
+            captured["pairs"] = pairs
+            captured["predict"] = kwargs
+            return [0.1, 0.9]
+
+    def fake_loader(model_name, device, instruction):
+        captured.update({"model_name": model_name, "device": device, "instruction": instruction})
+        return FakeCrossEncoder()
+
+    monkeypatch.setattr(retrieval_models, "_load_cross_encoder", fake_loader)
+    profile = ModelProfile(
+        id="MODEL-rerank-local",
+        name="Local Qwen reranker",
+        task_type="reranker",
+        mode="local",
+        provider="sentence_transformers",
+        model_name="Qwen/Qwen3-Reranker-0.6B",
+        config_json='{"device":"cpu","batch_size":999,"instruction":"Network diagnosis"}',
+    )
+
+    ranking = rerank_documents("failure", ["irrelevant", "check EAP"], 2, profile)
+
+    assert ranking == [(1, 0.9), (0, 0.1)]
+    assert captured["model_name"] == "Qwen/Qwen3-Reranker-0.6B"
+    assert captured["device"] == "cpu"
+    assert captured["instruction"] == "Network diagnosis"
+    assert captured["predict"] == {"batch_size": 100, "show_progress_bar": False}
+
+
+def test_sqlite_reindex_job_updates_progress_without_write_lock(tmp_path: Path, monkeypatch):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'reindex.db'}",
+        connect_args={"check_same_thread": False, "timeout": 1},
+    )
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    with session_factory() as db:
+        profile = ModelProfile(
+            id="MODEL-reindex",
+            name="Hashing",
+            task_type="embedding",
+            mode="builtin",
+            provider="hashing",
+            model_name="hashing-char-384",
+            is_active=True,
+            config_json='{"batch_size":1}',
+        )
+        document = KnowledgeDocument(
+            id="DOC-reindex",
+            title="Reindex",
+            content=("A" * 1900) + "\n\n" + ("B" * 100),
+        )
+        db.add_all([
+            profile,
+            document,
+            Job(id="JOB-reindex", kind="reindex_knowledge", status="RUNNING"),
+        ])
+        db.commit()
+        knowledge.index_document(db, document)
+
+    monkeypatch.setattr(knowledge, "SessionLocal", session_factory)
+    monkeypatch.setattr(jobs, "SessionLocal", session_factory)
+    result = knowledge.reindex_knowledge_job(jobs.JobContext("JOB-reindex"), profile.id)
+
+    assert result == {"profile_id": profile.id, "vectors": 2}
+    with session_factory() as db:
+        assert db.query(KnowledgeEmbedding).count() == 2
+        assert db.get(Job, "JOB-reindex").progress == 100
+    engine.dispose()
 
 
 def _endpoint_settings(*, allowlist: str = "", allow_private: bool = False, app_env: str = "dev"):

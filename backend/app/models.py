@@ -7,6 +7,32 @@ from app.core.db import Base
 from app.core.utils import utcnow
 
 
+class UserAccount(Base):
+    __tablename__ = "user_accounts"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    username: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(32), default="VIEWER", index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AccessToken(Base):
+    __tablename__ = "access_tokens"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255), default="default")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    token_hint: Mapped[str] = mapped_column(String(32))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Case(Base):
     __tablename__ = "cases"
 
@@ -21,12 +47,26 @@ class Case(Base):
     issue_time: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="DRAFT", index=True)
     severity: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    owner_id: Mapped[str | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     artifacts: Mapped[list["Artifact"]] = relationship(back_populates="case", cascade="all, delete-orphan")
     events: Mapped[list["LogEvent"]] = relationship(back_populates="case", cascade="all, delete-orphan")
     analyses: Mapped[list["AnalysisRun"]] = relationship(back_populates="case", cascade="all, delete-orphan")
+
+
+class CaseMember(Base):
+    __tablename__ = "case_members"
+    __table_args__ = (UniqueConstraint("case_id", "user_id", name="uq_case_member"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True)
+    permission: Mapped[str] = mapped_column(String(32), default="VIEWER")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Artifact(Base):
@@ -41,6 +81,7 @@ class Artifact(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(32), default="UPLOADED")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    active_parse_run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     case: Mapped[Case | None] = relationship(back_populates="artifacts")
@@ -52,11 +93,13 @@ class LogEvent(Base):
         Index("ix_log_events_case_time", "case_id", "timestamp_normalized", "line_start"),
         Index("ix_log_events_case_level", "case_id", "level"),
         Index("ix_log_events_case_module", "case_id", "module"),
+        Index("ix_log_events_artifact_parse_run", "artifact_id", "parse_run_id"),
     )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
     artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id", ondelete="CASCADE"), index=True)
+    parse_run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     source_file: Mapped[str] = mapped_column(Text)
     line_start: Mapped[int] = mapped_column(Integer, default=1)
     line_end: Mapped[int] = mapped_column(Integer, default=1)
@@ -274,3 +317,24 @@ class Report(Base):
     stored_path: Mapped[str] = mapped_column(Text)
     sha256: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        Index("ix_audit_events_action_created", "action", "created_at"),
+        Index("ix_audit_events_case_created", "case_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    actor_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    actor_type: Mapped[str] = mapped_column(String(32), default="system")
+    action: Mapped[str] = mapped_column(String(128), index=True)
+    resource_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resource_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    case_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    outcome: Mapped[str] = mapped_column(String(32), default="SUCCESS", index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

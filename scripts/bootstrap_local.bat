@@ -67,6 +67,11 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo [INFO] Installing backend dependencies...
+".venv\Scripts\python.exe" -m pip install --upgrade pip
+if errorlevel 1 (
+  set "FAIL_STEP=Python package installer upgrade failed."
+  goto :fail
+)
 ".venv\Scripts\python.exe" -m pip install -e "backend[dev]"
 if errorlevel 1 (
   set "FAIL_STEP=Backend dependency installation failed."

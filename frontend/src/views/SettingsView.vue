@@ -156,6 +156,7 @@ function modelConfig() {
   }
   return {
     device: form.device,
+    batch_size: form.batch_size,
     candidate_count: form.candidate_count,
     instruction: form.instruction,
     timeout_seconds: form.timeout_seconds
@@ -224,11 +225,11 @@ async function testProfile(profile: ModelProfile) {
 
 async function pollJob(job: Job) {
   let current = job
-  while (!['COMPLETED', 'FAILED'].includes(current.status)) {
+  while (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(current.status)) {
     await new Promise(resolve => setTimeout(resolve, 1000))
     current = (await api.get(`/jobs/${job.id}`)).data
   }
-  if (current.status === 'FAILED') throw new Error(current.error_message || current.message)
+  if (current.status !== 'COMPLETED') throw new Error(current.error_message || current.message || '任务未完成')
   return current
 }
 
@@ -360,6 +361,7 @@ onMounted(load)
         </template>
         <template v-if="form.task_type === 'reranker'">
           <el-form-item v-if="form.mode === 'local'" label="运行设备"><el-select v-model="form.device"><el-option label="CPU" value="cpu"/><el-option label="CUDA" value="cuda"/></el-select></el-form-item>
+          <el-form-item v-if="form.mode === 'local'" label="推理批量"><el-input-number v-model="form.batch_size" :min="1" :max="100" /></el-form-item>
           <el-form-item label="候选文档数"><el-input-number v-model="form.candidate_count" :min="5" :max="100" /></el-form-item>
           <el-form-item v-if="form.mode !== 'builtin'" label="排序指令"><el-input v-model="form.instruction" type="textarea" :rows="3" /></el-form-item>
         </template>

@@ -28,7 +28,7 @@ def test_embedding_job_polling_uses_backend_terminal_status() -> None:
         encoding="utf-8"
     )
 
-    assert "['COMPLETED', 'FAILED']" in settings_view
+    assert "['COMPLETED', 'FAILED', 'CANCELLED']" in settings_view
     assert "['SUCCEEDED', 'FAILED']" not in settings_view
 
 
@@ -53,6 +53,7 @@ def test_runtime_smoke_uses_isolated_database_and_alternate_ports() -> None:
     assert "gw-ap-runtime-smoke-" in script
     assert "sqlite:///" in script
     assert "VITE_BACKEND_PROXY" in script
+    assert '$env:AUTH_MODE = "local"' in script
     assert "18000" in script and "15173" in script
     assert 'WindowStyle = "Hidden"' in script
     assert "Runtime smoke test" in script

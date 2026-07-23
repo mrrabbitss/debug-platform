@@ -3,7 +3,17 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
-import type { Analysis, Artifact, CaseItem, Job, LogEvent } from '../types'
+import type {
+  Analysis,
+  Artifact,
+  CaseItem,
+  CaseMember,
+  CasePermission,
+  Job,
+  LogEvent,
+  Principal,
+  UserDirectoryEntry
+} from '../types'
 
 const route = useRoute()
 const caseId = String(route.params.id)
@@ -43,9 +53,30 @@ const rawTotalLines = ref(0)
 const rawHasMore = ref(false)
 const rawEncoding = ref('')
 const rawJumpLine = ref(1)
+const rawSearchQuery = ref('')
+const rawSearchMatches = ref<{line_number:number, text:string}[]>([])
+const rawSearchNextLine = ref<number | null>(null)
+const rawSearchScannedTo = ref(0)
+const rawSearching = ref(false)
 const symbolSearch = ref('')
+const principal = ref<Principal | null>(null)
+const caseAccess = ref<{case_id:string, role:string, permission:CasePermission | null} | null>(null)
+const caseMembers = ref<CaseMember[]>([])
+const memberDirectory = ref<UserDirectoryEntry[]>([])
+const memberForm = reactive({ user_id: '', permission: 'VIEWER' as 'EDITOR' | 'VIEWER' })
 
 const latestAnalysis = computed(() => analyses.value.find(item => item.status === 'COMPLETED'))
+const canEditCase = computed(() => {
+  if (!principal.value || principal.value.role === 'VIEWER') return false
+  return ['OWNER', 'EDITOR', 'SHARED'].includes(caseAccess.value?.permission || '')
+})
+const canManageMembers = computed(() => (
+  principal.value?.role === 'ADMIN' || caseAccess.value?.permission === 'OWNER'
+))
+const availableMemberUsers = computed(() => {
+  const assigned = new Set(caseMembers.value.map(item => item.user_id))
+  return memberDirectory.value.filter(item => item.id !== caseInfo.value?.owner_id && !assigned.has(item.id))
+})
 const eventDrawerVisible = computed({
   get: () => selectedEvent.value !== null,
   set: (visible: boolean) => {
@@ -69,8 +100,74 @@ async function loadAll() {
     diagnosis.value = JSON.parse(latestAnalysis.value.result_json || '{}')
     await loadReportPreview(latestAnalysis.value.id)
   }
+  await loadAccessContext()
   await loadEvents()
   await loadTimeline()
+}
+
+async function loadAccessContext() {
+  try {
+    const [identityResponse, accessResponse] = await Promise.all([
+      api.get('/system/me'),
+      api.get(`/cases/${caseId}/access`)
+    ])
+    principal.value = identityResponse.data
+    caseAccess.value = accessResponse.data
+    if (canManageMembers.value) {
+      const [directoryResponse, membersResponse] = await Promise.all([
+        api.get('/system/user-directory'),
+        api.get(`/cases/${caseId}/members`)
+      ])
+      memberDirectory.value = directoryResponse.data
+      caseMembers.value = membersResponse.data
+    } else {
+      memberDirectory.value = []
+      caseMembers.value = []
+    }
+  } catch {
+    principal.value = null
+    caseAccess.value = null
+    memberDirectory.value = []
+    caseMembers.value = []
+  }
+}
+
+async function addCaseMember() {
+  if (!memberForm.user_id) return ElMessage.warning('请选择用户')
+  try {
+    await api.put(`/cases/${caseId}/members/${memberForm.user_id}`, {
+      permission: memberForm.permission
+    })
+    memberForm.user_id = ''
+    ElMessage.success('案例成员已添加')
+    await loadAccessContext()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '添加成员失败')
+  }
+}
+
+async function updateCaseMember(member: CaseMember, permission: 'EDITOR' | 'VIEWER') {
+  try {
+    await api.put(`/cases/${caseId}/members/${member.user_id}`, { permission })
+    ElMessage.success('成员权限已更新')
+    await loadAccessContext()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '更新权限失败')
+    await loadAccessContext()
+  }
+}
+
+async function removeCaseMember(member: CaseMember) {
+  try {
+    await ElMessageBox.confirm(`确认移除 ${member.display_name || member.username}？`, '移除案例成员', {
+      type: 'warning'
+    })
+    await api.delete(`/cases/${caseId}/members/${member.user_id}`)
+    ElMessage.success('案例成员已移除')
+    await loadAccessContext()
+  } catch (error: any) {
+    if (error !== 'cancel') ElMessage.error(error?.response?.data?.detail || error?.message || '移除成员失败')
+  }
 }
 
 async function loadEvents(resetPage = false) {
@@ -158,23 +255,51 @@ function watchJob(job: Job) {
   jobTimer.value = window.setInterval(async () => {
     const { data } = await api.get(`/jobs/${job.id}`)
     currentJob.value = data
-    if (['COMPLETED', 'FAILED'].includes(data.status)) {
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(data.status)) {
       if (jobTimer.value) window.clearInterval(jobTimer.value)
       jobTimer.value = null
-      data.status === 'COMPLETED' ? ElMessage.success('任务执行完成') : ElMessage.error(data.error_message || '任务失败')
+      if (data.status === 'COMPLETED') ElMessage.success('任务执行完成')
+      else if (data.status === 'CANCELLED') ElMessage.warning('任务已取消')
+      else ElMessage.error(data.error_message || '任务失败')
       await loadAll()
     }
   }, 1200)
 }
 
+async function cancelCurrentJob() {
+  if (!currentJob.value) return
+  try {
+    const { data } = await api.post(`/jobs/${currentJob.value.id}/cancel`)
+    currentJob.value = data
+    ElMessage.info(data.status === 'CANCELLED' ? '任务已取消' : '已请求取消，正在安全停止')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '取消任务失败')
+  }
+}
+
+async function retryCurrentJob() {
+  if (!currentJob.value) return
+  try {
+    const { data } = await api.post(`/jobs/${currentJob.value.id}/retry`)
+    ElMessage.info('已创建重试任务')
+    watchJob(data)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '重试任务失败')
+  }
+}
+
 async function loadManifest(artifactId: string) {
   selectedArtifact.value = artifactId
   fileManifest.value = (await api.get(`/artifacts/${artifactId}/files`)).data
+  selectedLogPath.value = ''
+  rawLog.value = ''
+  resetRawSearch()
   activeTab.value = 'logs'
 }
 
 async function loadRawLog(path: string, startLine = 1) {
   if (!selectedArtifact.value) return
+  if (selectedLogPath.value !== path) resetRawSearch()
   selectedLogPath.value = path
   const response = await api.get(`/artifacts/${selectedArtifact.value}/content`, {
     params: { path, start_line: Math.max(1, startLine), line_count: 1000 }
@@ -186,6 +311,37 @@ async function loadRawLog(path: string, startLine = 1) {
   rawHasMore.value = String(response.headers['x-has-more'] || 'false') === 'true'
   rawEncoding.value = String(response.headers['x-text-encoding'] || '')
   rawJumpLine.value = rawStartLine.value
+}
+
+function resetRawSearch() {
+  rawSearchMatches.value = []
+  rawSearchNextLine.value = null
+  rawSearchScannedTo.value = 0
+}
+
+async function searchRawLog(continueFromLast = false) {
+  const query = rawSearchQuery.value.trim()
+  if (!selectedArtifact.value || !selectedLogPath.value) return ElMessage.warning('请先选择日志文件')
+  if (!query) return ElMessage.warning('请输入原始日志关键词')
+  rawSearching.value = true
+  try {
+    const startLine = continueFromLast ? (rawSearchNextLine.value || 1) : 1
+    const { data } = await api.get(`/artifacts/${selectedArtifact.value}/search`, {
+      params: { path: selectedLogPath.value, query, start_line: startLine, limit: 100 }
+    })
+    rawSearchMatches.value = data.matches || []
+    rawSearchNextLine.value = data.next_start_line
+    rawSearchScannedTo.value = Number(data.scanned_to_line || 0)
+    if (!rawSearchMatches.value.length) ElMessage.info(data.has_more ? '当前扫描范围没有匹配，可继续搜索' : '没有找到匹配内容')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '原始日志搜索失败')
+  } finally {
+    rawSearching.value = false
+  }
+}
+
+async function openRawSearchMatch(lineNumber: number) {
+  await loadRawLog(selectedLogPath.value, Math.max(1, lineNumber - 20))
 }
 
 async function previousRawPage() {
@@ -285,13 +441,20 @@ onBeforeUnmount(() => {
         <span class="muted">{{ caseInfo.id }} · {{ caseInfo.device_type }} {{ caseInfo.device_model || '' }} · {{ caseInfo.firmware_version || '固件版本未填' }}</span>
       </div>
       <el-tag>{{ caseInfo.status }}</el-tag>
-      <el-button type="primary" @click="analyze">开始综合诊断</el-button>
+      <el-tag v-if="caseAccess" effect="plain">权限：{{ caseAccess.permission }}</el-tag>
+      <el-button type="primary" :disabled="!canEditCase" @click="analyze">开始综合诊断</el-button>
     </div>
 
-    <el-alert v-if="currentJob" :closable="false" :type="currentJob.status === 'FAILED' ? 'error' : 'info'" style="margin-bottom:14px">
+    <el-alert v-if="caseAccess && !canEditCase" type="info" :closable="false" title="当前账号对这个案例只有只读权限。" style="margin-bottom:14px" />
+
+    <el-alert v-if="currentJob" :closable="false" :type="currentJob.status === 'FAILED' ? 'error' : currentJob.status === 'CANCELLED' ? 'warning' : 'info'" style="margin-bottom:14px">
       <template #title>{{ currentJob.kind }}：{{ currentJob.message || currentJob.status }}</template>
       <el-progress :percentage="currentJob.progress" :status="currentJob.status === 'FAILED' ? 'exception' : undefined" />
       <pre v-if="currentJob.error_message" class="mono">{{ currentJob.error_message }}</pre>
+      <div class="toolbar" style="margin-top:8px">
+        <el-button v-if="canEditCase && ['QUEUED', 'RUNNING'].includes(currentJob.status)" size="small" type="warning" @click="cancelCurrentJob">安全取消</el-button>
+        <el-button v-if="canEditCase && ['FAILED', 'CANCELLED'].includes(currentJob.status)" size="small" type="primary" @click="retryCurrentJob">重试</el-button>
+      </div>
     </el-alert>
 
     <el-tabs v-model="activeTab" type="border-card">
@@ -303,10 +466,39 @@ onBeforeUnmount(() => {
           <div class="stat-card"><div class="muted">知识增强</div><strong style="font-size:28px">{{ diagnosis.retrieved_knowledge?.length || 0 }}</strong></div>
         </div>
         <h3 class="section-title">问题现象</h3><p>{{ caseInfo.description || '未填写' }}</p>
+        <template v-if="canManageMembers">
+          <h3 class="section-title">案例成员与权限</h3>
+          <el-card shadow="never" style="margin-bottom:16px">
+            <div class="toolbar">
+              <el-select v-model="memberForm.user_id" filterable placeholder="选择用户" style="width:260px">
+                <el-option v-for="user in availableMemberUsers" :key="user.id" :label="`${user.display_name} (${user.username})`" :value="user.id" />
+              </el-select>
+              <el-select v-model="memberForm.permission" style="width:150px">
+                <el-option label="可编辑" value="EDITOR" />
+                <el-option label="只读" value="VIEWER" />
+              </el-select>
+              <el-button type="primary" :disabled="!memberForm.user_id" @click="addCaseMember">添加成员</el-button>
+              <span class="muted">案例所有者和管理员可以管理成员；可编辑成员不能删除案例或管理成员。</span>
+            </div>
+            <el-table :data="caseMembers" empty-text="尚未添加成员">
+              <el-table-column prop="username" label="用户名" min-width="160" />
+              <el-table-column prop="display_name" label="显示名称" min-width="180" />
+              <el-table-column label="案例权限" width="180">
+                <template #default="scope">
+                  <el-select :model-value="scope.row.permission" @change="(value: 'EDITOR' | 'VIEWER') => updateCaseMember(scope.row as CaseMember, value)">
+                    <el-option label="可编辑" value="EDITOR" />
+                    <el-option label="只读" value="VIEWER" />
+                  </el-select>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="100"><template #default="scope"><el-button link type="danger" @click="removeCaseMember(scope.row as CaseMember)">移除</el-button></template></el-table-column>
+            </el-table>
+          </el-card>
+        </template>
         <h3 class="section-title">上传 collectDebuginfo</h3>
         <div class="toolbar">
-          <input ref="debugFileInput" type="file" @change="selectDebugFile"/>
-          <el-button type="primary" @click="uploadDebug">上传并解析</el-button>
+          <input ref="debugFileInput" type="file" :disabled="!canEditCase" @change="selectDebugFile"/>
+          <el-button type="primary" :disabled="!canEditCase" @click="uploadDebug">上传并解析</el-button>
           <span class="muted">支持 ZIP/TAR/TGZ、常见日志和无后缀纯文本 collectDebuginfo；无后缀日志上传时会自动追加 .txt。</span>
         </div>
         <el-table :data="artifacts">
@@ -316,9 +508,9 @@ onBeforeUnmount(() => {
           <el-table-column prop="status" label="状态" width="120" />
           <el-table-column label="操作" width="250">
             <template #default="scope">
-              <el-button link type="primary" @click="parseArtifact(scope.row.id)">解析</el-button>
+              <el-button link type="primary" :disabled="!canEditCase" @click="parseArtifact(scope.row.id)">解析</el-button>
               <el-button link @click="loadManifest(scope.row.id)">文件树</el-button>
-               <el-button link type="danger" @click="deleteArtifact(scope.row as Artifact)">删除</el-button>
+               <el-button link type="danger" :disabled="!canEditCase" @click="deleteArtifact(scope.row as Artifact)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -349,7 +541,18 @@ onBeforeUnmount(() => {
                 <el-button @click="jumpToRawLine">跳转</el-button>
                 <span class="muted">第 {{ rawStartLine }}–{{ rawStartLine + Math.max(rawReturnedLines - 1, 0) }} 行 / {{ rawTotalLines || '未知总行数' }} · {{ rawEncoding }}</span>
               </div>
-              <pre class="mono" style="height:520px;overflow:auto">{{ rawLog || '选择左侧文件查看，原始数据不会被 LLM 输出覆盖。' }}</pre>
+              <div v-if="selectedLogPath" class="toolbar" style="margin-bottom:8px">
+                <el-input v-model="rawSearchQuery" clearable placeholder="搜索原始日志关键词" style="width:280px" @keyup.enter="searchRawLog(false)" />
+                <el-button :loading="rawSearching" @click="searchRawLog(false)">搜索</el-button>
+                <el-button v-if="rawSearchNextLine" :loading="rawSearching" @click="searchRawLog(true)">从第 {{ rawSearchNextLine }} 行继续</el-button>
+                <span v-if="rawSearchScannedTo" class="muted">已扫描到第 {{ rawSearchScannedTo }} 行</span>
+              </div>
+              <div v-if="rawSearchMatches.length" style="max-height:92px;overflow:auto;border:1px solid #e5e7eb;padding:4px 8px;margin-bottom:8px">
+                <div v-for="match in rawSearchMatches" :key="match.line_number" class="mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                  <el-button link type="primary" @click="openRawSearchMatch(match.line_number)">第 {{ match.line_number }} 行</el-button>{{ match.text }}
+                </div>
+              </div>
+              <pre class="mono" :style="{height: rawSearchMatches.length ? '375px' : '460px', overflow:'auto'}">{{ rawLog || '选择左侧文件查看，原始数据不会被 LLM 输出覆盖。' }}</pre>
             </el-card>
           </el-col>
         </el-row>
@@ -449,25 +652,25 @@ onBeforeUnmount(() => {
             <div v-if="msg.citations?.length" class="muted" style="font-size:12px">引用：{{ msg.citations.map(x => x.evidence_id).join('、') }}</div>
           </div>
         </div>
-        <div class="toolbar" style="margin-top:12px"><el-input v-model="chatQuestion" type="textarea" :rows="2" placeholder="例如：为什么认为是 hostapd 问题？还缺少哪些证据？" @keyup.ctrl.enter="ask"/><el-button type="primary" @click="ask">发送</el-button></div>
+        <div class="toolbar" style="margin-top:12px"><el-input v-model="chatQuestion" type="textarea" :rows="2" :disabled="!canEditCase" placeholder="例如：为什么认为是 hostapd 问题？还缺少哪些证据？" @keyup.ctrl.enter="ask"/><el-button type="primary" :disabled="!canEditCase" @click="ask">发送</el-button></div>
       </el-tab-pane>
 
       <el-tab-pane label="代码仓库" name="code">
-        <div class="toolbar"><input type="file" accept=".zip,.tar,.gz,.tgz" @change="(e:any) => repoFile = e.target.files?.[0] || null"/><el-button type="primary" @click="uploadRepo">上传代码仓库</el-button><span class="muted">支持 C/C++ 函数、宏、结构体索引；不会自动覆盖源码。</span></div>
+        <div class="toolbar"><input type="file" accept=".zip,.tar,.gz,.tgz" :disabled="!canEditCase" @change="(e:any) => repoFile = e.target.files?.[0] || null"/><el-button type="primary" :disabled="!canEditCase" @click="uploadRepo">上传代码仓库</el-button><span class="muted">支持 C/C++ 函数、宏、结构体索引；不会自动覆盖源码。</span></div>
         <el-table :data="repositories">
           <el-table-column prop="name" label="仓库" min-width="220"/><el-table-column prop="status" label="状态" width="120"/><el-table-column prop="commit_hash" label="Commit" width="160"/>
-          <el-table-column label="操作" width="280"><template #default="scope"><el-button link type="primary" @click="indexRepo(scope.row.id)">建立索引</el-button><el-button link @click="loadSymbols(scope.row.id)">查看符号</el-button><el-button link type="warning" @click="runStatic(scope.row.id)">静态分析</el-button></template></el-table-column>
+          <el-table-column label="操作" width="280"><template #default="scope"><el-button link type="primary" :disabled="!canEditCase" @click="indexRepo(scope.row.id)">建立索引</el-button><el-button link @click="loadSymbols(scope.row.id)">查看符号</el-button><el-button link type="warning" :disabled="!canEditCase" @click="runStatic(scope.row.id)">静态分析</el-button></template></el-table-column>
         </el-table>
         <div class="toolbar" style="margin-top:18px"><el-input v-model="symbolSearch" placeholder="函数名、宏名或文件路径" style="width:300px"/><el-button v-if="repositories[0]" @click="loadSymbols(repositories[0].id)">搜索符号</el-button></div>
         <el-table :data="symbols" height="450">
           <el-table-column prop="kind" label="类型" width="90"/><el-table-column prop="name" label="符号" width="210"/><el-table-column prop="file_path" label="文件" min-width="260"/><el-table-column prop="line_start" label="起始行" width="90"/><el-table-column prop="signature" label="签名" min-width="260" show-overflow-tooltip/>
-          <el-table-column label="操作" width="120"><template #default="scope"><el-button link type="primary" @click="suggestPatch(scope.row.id)">候选补丁</el-button></template></el-table-column>
+          <el-table-column label="操作" width="120"><template #default="scope"><el-button link type="primary" :disabled="!canEditCase" @click="suggestPatch(scope.row.id)">候选补丁</el-button></template></el-table-column>
         </el-table>
       </el-tab-pane>
 
       <el-tab-pane label="诊断报告" name="report">
-        <div class="toolbar"><el-button type="primary" @click="exportReport('pdf')">导出 PDF</el-button><el-button @click="exportReport('docx')">导出 Word</el-button><el-button @click="exportReport('html')">导出 HTML</el-button></div>
-        <iframe v-if="reportHtml" :srcdoc="reportHtml" style="width:100%;height:720px;border:1px solid #d1d5db;background:white" />
+        <div class="toolbar"><el-button type="primary" :disabled="!canEditCase" @click="exportReport('pdf')">导出 PDF</el-button><el-button :disabled="!canEditCase" @click="exportReport('docx')">导出 Word</el-button><el-button :disabled="!canEditCase" @click="exportReport('html')">导出 HTML</el-button></div>
+        <iframe v-if="reportHtml" :srcdoc="reportHtml" sandbox="" style="width:100%;height:720px;border:1px solid #d1d5db;background:white" />
         <el-empty v-else description="暂无报告" />
       </el-tab-pane>
     </el-tabs>

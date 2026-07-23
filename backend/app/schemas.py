@@ -42,6 +42,7 @@ class CaseOut(ORMModel):
     issue_time: str | None
     status: str
     severity: str
+    owner_id: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -242,3 +243,27 @@ class StaticAnalysisRequest(BaseModel):
 class PatchRequest(BaseModel):
     symbol_id: str
     instruction: str = "根据当前故障证据生成最小、安全、可审查的候选补丁"
+
+
+class UserCreate(BaseModel):
+    username: str = Field(pattern=r"^[A-Za-z0-9._-]{2,128}$")
+    display_name: str = Field(min_length=1, max_length=255)
+    role: Literal["ADMIN", "ENGINEER", "VIEWER"] = "VIEWER"
+    issue_token: bool = True
+    token_name: str = Field(default="initial", min_length=1, max_length=255)
+    token_expires_days: int | None = Field(default=90, ge=1, le=3650)
+
+
+class UserUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    role: Literal["ADMIN", "ENGINEER", "VIEWER"] | None = None
+    active: bool | None = None
+
+
+class AccessTokenCreate(BaseModel):
+    name: str = Field(default="default", min_length=1, max_length=255)
+    expires_days: int | None = Field(default=90, ge=1, le=3650)
+
+
+class CaseMemberUpdate(BaseModel):
+    permission: Literal["EDITOR", "VIEWER"] = "VIEWER"

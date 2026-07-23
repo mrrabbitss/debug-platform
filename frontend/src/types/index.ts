@@ -10,8 +10,72 @@ export interface CaseItem {
   issue_time?: string
   status: string
   severity: string
+  owner_id?: string
   created_at: string
   updated_at: string
+}
+
+export type UserRole = 'ADMIN' | 'ENGINEER' | 'VIEWER'
+export type CasePermission = 'OWNER' | 'EDITOR' | 'VIEWER' | 'SHARED'
+
+export interface Principal {
+  id: string
+  username?: string
+  display_name?: string
+  role: UserRole
+  type: 'local' | 'api_key' | 'user_token' | 'anonymous'
+  token_id?: string
+}
+
+export interface UserAccount {
+  id: string
+  username: string
+  display_name: string
+  role: UserRole
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface UserDirectoryEntry {
+  id: string
+  username: string
+  display_name: string
+  role: UserRole
+}
+
+export interface AccessTokenInfo {
+  id: string
+  user_id: string
+  name: string
+  token_hint: string
+  expires_at?: string
+  last_used_at?: string
+  revoked_at?: string
+  created_at: string
+}
+
+export interface CaseMember {
+  id: string
+  case_id: string
+  user_id: string
+  username: string
+  display_name: string
+  permission: 'EDITOR' | 'VIEWER'
+}
+
+export interface AuditEvent {
+  id: string
+  actor_id?: string
+  actor_type: string
+  action: string
+  resource_type?: string
+  resource_id?: string
+  case_id?: string
+  outcome: string
+  ip_address?: string
+  details: Record<string, unknown>
+  created_at: string
 }
 
 export interface Artifact {

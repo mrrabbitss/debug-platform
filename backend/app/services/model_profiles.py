@@ -278,6 +278,7 @@ def seed_model_profiles(db: Session) -> None:
             model_name="Qwen/Qwen3-Reranker-0.6B",
             config_json=json_dumps({
                 "device": "cpu",
+                "batch_size": 4,
                 "candidate_count": 30,
                 "instruction": "Given a network troubleshooting query, retrieve passages that help diagnose and solve it.",
             }),

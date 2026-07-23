@@ -9,8 +9,9 @@ from sqlalchemy import case as sql_case, select
 
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
-from app.models import AnalysisRun, Case, CodeSymbol, ConversationMessage, LogEvent, Repository
-from app.services.jobs import JobContext
+from app.models import AnalysisRun, Artifact, Case, CodeSymbol, ConversationMessage, LogEvent, Repository
+from app.services.events import active_log_event_clause
+from app.services.jobs import JobCancelledError, JobContext
 from app.services.llm import LLMError, get_active_chat_model_info, get_llm_provider
 from app.services.rag import RetrievalHit, retriever
 
@@ -384,7 +385,9 @@ def _analyze_case_impl(ctx: JobContext, case_id: str) -> dict:
             else_=4,
         )
         events = db.scalars(
-            select(LogEvent).where(LogEvent.case_id == case_id)
+            select(LogEvent)
+            .join(Artifact, Artifact.id == LogEvent.artifact_id)
+            .where(LogEvent.case_id == case_id, active_log_event_clause())
             .order_by(severity_rank.asc(), LogEvent.confidence.desc())
             .limit(300)
         ).all()
@@ -403,44 +406,60 @@ def _analyze_case_impl(ctx: JobContext, case_id: str) -> dict:
     result["analysis_run_id"] = run_id
     result["generated_at"] = utcnow().isoformat()
 
+    job_result = {
+        "analysis_run_id": run_id,
+        "summary": result.get("summary"),
+        "hypotheses": len(result.get("hypotheses", [])),
+    }
     with SessionLocal() as db:
         run = db.get(AnalysisRun, run_id)
         case = db.get(Case, case_id)
-        if run and case:
-            run.status = "COMPLETED"
-            run.result_json = json_dumps(result)
-            run.evidence_json = json_dumps(evidence)
+        if not run or not case:
+            raise ValueError("Case or analysis run was removed while diagnosing")
+        ctx.complete_in_transaction(db, job_result)
+        run.status = "COMPLETED"
+        run.result_json = json_dumps(result)
+        run.evidence_json = json_dumps(evidence)
+        run.completed_at = utcnow()
+        case.status = "COMPLETED"
+        if result.get("hypotheses"):
+            case.severity = result["hypotheses"][0].get("priority", "UNKNOWN")
+        db.commit()
+    return job_result
+
+
+def _mark_analysis_interrupted(case_id: str, status: str, error_message: str | None) -> None:
+    with SessionLocal() as db:
+        run = db.scalars(
+            select(AnalysisRun).where(
+                AnalysisRun.case_id == case_id,
+                AnalysisRun.status == "RUNNING",
+            ).order_by(AnalysisRun.created_at.desc()).limit(1)
+        ).first()
+        case = db.get(Case, case_id)
+        if run:
+            run.status = status
+            run.error_message = error_message[:2000] if error_message else None
             run.completed_at = utcnow()
-            case.status = "COMPLETED"
-            if result.get("hypotheses"):
-                case.severity = result["hypotheses"][0].get("priority", "UNKNOWN")
-            db.commit()
-    ctx.update(95, "Diagnosis completed")
-    return {"analysis_run_id": run_id, "summary": result.get("summary"), "hypotheses": len(result.get("hypotheses", []))}
+        if case:
+            has_events = db.scalar(
+                select(LogEvent.id)
+                .join(Artifact, Artifact.id == LogEvent.artifact_id)
+                .where(LogEvent.case_id == case_id, active_log_event_clause())
+                .limit(1)
+            )
+            case.status = "PARSED" if has_events else "UPLOADED"
+        db.commit()
 
 
 def analyze_case_job(ctx: JobContext, case_id: str) -> dict:
     try:
         return _analyze_case_impl(ctx, case_id)
+    except JobCancelledError:
+        _mark_analysis_interrupted(case_id, "CANCELLED", None)
+        raise
     except Exception as exc:
-        with SessionLocal() as db:
-            run = db.scalars(
-                select(AnalysisRun).where(
-                    AnalysisRun.case_id == case_id,
-                    AnalysisRun.status == "RUNNING",
-                ).order_by(AnalysisRun.created_at.desc()).limit(1)
-            ).first()
-            case = db.get(Case, case_id)
-            if run:
-                run.status = "FAILED"
-                run.error_message = str(exc)[:2000] or type(exc).__name__
-                run.completed_at = utcnow()
-            if case:
-                has_events = db.scalar(
-                    select(LogEvent.id).where(LogEvent.case_id == case_id).limit(1)
-                )
-                case.status = "PARSED" if has_events else "UPLOADED"
-            db.commit()
+        _mark_analysis_interrupted(case_id, "FAILED", str(exc) or type(exc).__name__)
         raise
 
 
@@ -472,6 +491,7 @@ async def chat_about_case(case_id: str, question: str) -> tuple[str, list[dict]]
         answer = await provider.generate_text(
             "你是 GW/AP 故障诊断助手。仅基于提供的案例、诊断和证据回答；引用证据编号，明确不确定性。",
             json_dumps({"question": question, "case": {"title": case.title, "description": case.description}, "diagnosis": diagnosis, "evidence": citations}),
+            purpose="case_chat",
         )
     with SessionLocal() as db:
         db.add(ConversationMessage(id=new_id("MSG"), case_id=case_id, role="user", content=question))

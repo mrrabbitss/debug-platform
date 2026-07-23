@@ -1,43 +1,77 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
-import type { CaseItem } from '../types'
+import type { CaseItem, Principal } from '../types'
 
 const router = useRouter()
 const cases = ref<CaseItem[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
+const principal = ref<Principal | null>(null)
+const authError = ref('')
 const form = reactive({
   title: '', device_type: 'GW', device_model: '', firmware_version: '', issue_time: '',
   description: '', reproduction_steps: '', topology: ''
 })
+const canCreate = computed(() => principal.value !== null && principal.value.role !== 'VIEWER')
+
+function errorMessage(error: any, fallback: string) {
+  return error?.response?.data?.detail || error?.message || fallback
+}
+
+async function loadIdentity() {
+  try {
+    principal.value = (await api.get('/system/me')).data
+    authError.value = ''
+  } catch (error: any) {
+    principal.value = null
+    authError.value = errorMessage(error, '需要先配置访问凭据')
+  }
+}
 
 async function loadCases() {
+  if (!principal.value) return
   loading.value = true
-  try { cases.value = (await api.get('/cases')).data }
+  try {
+    cases.value = (await api.get('/cases')).data
+    authError.value = ''
+  } catch (error: any) {
+    authError.value = errorMessage(error, '案例读取失败')
+  }
   finally { loading.value = false }
 }
 
 async function createCase() {
   if (!form.title.trim()) return ElMessage.warning('请填写问题标题')
-  const { data } = await api.post('/cases', form)
-  dialogVisible.value = false
-  ElMessage.success('案例已创建')
-  router.push(`/cases/${data.id}`)
+  try {
+    const { data } = await api.post('/cases', form)
+    dialogVisible.value = false
+    ElMessage.success('案例已创建')
+    router.push(`/cases/${data.id}`)
+  } catch (error: any) {
+    ElMessage.error(errorMessage(error, '案例创建失败'))
+  }
 }
 
-onMounted(loadCases)
+onMounted(async () => {
+  await loadIdentity()
+  await loadCases()
+})
 </script>
 
 <template>
   <div>
     <div class="toolbar">
       <h1 class="page-title" style="margin-right:auto">故障案例</h1>
-      <el-button type="primary" @click="dialogVisible = true">新建案例</el-button>
+      <el-tag v-if="principal" effect="plain">{{ principal.role }}</el-tag>
+      <el-button type="primary" :disabled="!canCreate" @click="dialogVisible = true">新建案例</el-button>
       <el-button @click="loadCases">刷新</el-button>
     </div>
+    <el-alert v-if="authError" type="warning" :closable="false" :title="authError" style="margin-bottom:14px" />
+    <div v-if="authError" class="toolbar"><el-button type="primary" @click="router.push('/security')">打开安全与审计并配置凭据</el-button></div>
+    <el-alert v-else-if="principal?.role === 'VIEWER'" type="info" :closable="false" title="当前账号为只读角色，可以查看获授权案例，但不能新建案例。" style="margin-bottom:14px" />
     <el-card>
       <el-table :data="cases" v-loading="loading" @row-dblclick="(row: CaseItem) => router.push(`/cases/${row.id}`)">
         <el-table-column prop="id" label="案例编号" width="210" />

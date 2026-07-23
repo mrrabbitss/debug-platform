@@ -6,20 +6,23 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
 from app.core.utils import json_loads
-from app.models import Artifact, Case, LogEvent
-from app.services import parse_service
+from app.models import Artifact, Case, Job, LogEvent
+from app.services import jobs, parse_service
+from app.services.jobs import JobContext
 from app.services.text_files import read_text_range
 
 
 LINE_COUNT = 110_904
 
 
-class RecordingJobContext:
-    def __init__(self) -> None:
+class RecordingJobContext(JobContext):
+    def __init__(self, job_id: str) -> None:
+        super().__init__(job_id)
         self.updates: list[tuple[int, str]] = []
 
     def update(self, progress: int, message: str) -> None:
         self.updates.append((progress, message))
+        super().update(progress, message)
 
 
 def write_large_huawei_log(path: Path) -> None:
@@ -53,10 +56,12 @@ def test_streams_and_batches_110904_line_huawei_log(tmp_path: Path, monkeypatch)
             size_bytes=source.stat().st_size,
             status="UPLOADED",
         ))
+        db.add(Job(id="JOB-large", kind="parse_artifact", status="RUNNING"))
         db.commit()
 
     monkeypatch.setattr(parse_service, "SessionLocal", session_factory)
-    context = RecordingJobContext()
+    monkeypatch.setattr(jobs, "SessionLocal", session_factory)
+    context = RecordingJobContext("JOB-large")
     started = time.monotonic()
     result = parse_service.parse_artifact_job(context, "CASE-large", "ART-large")
     elapsed = time.monotonic() - started
@@ -71,6 +76,7 @@ def test_streams_and_batches_110904_line_huawei_log(tmp_path: Path, monkeypatch)
         ) or 0)
         metadata = json_loads(artifact.metadata_json, {})
         assert artifact.status == "PARSED"
+        assert db.get(Job, "JOB-large").status == "COMPLETED"
         assert event_count == LINE_COUNT - 1
         assert metadata["manifest"][0]["line_count"] == LINE_COUNT
         assert metadata["manifest"][0]["encoding"] == "utf-8"

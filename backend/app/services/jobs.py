@@ -15,14 +15,19 @@ from app.models import Job
 
 
 logger = logging.getLogger(__name__)
-ACTIVE_JOB_STATUSES = ("QUEUED", "RUNNING")
+ACTIVE_JOB_STATUSES = ("QUEUED", "RUNNING", "CANCEL_REQUESTED")
 TERMINAL_JOB_STATUSES = ("COMPLETED", "FAILED", "CANCELLED")
+
+
+class JobCancelledError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
 class JobHandler:
     function: Callable[..., Any]
     argument_names: tuple[str, ...]
+    cancellable: bool
 
 
 class JobContext:
@@ -32,11 +37,52 @@ class JobContext:
     def update(self, progress: int, message: str) -> None:
         with SessionLocal() as db:
             job = db.get(Job, self.job_id)
+            if job and job.status == "CANCEL_REQUESTED":
+                raise JobCancelledError("Job cancellation requested")
             if not job or job.status != "RUNNING":
                 return
             job.progress = max(0, min(100, progress))
             job.message = message
             db.commit()
+
+    def raise_if_cancelled(self) -> None:
+        with SessionLocal() as db:
+            job = db.get(Job, self.job_id)
+            if job and job.status in {"CANCEL_REQUESTED", "CANCELLED"}:
+                raise JobCancelledError("Job cancellation requested")
+
+    def complete_in_transaction(
+        self,
+        db: Session,
+        result: Any,
+        message: str = "Completed",
+    ) -> None:
+        """Claim the commit point in the same transaction as handler output.
+
+        Cancellation and publication both use conditional updates. Whichever
+        obtains the database write lock first wins, so a late cancellation can
+        never roll back an already-published parse or diagnosis generation.
+        """
+        with db.no_autoflush:
+            completed = db.execute(
+                update(Job)
+                .where(Job.id == self.job_id, Job.status == "RUNNING")
+                .values(
+                    status="COMPLETED",
+                    progress=100,
+                    message=message,
+                    result_json=json_dumps(result if result is not None else {}),
+                    completed_at=utcnow(),
+                )
+            )
+        if completed.rowcount == 1:
+            return
+        current_status = db.scalar(select(Job.status).where(Job.id == self.job_id))
+        if current_status in {"CANCEL_REQUESTED", "CANCELLED"}:
+            raise JobCancelledError("Job cancellation requested")
+        if current_status == "COMPLETED":
+            return
+        raise RuntimeError(f"Job cannot publish results from status: {current_status or 'missing'}")
 
 
 class JobRunner:
@@ -61,8 +107,14 @@ class JobRunner:
         kind: str,
         function: Callable[..., Any],
         argument_names: tuple[str, ...],
+        *,
+        cancellable: bool = False,
     ) -> None:
-        self.handlers[kind] = JobHandler(function=function, argument_names=argument_names)
+        self.handlers[kind] = JobHandler(
+            function=function,
+            argument_names=argument_names,
+            cancellable=cancellable,
+        )
 
     def submit(
         self,
@@ -100,18 +152,81 @@ class JobRunner:
             jobs = list(db.scalars(
                 select(Job).where(Job.status.in_(ACTIVE_JOB_STATUSES)).order_by(Job.created_at)
             ).all())
+            job_ids: list[str] = []
             for job in jobs:
+                if job.status == "CANCEL_REQUESTED":
+                    job.status = "CANCELLED"
+                    job.message = "Cancelled during backend restart"
+                    job.completed_at = utcnow()
+                    continue
                 if job.status == "RUNNING":
                     job.status = "QUEUED"
                     job.progress = 0
                     job.message = "Backend restarted; job queued for recovery"
                     job.started_at = None
+                job_ids.append(job.id)
             db.commit()
-            job_ids = [job.id for job in jobs]
 
         for job_id in job_ids:
             self._schedule(job_id)
         return len(job_ids)
+
+    def request_cancel(self, db: Session, job_id: str) -> Job:
+        job = db.get(Job, job_id)
+        if not job:
+            raise ValueError("Job not found")
+        handler = self.handlers.get(job.kind)
+        if job.status in {"QUEUED", "RUNNING"} and (not handler or not handler.cancellable):
+            raise ValueError(f"Job kind is not safely cancellable: {job.kind}")
+        if job.status == "QUEUED":
+            cancelled = db.execute(
+                update(Job)
+                .where(Job.id == job_id, Job.status == "QUEUED")
+                .values(
+                    status="CANCELLED",
+                    message="Cancelled before execution",
+                    completed_at=utcnow(),
+                )
+            )
+            if cancelled.rowcount != 1:
+                db.execute(
+                    update(Job)
+                    .where(Job.id == job_id, Job.status == "RUNNING")
+                    .values(status="CANCEL_REQUESTED", message="Cancellation requested")
+                )
+        elif job.status == "RUNNING":
+            db.execute(
+                update(Job)
+                .where(Job.id == job_id, Job.status == "RUNNING")
+                .values(status="CANCEL_REQUESTED", message="Cancellation requested")
+            )
+        db.commit()
+        db.expire(job)
+        db.refresh(job)
+        return job
+
+    def retry(self, db: Session, job_id: str) -> Job:
+        previous = db.get(Job, job_id)
+        if not previous:
+            raise ValueError("Job not found")
+        if previous.status not in {"FAILED", "CANCELLED"}:
+            raise ValueError("Only failed or cancelled jobs can be retried")
+        if previous.kind not in self.handlers:
+            raise ValueError(f"No handler registered for job kind: {previous.kind}")
+        input_data = json_loads(previous.input_json, {})
+        input_data["_retry_of_job_id"] = previous.id
+        input_data["_attempt"] = int(input_data.get("_attempt", 1)) + 1
+        job = Job(
+            id=new_id("JOB"),
+            kind=previous.kind,
+            input_json=json_dumps(input_data),
+            message=f"Retry attempt {input_data['_attempt']}",
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        self._schedule(job.id)
+        return job
 
     def shutdown(self, wait: bool = True) -> None:
         self.executor.shutdown(wait=wait, cancel_futures=False)
@@ -181,24 +296,52 @@ class JobRunner:
 
             result = function(JobContext(job_id), *args)
             with SessionLocal() as db:
-                job = db.get(Job, job_id)
-                if job and job.status == "RUNNING":
-                    job.status = "COMPLETED"
-                    job.progress = 100
-                    job.message = "Completed"
-                    job.result_json = json_dumps(result if result is not None else {})
-                    job.completed_at = utcnow()
-                    db.commit()
+                completed = db.execute(
+                    update(Job)
+                    .where(Job.id == job_id, Job.status == "RUNNING")
+                    .values(
+                        status="COMPLETED",
+                        progress=100,
+                        message="Completed",
+                        result_json=json_dumps(result if result is not None else {}),
+                        completed_at=utcnow(),
+                    )
+                )
+                if completed.rowcount != 1:
+                    db.execute(
+                        update(Job)
+                        .where(Job.id == job_id, Job.status == "CANCEL_REQUESTED")
+                        .values(status="CANCELLED", message="Cancelled", completed_at=utcnow())
+                    )
+                db.commit()
+        except JobCancelledError:
+            with SessionLocal() as db:
+                db.execute(
+                    update(Job)
+                    .where(Job.id == job_id, Job.status.in_(ACTIVE_JOB_STATUSES))
+                    .values(status="CANCELLED", message="Cancelled", completed_at=utcnow())
+                )
+                db.commit()
         except Exception as exc:  # noqa: BLE001
             logger.exception("Background job %s failed", job_id)
             with SessionLocal() as db:
-                job = db.get(Job, job_id)
-                if job and job.status not in TERMINAL_JOB_STATUSES:
-                    job.status = "FAILED"
-                    job.error_message = str(exc) or type(exc).__name__
-                    job.message = "Failed"
-                    job.completed_at = utcnow()
-                    db.commit()
+                cancelled = db.execute(
+                    update(Job)
+                    .where(Job.id == job_id, Job.status == "CANCEL_REQUESTED")
+                    .values(status="CANCELLED", message="Cancelled", completed_at=utcnow())
+                )
+                if cancelled.rowcount != 1:
+                    db.execute(
+                        update(Job)
+                        .where(Job.id == job_id, Job.status.in_(("QUEUED", "RUNNING")))
+                        .values(
+                            status="FAILED",
+                            error_message=str(exc) or type(exc).__name__,
+                            message="Failed",
+                            completed_at=utcnow(),
+                        )
+                    )
+                db.commit()
 
 
 job_runner = JobRunner()

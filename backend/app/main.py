@@ -12,6 +12,7 @@ from app.core.security import verify_api_key
 from app.services.knowledge import seed_builtin_knowledge
 from app.services.knowledge_taxonomy import assign_uncategorized_documents, seed_knowledge_categories
 from app.services.jobs import job_runner
+from app.services.audit import AuditMiddleware
 from app.services.model_profiles import seed_model_profiles
 from app.services.retrieval_models import ensure_builtin_embedding_index
 
@@ -47,6 +48,7 @@ app.add_middleware(
         "X-Start-Line", "X-Returned-Lines", "X-Total-Lines", "X-Has-More", "X-Text-Encoding",
     ],
 )
+app.add_middleware(AuditMiddleware)
 app.include_router(router, prefix=settings.api_prefix, dependencies=[Depends(verify_api_key)])
 
 

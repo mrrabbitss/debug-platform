@@ -112,3 +112,89 @@ def test_job_error_is_sanitized_for_api(tmp_path: Path, monkeypatch) -> None:
 
     runner.shutdown()
     engine.dispose()
+
+
+def test_job_runner_cooperatively_cancels_and_retries(tmp_path: Path, monkeypatch) -> None:
+    engine, session_factory = make_session_factory(tmp_path)
+    monkeypatch.setattr(jobs, "SessionLocal", session_factory)
+    runner = jobs.JobRunner(max_workers=1)
+    started = threading.Event()
+    allow_retry_to_finish = threading.Event()
+
+    def cancellable_job(ctx, value):
+        started.set()
+        while not allow_retry_to_finish.is_set():
+            ctx.update(25, "Working")
+            time.sleep(0.01)
+        return {"value": value}
+
+    runner.register("cancellable", cancellable_job, ("value",), cancellable=True)
+    with session_factory() as db:
+        original = runner.submit(
+            db,
+            "cancellable",
+            cancellable_job,
+            9,
+            input_data={"value": 9},
+        )
+    assert started.wait(timeout=2)
+    with session_factory() as db:
+        requested = runner.request_cancel(db, original.id)
+        assert requested.status in {"CANCEL_REQUESTED", "CANCELLED"}
+    assert wait_for_terminal(session_factory, original.id).status == "CANCELLED"
+
+    allow_retry_to_finish.set()
+    with session_factory() as db:
+        retried = runner.retry(db, original.id)
+    completed = wait_for_terminal(session_factory, retried.id)
+    assert completed.status == "COMPLETED"
+    assert completed.result_json == '{"value": 9}'
+
+    runner.shutdown()
+    engine.dispose()
+
+
+def test_job_runner_rejects_unsafe_cancellation(tmp_path: Path, monkeypatch) -> None:
+    engine, session_factory = make_session_factory(tmp_path)
+    monkeypatch.setattr(jobs, "SessionLocal", session_factory)
+    runner = jobs.JobRunner(max_workers=1)
+    release = threading.Event()
+
+    def unsafe_job(ctx):
+        release.wait(timeout=2)
+
+    runner.register("unsafe", unsafe_job, ())
+    with session_factory() as db:
+        job = runner.submit(db, "unsafe", unsafe_job, input_data={})
+    with session_factory() as db:
+        try:
+            runner.request_cancel(db, job.id)
+        except ValueError as exc:
+            assert "not safely cancellable" in str(exc)
+        else:
+            raise AssertionError("Unsafe cancellation should have been rejected")
+
+    release.set()
+    assert wait_for_terminal(session_factory, job.id).status == "COMPLETED"
+    runner.shutdown()
+    engine.dispose()
+
+
+def test_transactional_completion_cannot_be_overwritten_by_late_cancel(tmp_path: Path, monkeypatch) -> None:
+    engine, session_factory = make_session_factory(tmp_path)
+    monkeypatch.setattr(jobs, "SessionLocal", session_factory)
+    runner = jobs.JobRunner(max_workers=1)
+    runner.register("atomic", lambda ctx: {}, (), cancellable=True)
+    with session_factory() as db:
+        db.add(Job(id="JOB-atomic", kind="atomic", status="RUNNING"))
+        db.commit()
+    with session_factory() as db:
+        jobs.JobContext("JOB-atomic").complete_in_transaction(db, {"published": True})
+        db.commit()
+    with session_factory() as db:
+        after_cancel = runner.request_cancel(db, "JOB-atomic")
+        assert after_cancel.status == "COMPLETED"
+        assert after_cancel.result_json == '{"published": true}'
+
+    runner.shutdown()
+    engine.dispose()

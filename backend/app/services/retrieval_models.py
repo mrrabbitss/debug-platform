@@ -4,6 +4,7 @@ import re
 import uuid
 from collections.abc import Callable, Sequence
 from functools import lru_cache
+from time import perf_counter
 from typing import Any
 
 import httpx
@@ -16,6 +17,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id
 from app.models import KnowledgeChunk, KnowledgeEmbedding, ModelProfile
+from app.services.audit import record_model_egress
 from app.services.model_profiles import (
     get_active_model_profile,
     get_profile_api_key,
@@ -145,7 +147,7 @@ def _load_sentence_transformer(model_name: str, device: str):
 
 
 @lru_cache(maxsize=2)
-def _load_cross_encoder(model_name: str, device: str):
+def _load_cross_encoder(model_name: str, device: str, instruction: str):
     try:
         from sentence_transformers import CrossEncoder
     except ImportError as exc:
@@ -153,12 +155,21 @@ def _load_cross_encoder(model_name: str, device: str):
             "Local model support is not installed. Run scripts\\install_local_models.bat first."
         ) from exc
     try:
-        return CrossEncoder(model_name, device=device)
+        prompt_options = (
+            {"prompts": {"diagnosis": instruction}, "default_prompt_name": "diagnosis"}
+            if instruction
+            else {}
+        )
+        return CrossEncoder(model_name, device=device, **prompt_options)
     except Exception as exc:
         raise RetrievalModelError(f"Unable to load local reranker model {model_name!r}: {exc}") from exc
 
 
-def embed_texts(profile: ModelProfile, texts: list[str]) -> list[list[float]]:
+def embed_texts(
+    profile: ModelProfile,
+    texts: list[str],
+    purpose: str = "embedding",
+) -> list[list[float]]:
     if not texts:
         return []
     config = json_loads(profile.config_json, {})
@@ -178,6 +189,7 @@ def embed_texts(profile: ModelProfile, texts: list[str]) -> list[list[float]]:
             raise RetrievalModelError(f"Local embedding failed: {exc}") from exc
         return [_normalize(vector) for vector in vectors.tolist()]
     if profile.provider == "openai_compatible":
+        started = perf_counter()
         try:
             validate_model_endpoint(profile.base_url or "")
             client = OpenAI(
@@ -191,9 +203,34 @@ def embed_texts(profile: ModelProfile, texts: list[str]) -> list[list[float]]:
                 request["dimensions"] = int(config["dimension"])
             response = client.embeddings.create(**request)
             ordered = sorted(response.data, key=lambda item: item.index)
-            return [_normalize(item.embedding) for item in ordered]
+            vectors = [_normalize(item.embedding) for item in ordered]
         except Exception as exc:
+            record_model_egress(
+                profile,
+                task_type="embedding",
+                purpose=purpose,
+                request_items=len(texts),
+                request_chars=sum(len(text) for text in texts),
+                duration_ms=int((perf_counter() - started) * 1000),
+                outcome="FAILED",
+                error_type=type(exc).__name__,
+            )
             raise RetrievalModelError(f"Embedding API request failed: {exc}") from exc
+        usage_object = getattr(response, "usage", None)
+        record_model_egress(
+            profile,
+            task_type="embedding",
+            purpose=purpose,
+            request_items=len(texts),
+            request_chars=sum(len(text) for text in texts),
+            duration_ms=int((perf_counter() - started) * 1000),
+            outcome="SUCCESS",
+            usage={
+                "prompt_tokens": getattr(usage_object, "prompt_tokens", None),
+                "total_tokens": getattr(usage_object, "total_tokens", None),
+            },
+        )
+        return vectors
     raise RetrievalModelError(f"Unsupported embedding provider: {profile.provider}")
 
 
@@ -209,12 +246,16 @@ def index_embeddings(
             KnowledgeEmbedding.profile_id == profile.id,
             KnowledgeEmbedding.chunk_id.in_(chunk_ids),
         ))
+        # Do not hold a SQLite write transaction while a local/API model is
+        # computing vectors. Short per-batch transactions keep job progress,
+        # cancellation and other readers/writers responsive on Win11.
+        db.commit()
     config = json_loads(profile.config_json, {})
     batch_size = max(1, min(int(config.get("batch_size") or 16), 100))
     completed = 0
     for start in range(0, len(chunks), batch_size):
         batch = list(chunks[start:start + batch_size])
-        vectors = embed_texts(profile, [chunk.content for chunk in batch])
+        vectors = embed_texts(profile, [chunk.content for chunk in batch], purpose="knowledge_index")
         if len(vectors) != len(batch):
             raise RetrievalModelError("Embedding model returned an unexpected number of vectors")
         for chunk, vector in zip(batch, vectors, strict=True):
@@ -225,11 +266,11 @@ def index_embeddings(
                 dimension=len(vector),
                 vector_json=json_dumps(vector),
             ))
+        db.commit()
         _mirror_vectors_to_qdrant(profile, batch, vectors)
         completed += len(batch)
         if progress:
             progress(completed, len(chunks))
-    db.commit()
     return completed
 
 
@@ -247,7 +288,7 @@ def reindex_all_embeddings(
 ) -> int:
     chunks = list(db.scalars(select(KnowledgeChunk).order_by(KnowledgeChunk.document_id, KnowledgeChunk.chunk_index)).all())
     db.execute(delete(KnowledgeEmbedding).where(KnowledgeEmbedding.profile_id == profile.id))
-    db.flush()
+    db.commit()
     return index_embeddings(db, profile, chunks, progress)
 
 
@@ -294,7 +335,7 @@ def embedding_scores(query: str, chunk_ids: set[str]) -> dict[str, float]:
         ).all()
         if not rows:
             return {}
-        query_vector = embed_texts(profile, [query])[0]
+        query_vector = embed_texts(profile, [query], purpose="case_retrieval_query")[0]
         qdrant = _qdrant_scores(profile, query_vector, max(len(chunk_ids), 20))
         if qdrant:
             filtered_qdrant = {
@@ -318,6 +359,7 @@ def rerank_documents(
     documents: list[str],
     top_n: int,
     profile: ModelProfile | None = None,
+    purpose: str = "retrieval_candidates",
 ) -> list[tuple[int, float]] | None:
     if not documents:
         return []
@@ -329,15 +371,21 @@ def rerank_documents(
     top_n = max(1, min(top_n, len(documents)))
     if profile.provider == "sentence_transformers":
         device = str(config.get("device") or "cpu")
-        model = _load_cross_encoder(profile.model_name, device)
+        instruction = str(config.get("instruction") or "").strip()[:2000]
+        model = _load_cross_encoder(profile.model_name, device, instruction)
         try:
-            scores = model.predict([(query, document) for document in documents])
+            scores = model.predict(
+                [(query, document) for document in documents],
+                batch_size=max(1, min(int(config.get("batch_size") or 8), 100)),
+                show_progress_bar=False,
+            )
             raw_scores = scores.tolist() if hasattr(scores, "tolist") else scores
             values = [float(value) for value in raw_scores]
         except Exception as exc:
             raise RetrievalModelError(f"Local reranking failed: {exc}") from exc
         return sorted(enumerate(values), key=lambda item: item[1], reverse=True)[:top_n]
     if profile.provider == "qwen_rerank_api":
+        started = perf_counter()
         try:
             validate_model_endpoint(profile.base_url or "")
         except ValueError as exc:
@@ -365,12 +413,32 @@ def rerank_documents(
             response.raise_for_status()
             data = response.json()
             results = data.get("results", [])
-            return [
+            ranking = [
                 (int(item["index"]), float(item.get("relevance_score", item.get("score", 0.0))))
                 for item in results[:top_n]
             ]
         except Exception as exc:
+            record_model_egress(
+                profile,
+                task_type="reranker",
+                purpose=purpose,
+                request_items=len(documents) + 1,
+                request_chars=len(query) + sum(len(document) for document in documents),
+                duration_ms=int((perf_counter() - started) * 1000),
+                outcome="FAILED",
+                error_type=type(exc).__name__,
+            )
             raise RetrievalModelError(f"Reranker API request failed: {exc}") from exc
+        record_model_egress(
+            profile,
+            task_type="reranker",
+            purpose=purpose,
+            request_items=len(documents) + 1,
+            request_chars=len(query) + sum(len(document) for document in documents),
+            duration_ms=int((perf_counter() - started) * 1000),
+            outcome="SUCCESS",
+        )
+        return ranking
     raise RetrievalModelError(f"Unsupported reranker provider: {profile.provider}")
 
 

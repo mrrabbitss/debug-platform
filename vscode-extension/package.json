@@ -7,6 +7,7 @@
   "engines": { "vscode": "^1.100.0" },
   "categories": ["Other", "Machine Learning"],
   "activationEvents": [
+    "onCommand:gwap.setCredential",
     "onCommand:gwap.createCase",
     "onCommand:gwap.uploadDebugInfo",
     "onCommand:gwap.uploadWorkspace",
@@ -16,6 +17,7 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
+      { "command": "gwap.setCredential", "title": "GW/AP: Set or Clear Access Credential" },
       { "command": "gwap.createCase", "title": "GW/AP: Create Debug Case" },
       { "command": "gwap.uploadDebugInfo", "title": "GW/AP: Upload collectDebuginfo" },
       { "command": "gwap.uploadWorkspace", "title": "GW/AP: Associate Current Workspace" },
@@ -27,7 +29,7 @@
       "properties": {
         "gwap.backendUrl": { "type": "string", "default": "http://127.0.0.1:8000/api/v1", "description": "Debug Platform API base URL" },
         "gwap.webUrl": { "type": "string", "default": "http://127.0.0.1:5173", "description": "Debug Platform Web URL" },
-        "gwap.apiKey": { "type": "string", "default": "", "description": "Optional X-API-Key", "scope": "machine-overridable" },
+        "gwap.apiKey": { "type": "string", "default": "", "description": "Legacy plaintext X-API-Key fallback. Prefer the GW/AP: Set or Clear Access Credential command.", "scope": "machine-overridable" },
         "gwap.defaultCaseId": { "type": "string", "default": "", "description": "Default case ID" }
       }
     }

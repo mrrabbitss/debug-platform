@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from abc import ABC, abstractmethod
+from time import perf_counter
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -9,6 +10,7 @@ from openai import AsyncOpenAI
 from app.core.config import get_settings
 from app.core.utils import json_loads
 from app.models import ModelProfile
+from app.services.audit import record_model_egress
 from app.services.model_profiles import (
     get_active_model_profile,
     get_profile_api_key,
@@ -29,10 +31,16 @@ class LLMProvider(ABC):
     is_mock: bool = False
 
     @abstractmethod
-    async def generate_json(self, system: str, user: str, schema_name: str = "diagnosis") -> dict[str, Any]: ...
+    async def generate_json(
+        self,
+        system: str,
+        user: str,
+        schema_name: str = "diagnosis",
+        purpose: str = "case_diagnosis",
+    ) -> dict[str, Any]: ...
 
     @abstractmethod
-    async def generate_text(self, system: str, user: str) -> str: ...
+    async def generate_text(self, system: str, user: str, purpose: str = "case_assistance") -> str: ...
 
 
 class MockProvider(LLMProvider):
@@ -40,10 +48,16 @@ class MockProvider(LLMProvider):
     model_name = "rule-engine"
     is_mock = True
 
-    async def generate_json(self, system: str, user: str, schema_name: str = "diagnosis") -> dict[str, Any]:
+    async def generate_json(
+        self,
+        system: str,
+        user: str,
+        schema_name: str = "diagnosis",
+        purpose: str = "case_diagnosis",
+    ) -> dict[str, Any]:
         return {"mock": True, "schema": schema_name, "summary": "Mock provider does not replace deterministic diagnosis."}
 
-    async def generate_text(self, system: str, user: str) -> str:
+    async def generate_text(self, system: str, user: str, purpose: str = "case_assistance") -> str:
         return "当前使用 Mock 模型。系统已基于日志规则和知识库完成确定性分析；配置 Qwen/GLM API 后可获得更深入的综合推理。"
 
 
@@ -63,6 +77,8 @@ class OpenAICompatibleProvider(LLMProvider):
         except ValueError as exc:
             raise LLMError(str(exc)) from exc
         self.model_name = model_name
+        self.profile = profile
+        self.base_url = base_url
         self.temperature = float(config.get("temperature", settings.llm_temperature))
         self.client = AsyncOpenAI(
             api_key=api_key,
@@ -71,7 +87,45 @@ class OpenAICompatibleProvider(LLMProvider):
             max_retries=int(config.get("max_retries", settings.llm_max_retries)),
         )
 
-    async def generate_json(self, system: str, user: str, schema_name: str = "diagnosis") -> dict[str, Any]:
+    def _record_egress(
+        self,
+        *,
+        purpose: str,
+        system: str,
+        user: str,
+        started: float,
+        outcome: str,
+        response: Any = None,
+        error_type: str | None = None,
+    ) -> None:
+        usage_object = getattr(response, "usage", None)
+        usage = {
+            "prompt_tokens": getattr(usage_object, "prompt_tokens", None),
+            "completion_tokens": getattr(usage_object, "completion_tokens", None),
+            "total_tokens": getattr(usage_object, "total_tokens", None),
+        }
+        record_model_egress(
+            getattr(self, "profile", None),
+            base_url=getattr(self, "base_url", None),
+            model_name=self.model_name,
+            task_type="chat",
+            purpose=purpose,
+            request_items=2,
+            request_chars=len(system) + len(user),
+            duration_ms=int((perf_counter() - started) * 1000),
+            outcome=outcome,
+            error_type=error_type,
+            usage=usage,
+        )
+
+    async def generate_json(
+        self,
+        system: str,
+        user: str,
+        schema_name: str = "diagnosis",
+        purpose: str = "case_diagnosis",
+    ) -> dict[str, Any]:
+        started = perf_counter()
         try:
             response = await self.client.chat.completions.create(
                 model=self.model_name,
@@ -83,25 +137,69 @@ class OpenAICompatibleProvider(LLMProvider):
             )
             content = response.choices[0].message.content or "{}"
         except Exception as exc:
+            self._record_egress(
+                purpose=purpose,
+                system=system,
+                user=user,
+                started=started,
+                outcome="FAILED",
+                error_type=type(exc).__name__,
+            )
             logger.exception("OpenAI-compatible JSON request failed")
             raise LLMError(f"Model request failed ({type(exc).__name__})") from exc
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.I)
         try:
-            return json.loads(content)
+            parsed = json.loads(content)
         except json.JSONDecodeError as exc:
+            self._record_egress(
+                purpose=purpose,
+                system=system,
+                user=user,
+                started=started,
+                outcome="FAILED",
+                response=response,
+                error_type=type(exc).__name__,
+            )
             raise LLMError("Model returned invalid JSON") from exc
+        self._record_egress(
+            purpose=purpose,
+            system=system,
+            user=user,
+            started=started,
+            outcome="SUCCESS",
+            response=response,
+        )
+        return parsed
 
-    async def generate_text(self, system: str, user: str) -> str:
+    async def generate_text(self, system: str, user: str, purpose: str = "case_assistance") -> str:
+        started = perf_counter()
         try:
             response = await self.client.chat.completions.create(
                 model=self.model_name,
                 temperature=self.temperature,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             )
-            return response.choices[0].message.content or ""
+            content = response.choices[0].message.content or ""
         except Exception as exc:
+            self._record_egress(
+                purpose=purpose,
+                system=system,
+                user=user,
+                started=started,
+                outcome="FAILED",
+                error_type=type(exc).__name__,
+            )
             logger.exception("OpenAI-compatible text request failed")
             raise LLMError(f"Model request failed ({type(exc).__name__})") from exc
+        self._record_egress(
+            purpose=purpose,
+            system=system,
+            user=user,
+            started=started,
+            outcome="SUCCESS",
+            response=response,
+        )
+        return content
 
 
 def get_llm_provider(profile: ModelProfile | None = None) -> LLMProvider:

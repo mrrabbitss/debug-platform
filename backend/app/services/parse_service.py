@@ -1,13 +1,13 @@
 from pathlib import Path
 
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, insert, or_, select
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
-from app.core.utils import json_dumps, json_loads, new_id
+from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import Artifact, Case, LogEvent
 from app.services.archive import extract_archive
-from app.services.jobs import JobContext
+from app.services.jobs import JobCancelledError, JobContext
 # Loading this module registers all built-in parsers on the shared registry.
 from app.services import log_parsers as _builtin_parsers  # noqa: F401
 from app.services.parser_registry import registry
@@ -21,24 +21,27 @@ TEXT_SUFFIXES = {
 }
 
 
-def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
+def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str, parse_run_id: str) -> dict:
     with SessionLocal() as db:
         case = db.get(Case, case_id)
         artifact = db.get(Artifact, artifact_id)
         if not case or not artifact:
             raise ValueError("Case or artifact not found")
-        artifact.status = "PARSING"
-        case.status = "PARSING"
+        metadata = json_loads(artifact.metadata_json, {})
+        metadata["pending_parse_run_id"] = parse_run_id
+        artifact.metadata_json = json_dumps(metadata)
+        if artifact.active_parse_run_id:
+            artifact.status = "PARSED"
+            case.status = "PARSED"
+        else:
+            artifact.status = "PARSING"
+            case.status = "PARSING"
         db.commit()
         source = storage.resolve_path(artifact.stored_path)
         extract_dir = source.parent / "extracted"
 
     ctx.update(5, "Validating and extracting archive")
     manifest = extract_archive(source, extract_dir)
-
-    with SessionLocal() as db:
-        db.execute(delete(LogEvent).where(LogEvent.artifact_id == artifact_id))
-        db.commit()
 
     text_files: list[tuple[Path, dict]] = []
     for item in manifest.files:
@@ -56,7 +59,12 @@ def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str) -> dic
             continue
         relative = str(path.relative_to(extract_dir)).replace("\\", "/")
         sample_result = read_text_sample(path)
-        opened = open_text_lines(path)
+        line_index: list[list[int]] = []
+        opened = open_text_lines(
+            path,
+            index_stride=get_settings().text_line_index_stride,
+            line_index=line_index,
+        )
         if sample_result is None or opened is None:
             continue
         sample, sample_encoding = sample_result
@@ -69,6 +77,8 @@ def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str) -> dic
             nonlocal line_count
             for line in lines:
                 line_count += 1
+                if line_count % 5000 == 0:
+                    ctx.raise_if_cancelled()
                 yield line
 
         if hasattr(parser, "parse_lines"):
@@ -86,6 +96,7 @@ def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str) -> dic
                 level_counts[event.level] = level_counts.get(event.level, 0) + 1
                 batch.append({
                     "id": new_id("EVT"), "case_id": case_id, "artifact_id": artifact_id,
+                    "parse_run_id": parse_run_id,
                     "source_file": event.source_file, "line_start": event.line_start, "line_end": event.line_end,
                     "timestamp_raw": event.timestamp_raw, "timestamp_normalized": event.timestamp_normalized,
                     "level": event.level, "module": event.module, "component": event.component,
@@ -108,6 +119,8 @@ def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str) -> dic
                 event_count += len(batch)
         manifest_item["line_count"] = line_count
         manifest_item["encoding"] = encoding or sample_encoding
+        manifest_item["line_index"] = line_index
+        manifest_item["line_index_stride"] = get_settings().text_line_index_stride
         parsed_files += 1
         lower_text = sample.lower()
         for key, patterns in {
@@ -134,12 +147,21 @@ def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str) -> dic
             f"binary/control bytes, or exceed {max_mib} MiB. Run scripts\\inspect_log_file.bat."
         )
 
+    job_result = {
+        "artifact_id": artifact_id,
+        "files": len(manifest.files),
+        "parsed_files": parsed_files,
+        "events": event_count,
+        "device_info": device_info,
+    }
+
     with SessionLocal() as db:
         artifact = db.get(Artifact, artifact_id)
         case = db.get(Case, case_id)
-        if artifact and case:
-            meta = json_loads(artifact.metadata_json, {})
-            meta.update({
+        if not artifact or not case:
+            raise ValueError("Case or artifact was removed while parsing")
+        meta = json_loads(artifact.metadata_json, {})
+        meta.update({
                 "manifest": manifest.files[:5000],
                 "manifest_file_count": len(manifest.files),
                 "extracted_bytes": manifest.total_bytes,
@@ -149,55 +171,82 @@ def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str) -> dic
                 "level_counts": level_counts,
                 "device_info": device_info,
                 "extract_root": storage.storage_key(extract_dir),
-            })
-            if parse_error:
-                meta["parse_error"] = parse_error
-            else:
-                meta.pop("parse_error", None)
-            artifact.metadata_json = json_dumps(meta)
-            artifact.status = "PARSE_FAILED" if parse_error else "PARSED"
-            case.status = "UPLOADED" if parse_error else "PARSED"
-            if not case.device_model and device_info.get("model"):
-                case.device_model = device_info["model"]
-            if not case.firmware_version and device_info.get("firmware"):
-                case.firmware_version = device_info["firmware"]
-            db.commit()
+        })
+        meta.pop("pending_parse_run_id", None)
+        if parse_error:
+            meta["parse_error"] = parse_error
+        else:
+            meta.pop("parse_error", None)
+        artifact.metadata_json = json_dumps(meta)
+        artifact.status = "PARSE_FAILED" if parse_error else "PARSED"
+        case.status = "UPLOADED" if parse_error else "PARSED"
+        if not parse_error:
+            ctx.complete_in_transaction(db, job_result)
+            artifact.active_parse_run_id = parse_run_id
+            db.flush()
+            db.execute(delete(LogEvent).where(
+                LogEvent.artifact_id == artifact_id,
+                or_(LogEvent.parse_run_id != parse_run_id, LogEvent.parse_run_id.is_(None)),
+            ))
+        if not case.device_model and device_info.get("model"):
+            case.device_model = device_info["model"]
+        if not case.firmware_version and device_info.get("firmware"):
+            case.firmware_version = device_info["firmware"]
+        db.commit()
 
     if parse_error:
         ctx.update(95, parse_error)
         raise ValueError(parse_error)
+    return job_result
 
-    ctx.update(95, "Building timeline")
-    return {
-        "artifact_id": artifact_id,
-        "files": len(manifest.files),
-        "parsed_files": parsed_files,
-        "events": event_count,
-        "device_info": device_info,
-    }
+
+def _rollback_parse_run(
+    case_id: str,
+    artifact_id: str,
+    parse_run_id: str,
+    error_message: str | None,
+) -> None:
+    with SessionLocal() as db:
+        artifact = db.get(Artifact, artifact_id)
+        case = db.get(Case, case_id)
+        if artifact:
+            db.execute(delete(LogEvent).where(
+                LogEvent.artifact_id == artifact_id,
+                LogEvent.parse_run_id == parse_run_id,
+            ))
+            metadata = json_loads(artifact.metadata_json, {})
+            metadata.pop("pending_parse_run_id", None)
+            if error_message:
+                metadata["parse_error"] = error_message[:2000]
+            else:
+                metadata["last_parse_cancelled_at"] = utcnow().isoformat()
+            artifact.metadata_json = json_dumps(metadata)
+            artifact.status = "PARSED" if artifact.active_parse_run_id else (
+                "PARSE_FAILED" if error_message else "UPLOADED"
+            )
+        if case:
+            has_parsed_artifact = db.scalar(
+                select(Artifact.id).where(
+                    Artifact.case_id == case_id,
+                    Artifact.active_parse_run_id.is_not(None),
+                ).limit(1)
+            )
+            case.status = "PARSED" if has_parsed_artifact else "UPLOADED"
+        db.commit()
 
 
 def parse_artifact_job(ctx: JobContext, case_id: str, artifact_id: str) -> dict:
+    parse_run_id = new_id("PRUN")
     try:
-        return _parse_artifact_impl(ctx, case_id, artifact_id)
+        return _parse_artifact_impl(ctx, case_id, artifact_id, parse_run_id)
+    except JobCancelledError:
+        _rollback_parse_run(case_id, artifact_id, parse_run_id, None)
+        raise
     except Exception as exc:
-        with SessionLocal() as db:
-            artifact = db.get(Artifact, artifact_id)
-            case = db.get(Case, case_id)
-            if artifact:
-                db.execute(delete(LogEvent).where(LogEvent.artifact_id == artifact_id))
-                metadata = json_loads(artifact.metadata_json, {})
-                metadata.setdefault("parse_error", str(exc)[:2000] or type(exc).__name__)
-                artifact.metadata_json = json_dumps(metadata)
-                artifact.status = "PARSE_FAILED"
-            if case:
-                has_parsed_artifact = db.scalar(
-                    select(Artifact.id).where(
-                        Artifact.case_id == case_id,
-                        Artifact.id != artifact_id,
-                        Artifact.status == "PARSED",
-                    ).limit(1)
-                )
-                case.status = "PARSED" if has_parsed_artifact else "UPLOADED"
-            db.commit()
+        _rollback_parse_run(
+            case_id,
+            artifact_id,
+            parse_run_id,
+            str(exc) or type(exc).__name__,
+        )
         raise

@@ -12,10 +12,13 @@
 - 上传 ZIP/TAR/TGZ、常见单个日志或无后缀纯文本 collectDebuginfo；
 - 安全解压，防止 Zip Slip、符号链接和超限压缩包；
 - collectDebuginfo 文件清单与原始日志浏览；
+- 10 万行以上文本的稀疏行索引、任意行跳转和原始日志关键字搜索；
 - 日志编码识别、时间戳标准化、敏感信息脱敏；
 - 按内容识别华为 GW/AP 采集包中的 `Start run collect command:` 命令段和 `NOTICE 2026-... 03:29:17.483` 运行日志；
 - hostapd、WLAN、DHCP、PPPoE、PON、OMCI、TR-069、内核和进程异常规则；
 - 关键事件提取与时间线；
+- 解析结果按代次原子发布，失败重解析不会覆盖上一次可用结果；
+- 可持久恢复的后台任务，以及安全取消、失败/取消后重试；
 - 确定性规则诊断；
 - HTML、PDF、Word 报告。
 
@@ -53,6 +56,16 @@
 - 候选补丁默认不自动应用；
 - 私有 VS Code 扩展：创建案例、上传日志、关联工作区、选中代码问答、打开报告；
 - 内部 AI Workflow 的 Skill 和 OpenAPI 定义。
+
+### 运维、安全与协作
+
+- `local`、单 API Key、个人令牌 RBAC 三种鉴权模式；
+- ADMIN、ENGINEER、VIEWER 角色，以及 OWNER、EDITOR、VIEWER 案例级权限；
+- 前端用户、一次性令牌、案例成员、运行状态和脱敏审计管理；
+- 模型请求只记录端点来源、模型、用途、字符数、耗时和结果，不记录日志/提示词正文；
+- `/health/live` 进程存活探针、`/health/ready` 数据库/存储就绪探针；
+- SQLite、文件存储和模型密钥的带清单/哈希备份，以及保留旧数据的回滚式恢复；
+- Windows/Ubuntu 后端与前端 CI、Win11 启动冒烟、Docker 构建和 PostgreSQL/Qdrant 集成测试。
 
 ## 2. 工程结构
 
@@ -95,6 +108,39 @@ scripts\runtime_smoke.bat
 ```
 
 它会在系统临时目录创建隔离数据库，使用 18000/15173 端口启动后端和前端，验证迁移、前端 API 代理以及案例创建/读取闭环，然后自动停止进程。成功时输出一行 `"ok":true` 的 JSON。需要切换测试端口时可直接运行 `runtime_smoke.ps1` 并传入参数。
+
+### 启用个人账号和案例权限
+
+本机单人使用保持默认 `AUTH_MODE=local` 即可。多人使用时，先在 `.env` 设置：
+
+```env
+AUTH_MODE=rbac
+AUTH_ALLOW_LEGACY_ADMIN=false
+```
+
+第一次切换前用命令行创建管理员并领取只显示一次的个人令牌：
+
+```bat
+scripts\manage_users.bat create --username admin --display-name "Administrator" --role ADMIN
+```
+
+重启平台，在“安全与审计”页面粘贴令牌。管理员可在前端新建用户、切换角色、签发/撤销令牌；案例所有者可在案例概览添加可编辑或只读成员。服务端只保存令牌 SHA-256 摘要，原始令牌关闭弹窗后无法找回。已有升级案例的 `owner_id` 为空，为兼容旧版本仍按共享案例处理；新建案例会记录创建者为所有者。
+
+VS Code 扩展使用个人令牌时，在命令面板运行 `GW/AP: Set or Clear Access Credential`；令牌会写入 VS Code SecretStorage。旧版 `gwap.apiKey` 明文设置仅保留为兼容回退，迁移后应清空。扩展的日志选择器支持无后缀文件，打包工作区时默认排除 `.env` 和常见私钥文件。
+
+紧急迁移期也可以保留 `.env` 中的 `API_KEY` 并设置 `AUTH_ALLOW_LEGACY_ADMIN=true`，它会作为管理员凭据；个人令牌确认可用后应关闭该兼容入口。
+
+### 备份和恢复
+
+SQLite 本地版建议先关闭平台，再双击：
+
+```bat
+scripts\backup_local.bat
+```
+
+默认在被 Git 忽略的 `backups` 目录生成 ZIP。归档包含一致性 SQLite 快照、文件存储、清单和逐文件 SHA-256；存在模型密钥时也会一起保存，但不会复制 `.env`。归档含内部日志和可能用于解密模型 API Key 的密钥，必须放在受控位置。
+
+恢复时停止所有平台进程，把备份 ZIP 拖到 `scripts\restore_local.bat`，并按提示输入大写 `RESTORE`。恢复前的数据库、存储和模型密钥会保存在 `backend\data\restore_rollbacks`，便于人工回滚。内置工具只支持 SQLite；Docker/PostgreSQL 部署应使用 `pg_dump`/`pg_restore`，Qdrant 使用其快照机制。
 
 ### Linux / macOS
 
@@ -194,7 +240,7 @@ docker compose up --build
 
 访问：http://127.0.0.1:8080
 
-Docker 镜像额外安装 cppcheck 和 clang-tidy。数据库使用 PostgreSQL，文件保存在 Docker Volume 中。
+Docker Desktop 需要支持 Compose 2.24+。镜像额外安装 cppcheck 和 clang-tidy；数据库使用 PostgreSQL，向量服务使用 Qdrant，数据库、向量和文件分别保存在 Docker Volume 中。宿主机端口只绑定 `127.0.0.1`，Qdrant/PostgreSQL 不直接暴露。SQLite 中的 Embedding 向量仍是权威回退，因此 Qdrant 暂时不可用不会阻断基本检索。
 
 ## 5. 配置 Qwen / GLM
 
@@ -216,6 +262,8 @@ Qwen、GLM 或内部模型只要提供兼容的 `/chat/completions` 接口即可
 ```bat
 scripts\install_local_models.bat
 ```
+
+本地 Qwen3 Reranker 的“排序指令”和“推理批量”可在同一页面调整；普通 Win11 CPU 建议先使用默认小批量，确认内存余量后再逐步增大。首次测试会下载模型，也可以把模型名称改为公司电脑上已有的本地目录。
 
 详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。
 
@@ -272,6 +320,17 @@ GET   /api/v1/system/models
 POST  /api/v1/system/models
 POST  /api/v1/system/models/{profile_id}/activate
 POST  /api/v1/system/models/{profile_id}/test
+GET   /api/v1/system/auth-info
+GET   /api/v1/system/me
+GET   /api/v1/system/status
+GET   /api/v1/system/audit
+GET   /api/v1/system/users
+GET   /api/v1/cases/{case_id}/access
+PUT   /api/v1/cases/{case_id}/members/{user_id}
+GET   /api/v1/health/live
+GET   /api/v1/health/ready
+POST  /api/v1/jobs/{job_id}/cancel
+POST  /api/v1/jobs/{job_id}/retry
 POST /api/v1/cases/{case_id}/repositories
 POST /api/v1/repositories/{repository_id}/index
 POST /api/v1/repositories/{repository_id}/static-analysis
@@ -310,7 +369,9 @@ registry.register(VendorGwParser())
 - 解压总大小、文件数、单文件大小和目录深度限制；
 - 路径穿越防护；
 - 忽略符号链接和非普通文件；
-- API Key 可选鉴权；
+- 本机、共享 API Key、个人令牌 RBAC 三种鉴权模式；
+- 角色和案例成员隔离，令牌仅保存哈希，最后一个管理员受防误锁保护；
+- HTTP 变更、敏感读取、用户/令牌操作和模型外发的脱敏审计；
 - 原始文件与报告哈希；
 - 静态工具白名单和执行超时；
 - IP、MAC、SN、密码和 Token 基础脱敏；
@@ -322,11 +383,11 @@ registry.register(VendorGwParser())
 
 生产部署仍需补充：
 
-- 公司 SSO/OIDC；
-- 项目级 RBAC 和文档 ACL；
+- 公司 SSO/OIDC（当前为本地账号/令牌）；
+- 知识文档细粒度 ACL（当前知识修改仅管理员可用）；
 - 对象存储和数据库加密；
 - 杀毒/恶意文件检测；
-- 完整审计平台；
+- 集中式不可篡改审计归档和告警（当前审计保存在应用数据库）；
 - Kubernetes 资源隔离和 NetworkPolicy；
 - 真实厂商日志解析器与回归数据集。
 
@@ -343,9 +404,13 @@ npm run build
 cd ../vscode-extension
 npm ci
 npm run compile
+
+# Windows 隔离启动闭环
+cd ..
+scripts\runtime_smoke.bat
 ```
 
-后端启动时会自动执行 Alembic 数据库迁移。升级前仍建议备份 `backend\data`；不要手工修改 `alembic_version` 表。
+GitHub Actions 会在 Windows/Ubuntu 构建前后端，在 Windows 执行隔离启动闭环，并在 Linux 服务容器中验证 PostgreSQL 迁移和 Qdrant 写入/检索。后端启动时会自动执行 Alembic 数据库迁移；升级前请运行备份工具，不要手工修改 `alembic_version` 表。
 
 ## 11. 已知限制
 
