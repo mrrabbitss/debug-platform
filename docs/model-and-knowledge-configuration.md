@@ -100,21 +100,24 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 
 ## 5. 本地 BGE Embedding
 
-默认启动不会安装 PyTorch 或下载大型模型。先运行：
+默认启动不会安装 PyTorch 或下载大型模型。先启动过一次项目以建立 `.venv`，关闭服务窗口，然后运行：
 
 ```bat
 scripts\install_local_models.bat
 ```
 
-然后在“系统设置 → Embedding 模型”中测试并激活“本地 BGE 中文向量”。默认模型为：
+该脚本使用 `hf-mirror.com` 下载并验证：
 
 ```text
-BAAI/bge-small-zh-v1.5
+BAAI/bge-base-zh-v1.5
+→ models/embedding/bge-base-zh-v1.5
 ```
 
-也可以填写其他 Sentence Transformers 兼容的 BGE 模型，或者公司电脑中已经下载好的模型目录。激活后必须执行“重建向量索引”。模型第一次通过名称加载时可能访问 Hugging Face；不能访问互联网的电脑应提前把模型目录复制到内网电脑，然后在前端填写本地绝对路径。
+然后在“系统设置 → Embedding 模型”中测试并激活“本地 BGE Base 中文向量（项目 models 目录）”。激活后必须执行“重建向量索引”。项目会把仓库相对路径稳定地解析到项目根目录，不受从 BAT、终端或 IDE 启动的当前目录影响。
 
-BGE-M3 等 BGE 模型可通过 Sentence Transformers 加载，官方模型卡见：[BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3)。
+系统只会给检索问题添加 `为这个句子生成表示以用于检索相关文章：`，知识正文不会添加该指令；向量默认归一化。查询指令和批量大小可以在前端修改。也可以填写其他 Sentence Transformers 兼容的 BGE 模型或本地绝对路径。
+
+BGE v1.5 的 Sentence Transformers、查询指令及归一化用法见官方模型卡：[BAAI/bge-base-zh-v1.5](https://huggingface.co/BAAI/bge-base-zh-v1.5)。
 
 ## 6. Embedding API
 
@@ -130,15 +133,16 @@ https://your-approved-endpoint.example/v1
 
 ## 7. 本地 Qwen3 Reranker
 
-运行本地模型安装脚本后，可以测试并激活：
+运行本地模型安装脚本后，可以测试并激活“本地 Qwen3 Reranker 0.6B（项目 models 目录）”：
 
 ```text
 Qwen/Qwen3-Reranker-0.6B
+→ models/reranker/Qwen3-Reranker-0.6B
 ```
 
-该适配器使用 Sentence Transformers `CrossEncoder`。CPU 可以运行，但速度和内存占用取决于模型大小；公司电脑资源有限时优先使用 0.6B 版本或批准的 API。也可以填写已经下载好的本地模型目录。
+该适配器使用 Sentence Transformers `CrossEncoder` 和自定义网络诊断排序指令。安装器会真实加载模型并通过项目适配器对两个示例文档执行排序，只有返回有效分数才会报告成功。CPU 可以运行，但速度和内存占用取决于模型大小；公司电脑资源有限时保持批量大小 `1`–`4`，或使用批准的 API。
 
-Qwen 官方模型卡列出了 0.6B、4B、8B Reranker，并提供 CrossEncoder 用法：[Qwen3-Reranker](https://huggingface.co/Qwen/Qwen3-Reranker-8B)。
+Qwen 官方模型卡列出了 0.6B、4B、8B Reranker，并提供 CrossEncoder 和自定义指令用法：[Qwen3-Reranker-0.6B](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)。
 
 ## 8. Qwen Reranker API
 

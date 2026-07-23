@@ -38,6 +38,7 @@ dev = [
   "ruff>=0.12,<1.0",
 ]
 local-models = [
+  "huggingface-hub>=0.34,<2.0",
   "sentence-transformers>=5.4,<6.0",
   "transformers>=4.51,<6.0",
 ]

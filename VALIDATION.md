@@ -7,7 +7,7 @@ Last validated: 2026-07-23 on Windows 11 with Python 3.14 and Node.js 24.
 - Backend dependency consistency (`pip check`): passed;
 - Ruff static checks across backend, tests and Python utility scripts: passed;
 - Python compileall: passed;
-- Pytest: 80 passed, 1 external-service test skipped locally;
+- Pytest: 87 passed, 1 external-service test skipped locally;
 - Vue TypeScript check and production Vite build: passed;
 - VS Code extension TypeScript compile: passed;
 - Python, frontend and extension dependency audit: 0 known vulnerabilities after applying current fixes;
@@ -38,6 +38,7 @@ The reusable command is `scripts\runtime_smoke.bat`. It uses temporary storage a
 - Fresh/legacy migrations, SQLite foreign keys, cascade deletion and managed storage cleanup;
 - Model endpoint SSRF/allowlist checks, evidence-ID validation and deterministic fallback;
 - Chat/Embedding/Reranker profile switching, encrypted key redaction and content-free model-egress audit;
+- Project-relative BGE/Qwen model paths, BGE query instruction handling and local-model installer layout;
 - Layered knowledge taxonomy, document editing and vector reindex behavior;
 - Hashed personal tokens, role enforcement, case ownership/membership and admin safety checks;
 - VS Code SecretStorage credentials, extensionless-log selection and secret-file exclusions for workspace archives;
@@ -50,3 +51,5 @@ The reusable command is `scripts\runtime_smoke.bat`. It uses temporary storage a
 Docker is not installed on this validation computer, so PostgreSQL/Qdrant containers and Docker image builds were not executed locally. `.github/workflows/ci.yml` contains a dedicated service-container test that starts PostgreSQL and Qdrant, runs all migrations, starts the FastAPI application, performs a case API round trip and performs a Qdrant vector write/query/delete round trip. The same workflow builds both Docker images.
 
 External Qwen/GLM/BGE endpoints were not called because approved credentials were not supplied. Their adapters and validation paths use mocked responses in the local suite; use the model-profile “测试” action with an approved company endpoint before production use.
+
+The optional `backend[local-models]` dependency set resolved successfully on Python 3.14, including current Windows wheels for PyTorch, Sentence Transformers, Transformers and Hugging Face Hub. This validation computer could not connect to `hf-mirror.com`, so the multi-gigabyte model snapshots were not downloaded here. The installer directory creation, incomplete-download rejection, retry/verification logic and application-adapter probes are covered by automated tests; running `scripts\install_local_models.bat` in the target company network performs the final real download and load test.

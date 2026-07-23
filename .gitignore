@@ -6,6 +6,7 @@ __pycache__/
 *.tsbuildinfo
 backend/data/
 backups/
+/models/
 frontend/node_modules/
 frontend/dist/
 vscode-extension/node_modules/

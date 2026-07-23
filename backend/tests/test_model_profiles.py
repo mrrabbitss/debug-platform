@@ -1,3 +1,4 @@
+import json
 import ipaddress
 from pathlib import Path
 from types import SimpleNamespace
@@ -74,6 +75,64 @@ def test_seeded_profiles_can_switch_and_hashing_embeddings_are_persisted(tmp_pat
     assert vector is not None
     assert vector.dimension == 384
     db.close()
+
+
+def test_seeded_project_model_profiles_match_installer_layout(tmp_path: Path):
+    db = create_test_session(tmp_path)
+    seed_model_profiles(db)
+
+    embedding = db.get(ModelProfile, "MODEL-embedding-local-bge-base-project")
+    reranker = db.get(ModelProfile, "MODEL-reranker-local-qwen-project")
+    assert embedding is not None
+    assert embedding.model_name == "models/embedding/bge-base-zh-v1.5"
+    assert json.loads(embedding.config_json)["query_instruction"].startswith("为这个句子")
+    assert reranker is not None
+    assert reranker.model_name == "models/reranker/Qwen3-Reranker-0.6B"
+    assert json.loads(reranker.config_json)["batch_size"] == 4
+    db.close()
+
+
+def test_local_embedding_resolves_project_path_and_prefixes_only_queries(tmp_path: Path, monkeypatch):
+    model_dir = tmp_path / "models" / "embedding" / "bge-base-zh-v1.5"
+    model_dir.mkdir(parents=True)
+    captured: dict[str, object] = {"calls": []}
+
+    class FakeSentenceTransformer:
+        def encode(self, texts, **kwargs):
+            captured["calls"].append((list(texts), kwargs))
+            return [[1.0, 0.0] for _ in texts]
+
+    def fake_loader(model_name, device):
+        captured["model_name"] = model_name
+        captured["device"] = device
+        return FakeSentenceTransformer()
+
+    monkeypatch.setattr(retrieval_models, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(retrieval_models, "_load_sentence_transformer", fake_loader)
+    profile = ModelProfile(
+        id="MODEL-local-path",
+        name="Project local BGE",
+        task_type="embedding",
+        mode="local",
+        provider="sentence_transformers",
+        model_name="models/embedding/bge-base-zh-v1.5",
+        config_json=json.dumps({
+            "device": "cpu",
+            "batch_size": 999,
+            "normalize": True,
+            "query_instruction": "检索：",
+        }),
+    )
+
+    retrieval_models.embed_texts(profile, ["知识正文"], purpose="knowledge_index")
+    retrieval_models.embed_texts(profile, ["AP 无法上线"], purpose="case_retrieval_query")
+
+    calls = captured["calls"]
+    assert captured["model_name"] == str(model_dir.resolve())
+    assert captured["device"] == "cpu"
+    assert calls[0][0] == ["知识正文"]
+    assert calls[1][0] == ["检索：AP 无法上线"]
+    assert calls[1][1]["batch_size"] == 100
 
 
 def test_api_keys_are_encrypted_and_never_returned(monkeypatch):

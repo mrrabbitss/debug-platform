@@ -4,6 +4,7 @@ import re
 import uuid
 from collections.abc import Callable, Sequence
 from functools import lru_cache
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -13,7 +14,7 @@ from sklearn.feature_extraction.text import HashingVectorizer
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import PROJECT_ROOT, get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id
 from app.models import KnowledgeChunk, KnowledgeEmbedding, ModelProfile
@@ -37,6 +38,18 @@ _hashing_vectorizer = HashingVectorizer(
 
 class RetrievalModelError(RuntimeError):
     pass
+
+
+def resolve_local_model_reference(model_name: str) -> str:
+    """Resolve repository-relative model directories without changing Hub IDs."""
+    value = model_name.strip()
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    candidate = (PROJECT_ROOT / path).resolve()
+    if candidate.exists() or value.replace("\\", "/").startswith("models/"):
+        return str(candidate)
+    return value
 
 
 @lru_cache
@@ -177,17 +190,23 @@ def embed_texts(
         return _hashing_vectorizer.transform(texts).toarray().astype(float).tolist()
     if profile.provider == "sentence_transformers":
         device = str(config.get("device") or "cpu")
-        model = _load_sentence_transformer(profile.model_name, device)
+        model_name = resolve_local_model_reference(profile.model_name)
+        model = _load_sentence_transformer(model_name, device)
+        model_inputs = texts
+        query_instruction = str(config.get("query_instruction") or "").strip()
+        if query_instruction and purpose.endswith("_query"):
+            model_inputs = [f"{query_instruction}{text}" for text in texts]
         try:
             vectors = model.encode(
-                texts,
-                batch_size=int(config.get("batch_size") or 16),
+                model_inputs,
+                batch_size=max(1, min(int(config.get("batch_size") or 16), 100)),
                 normalize_embeddings=bool(config.get("normalize", True)),
                 show_progress_bar=False,
             )
         except Exception as exc:
             raise RetrievalModelError(f"Local embedding failed: {exc}") from exc
-        return [_normalize(vector) for vector in vectors.tolist()]
+        raw_vectors = vectors.tolist() if hasattr(vectors, "tolist") else vectors
+        return [_normalize(vector) for vector in raw_vectors]
     if profile.provider == "openai_compatible":
         started = perf_counter()
         try:
@@ -372,7 +391,8 @@ def rerank_documents(
     if profile.provider == "sentence_transformers":
         device = str(config.get("device") or "cpu")
         instruction = str(config.get("instruction") or "").strip()[:2000]
-        model = _load_cross_encoder(profile.model_name, device, instruction)
+        model_name = resolve_local_model_reference(profile.model_name)
+        model = _load_cross_encoder(model_name, device, instruction)
         try:
             scores = model.predict(
                 [(query, document) for document in documents],

@@ -260,6 +260,22 @@ def seed_model_profiles(db: Session) -> None:
             is_active=False,
         ),
         ModelProfile(
+            id="MODEL-embedding-local-bge-base-project",
+            name="本地 BGE Base 中文向量（项目 models 目录）",
+            task_type="embedding",
+            mode="local",
+            provider="sentence_transformers",
+            model_name="models/embedding/bge-base-zh-v1.5",
+            config_json=json_dumps({
+                "device": "cpu",
+                "batch_size": 16,
+                "dimension": 768,
+                "normalize": True,
+                "query_instruction": "为这个句子生成表示以用于检索相关文章：",
+            }),
+            is_active=False,
+        ),
+        ModelProfile(
             id="MODEL-reranker-disabled",
             name="不使用 Reranker",
             task_type="reranker",
@@ -281,6 +297,24 @@ def seed_model_profiles(db: Session) -> None:
                 "batch_size": 4,
                 "candidate_count": 30,
                 "instruction": "Given a network troubleshooting query, retrieve passages that help diagnose and solve it.",
+            }),
+            is_active=False,
+        ),
+        ModelProfile(
+            id="MODEL-reranker-local-qwen-project",
+            name="本地 Qwen3 Reranker 0.6B（项目 models 目录）",
+            task_type="reranker",
+            mode="local",
+            provider="sentence_transformers",
+            model_name="models/reranker/Qwen3-Reranker-0.6B",
+            config_json=json_dumps({
+                "device": "cpu",
+                "batch_size": 4,
+                "candidate_count": 30,
+                "instruction": (
+                    "Given a network troubleshooting query, retrieve passages "
+                    "that help diagnose and solve it."
+                ),
             }),
             is_active=False,
         ),

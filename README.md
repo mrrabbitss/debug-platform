@@ -257,13 +257,36 @@ Qwen、GLM 或内部模型只要提供兼容的 `/chat/completions` 接口即可
 
 也可以直接在“系统设置 → 模型网关”中添加多套诊断模型、Embedding 和 Reranker 配置并切换。前端提交的模型 API Key 由后端加密保存，不会通过查询接口回显。`.env` 的 `LLM_*` 配置保留为首次升级和无人值守部署的兼容入口。
 
-本地 BGE Embedding 和 Qwen3 Reranker 属于可选大型依赖，先运行：
+本地 BGE Embedding 和 Qwen3 Reranker 属于可选大型依赖。先启动过一次项目以建立 `.venv`，关闭服务窗口，然后运行：
 
 ```bat
 scripts\install_local_models.bat
 ```
 
-本地 Qwen3 Reranker 的“排序指令”和“推理批量”可在同一页面调整；普通 Win11 CPU 建议先使用默认小批量，确认内存余量后再逐步增大。首次测试会下载模型，也可以把模型名称改为公司电脑上已有的本地目录。
+安装器默认使用 `https://hf-mirror.com`，支持断点续传，并完成 Python 运行库安装、文件完整性检查以及项目适配器真实加载测试。它会创建以下目录：
+
+```text
+models/
+├─ inference/                         # 预留给后续本地诊断推理模型
+├─ embedding/bge-base-zh-v1.5/       # BAAI/bge-base-zh-v1.5
+└─ reranker/Qwen3-Reranker-0.6B/     # Qwen/Qwen3-Reranker-0.6B
+```
+
+`models` 已被 Git 忽略，模型权重不会被提交或上传。建议至少预留 6 GiB 磁盘空间；CPU 可以运行，但首次加载 Qwen Reranker 可能需要几分钟。下载中断后重新运行同一个 BAT 文件即可复用已经完成的文件。
+
+安装完成后重新运行 `scripts\start_local.bat`，打开“系统设置”：
+
+1. 在“Embedding 模型”中测试并激活带“项目 models 目录”的 BGE Base 配置；
+2. 点击“重建向量索引”；
+3. 在“Reranker 模型”中测试并激活带“项目 models 目录”的 Qwen3 配置。
+
+只检查已下载文件和适配器、不重新下载：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -VerifyOnly
+```
+
+如果公司使用其他 Hugging Face 镜像，可通过 `-Mirror` 指定；如果 Python 包已经由管理员统一安装，可增加 `-SkipRuntimeInstall`。本地 Qwen3 Reranker 的“排序指令”和“推理批量”、BGE 的“检索查询指令”和批量大小均可在系统设置中调整。普通 Win11 CPU 建议先保持默认小批量。
 
 详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。
 

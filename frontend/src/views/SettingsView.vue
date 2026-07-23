@@ -13,6 +13,10 @@ const saving = ref(false)
 const testingId = ref('')
 const reindexing = ref(false)
 const apiKey = ref(localStorage.getItem('gw_ap_api_key') || '')
+const defaultEmbeddingPath = 'models/embedding/bge-base-zh-v1.5'
+const defaultRerankerPath = 'models/reranker/Qwen3-Reranker-0.6B'
+const defaultEmbeddingInstruction = '为这个句子生成表示以用于检索相关文章：'
+const defaultRerankerInstruction = 'Given a network troubleshooting query, retrieve passages that help diagnose and solve it.'
 
 const form = reactive({
   name: '',
@@ -31,7 +35,8 @@ const form = reactive({
   batch_size: 16,
   device: 'cpu',
   candidate_count: 30,
-  instruction: 'Given a network troubleshooting query, retrieve passages that help diagnose and solve it.'
+  query_instruction: defaultEmbeddingInstruction,
+  instruction: defaultRerankerInstruction
 })
 
 const taskProfiles = computed(() => profiles.value.filter(item => item.task_type === activeTask.value))
@@ -84,10 +89,10 @@ function updateProvider() {
   if (form.provider === 'mock') form.model_name = 'rule-engine'
   if (form.provider === 'disabled') form.model_name = 'disabled'
   if (form.provider === 'sentence_transformers' && form.task_type === 'embedding' && !form.model_name) {
-    form.model_name = 'BAAI/bge-small-zh-v1.5'
+    form.model_name = defaultEmbeddingPath
   }
   if (form.provider === 'sentence_transformers' && form.task_type === 'reranker' && !form.model_name) {
-    form.model_name = 'Qwen/Qwen3-Reranker-0.6B'
+    form.model_name = defaultRerankerPath
   }
   if (form.provider === 'qwen_rerank_api' && !form.model_name) form.model_name = 'qwen3-rerank'
 }
@@ -109,7 +114,13 @@ function resetForm(task: ModelTask) {
   form.batch_size = 16
   form.device = 'cpu'
   form.candidate_count = 30
-  form.instruction = 'Given a network troubleshooting query, retrieve passages that help diagnose and solve it.'
+  form.query_instruction = defaultEmbeddingInstruction
+  form.instruction = defaultRerankerInstruction
+  updateProvider()
+}
+
+function changeTask() {
+  form.model_name = ''
   updateProvider()
 }
 
@@ -136,7 +147,8 @@ function openEdit(profile: ModelProfile) {
   form.batch_size = Number(profile.config.batch_size ?? 16)
   form.device = String(profile.config.device ?? 'cpu')
   form.candidate_count = Number(profile.config.candidate_count ?? 30)
-  form.instruction = String(profile.config.instruction ?? form.instruction)
+  form.query_instruction = String(profile.config.query_instruction ?? defaultEmbeddingInstruction)
+  form.instruction = String(profile.config.instruction ?? defaultRerankerInstruction)
   dialogVisible.value = true
 }
 
@@ -150,6 +162,7 @@ function modelConfig() {
       batch_size: form.batch_size,
       device: form.device,
       normalize: true,
+      query_instruction: form.mode === 'local' ? form.query_instruction.trim() : undefined,
       timeout_seconds: form.timeout_seconds,
       max_retries: form.max_retries
     }
@@ -328,7 +341,7 @@ onMounted(load)
 
     <el-card style="margin-top:16px">
       <template #header>本地模型说明</template>
-      <p class="muted">本地 BGE Embedding 与 Qwen3 Reranker 使用 Sentence Transformers，默认启动不会下载大型模型。先运行 <span class="mono">scripts\install_local_models.bat</span> 安装运行库；模型名可以填写 Hugging Face 名称，也可以填写公司电脑上的本地模型目录。</p>
+      <p class="muted">本地 BGE Embedding 与 Qwen3 Reranker 使用 Sentence Transformers。运行 <span class="mono">scripts\install_local_models.bat</span> 后，模型会下载到项目的 <span class="mono">models\embedding</span> 与 <span class="mono">models\reranker</span>，并可直接选择带“项目 models 目录”的预置配置。</p>
       <p class="muted">当前知识存储：{{ retrieval.knowledge_storage || '加载中' }}；知识图谱：{{ retrieval.knowledge_graph ? '已启用' : '尚未构建' }}。</p>
     </el-card>
 
@@ -340,7 +353,7 @@ onMounted(load)
 
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="680px" destroy-on-close>
       <el-form label-width="130px">
-        <el-form-item label="用途"><el-select v-model="form.task_type" :disabled="!!editingId" @change="updateProvider"><el-option v-for="(label, value) in taskLabels" :key="value" :label="label" :value="value" /></el-select></el-form-item>
+        <el-form-item label="用途"><el-select v-model="form.task_type" :disabled="!!editingId" @change="changeTask"><el-option v-for="(label, value) in taskLabels" :key="value" :label="label" :value="value" /></el-select></el-form-item>
         <el-form-item label="配置名称"><el-input v-model="form.name" placeholder="例如：公司 Qwen Plus" /></el-form-item>
         <el-form-item label="运行方式"><el-radio-group v-model="form.mode" @change="updateProvider"><el-radio-button v-for="mode in allowedModes(form.task_type)" :key="mode" :value="mode">{{ { builtin: '内置', local: '本地', api: 'API' }[mode] }}</el-radio-button></el-radio-group></el-form-item>
         <el-form-item label="适配器"><el-input :model-value="providerLabels[form.provider] || form.provider" disabled /></el-form-item>
@@ -358,6 +371,7 @@ onMounted(load)
           <el-form-item v-if="form.mode === 'api'" label="向量维度"><el-input-number v-model="form.dimension" :min="1" placeholder="留空使用模型默认值" /></el-form-item>
           <el-form-item v-if="form.mode === 'local'" label="运行设备"><el-select v-model="form.device"><el-option label="CPU" value="cpu"/><el-option label="CUDA" value="cuda"/></el-select></el-form-item>
           <el-form-item label="批量大小"><el-input-number v-model="form.batch_size" :min="1" :max="100" /></el-form-item>
+          <el-form-item v-if="form.mode === 'local'" label="检索查询指令"><el-input v-model="form.query_instruction" type="textarea" :rows="2" /></el-form-item>
         </template>
         <template v-if="form.task_type === 'reranker'">
           <el-form-item v-if="form.mode === 'local'" label="运行设备"><el-select v-model="form.device"><el-option label="CPU" value="cpu"/><el-option label="CUDA" value="cuda"/></el-select></el-form-item>
