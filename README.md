@@ -1,5 +1,8 @@
 # GW/AP Intelligent Debug Platform
 
+项目所有已交付能力、在研需求、依赖关系和冲突约束统一维护在
+[CAPABILITIES.md](CAPABILITIES.md)。新增或调整功能时必须同步更新该总账。
+
 面向 GW、AP、全光网关等网络设备的 collectDebuginfo 日志解析、证据关联、RAG 检索、LLM 综合诊断、代码仓库关联和报告生成平台。
 
 本仓库是可运行的完整工程，不依赖真实企业数据。默认使用规则引擎和 Mock LLM，因此没有模型密钥也能完成演示；配置公司批准的 Qwen、GLM 或其他 OpenAI-Compatible API 后，会启用受证据约束的 LLM 综合分析与候选补丁生成。
@@ -32,16 +35,24 @@
 - 可切换的内置 Hashing、本地 BGE、OpenAI-Compatible Embedding；
 - 可切换的本地 Qwen3 Reranker 和 Qwen Rerank API；
 - 设备类型、模块和可信等级元数据；
+- 结构化 Markdown 故障案例（错误形式、日志分析、错误定位、解决方案和验证）；
+- 错误分析 Skill 管理，以及从案例/Skill 确定性提炼可复用分析方法；
 - 证据 ID、支持证据、反证、不确定性和缺失信息；
 - Qwen、GLM 和内部模型的统一 OpenAI-Compatible 适配器；
 - 前端保存多套模型配置、连接测试和运行时切换；
 - Mock 降级、模型连接检测、超时和重试；
 - 基于当前案例的多轮问答。
 
-### P2：代码仓库关联
+### P2：代码仓库、图谱与认知检索
 
-- 上传 C/C++ 项目压缩包；
-- 提取函数、宏、结构体、签名、文件路径和调用函数；
+- 上传代码归档，或上传保留完整历史的 Git Bundle；
+- 提取 C/C++、Python、Java、JavaScript/TypeScript、Go 符号；
+- 建模 `CALLS`、`REFERENCES`、`INHERITS`、`IMPLEMENTS` 代码关系；
+- 建立 Commit、父提交、变更文件和当前代码符号的追溯图谱；
+- 对未变的图谱内容使用稳定 evidence ID，重建索引后仍可追溯历史引用；
+- 情景、程序、失败三类任务记忆，支持去重、案例隔离和复用计数；
+- Agentic Search 动态编排知识、记忆、代码、Commit、BM25、Dense 和 Reranker；
+- 返回多阶段执行计划、候选统计和 query → Commit → 文件 → 代码解释路径；
 - 日志模块与代码符号关联；
 - 代码符号搜索；
 - 在综合诊断报告中列出疑似相关文件和函数；
@@ -318,7 +329,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models
 
 如果公司使用其他 Hugging Face 镜像，可通过 `-Mirror` 指定；如果 Python 包已经由管理员统一安装，可增加 `-SkipRuntimeInstall`。检测报告只记录软件版本、端点、离线开关、代理是否存在以及下载错误，不记录代理地址、API Key、日志或数据库内容。本地 Qwen3 Reranker 的“排序指令”和“推理批量”、BGE 的“检索查询指令”和批量大小均可在系统设置中调整。普通 Win11 CPU 建议先保持默认小批量。
 
-详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
+详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。故障案例、代码/Commit 图谱、三类记忆和 Agentic Search 见 [认知检索与图谱使用说明](docs/cognitive-retrieval.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
 
 企业环境中必须确认：
 
@@ -345,7 +356,8 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
   → 解析器注册表选择日志解析器
   → 标准化 LogEvent
   → 事件时间线和规则诊断
-  → 检索协议/产品/历史案例/代码符号
+  → Agentic Search 编排知识/记忆/代码图谱/Commit 图谱
+  → BM25 + RRF + Dense Embedding + 可选 Reranker 统一排序
   → 受控 LLM 综合分析与 evidence_id 校验
   → 结构化诊断 JSON
   → HTML / PDF / Word 报告
@@ -354,6 +366,16 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 原始日志、结构化事实、知识库证据和 LLM 推测在数据库中分开保存。LLM 不能直接修改原始日志或代码；模型返回的结构、置信度和证据编号会由后端校验，引用不存在证据时自动保留确定性规则结果。每次诊断会保存模型配置快照（不含 API Key），后续切换模型不会改变历史诊断的审计信息。
 
 后台解析、索引和诊断任务的状态保存在数据库中。后端重启后会恢复未完成任务；同一种输入的活动任务会去重，失败任务会恢复案例/制品状态并保留可读错误信息。
+
+需要 Commit 意图追溯时，普通 ZIP/TAR 不够；请在待分析源码仓根目录生成并上传
+Git Bundle：
+
+```bat
+git bundle create repository.bundle --all
+```
+
+上传后点击“建立索引”。普通归档仍可建立代码图谱，但 Commit 图谱会明确显示
+`UNAVAILABLE`，不会伪造历史。
 
 ## 7. API 概览
 
@@ -367,6 +389,8 @@ POST /api/v1/cases/{case_id}/analyses
 POST /api/v1/cases/{case_id}/chat
 POST /api/v1/knowledge/upload
 PATCH /api/v1/knowledge/{document_id}
+GET   /api/v1/knowledge/templates/fault-case
+POST  /api/v1/knowledge/{document_id}/extract-method
 GET   /api/v1/knowledge/categories
 POST  /api/v1/knowledge/reindex
 GET   /api/v1/system/models
@@ -386,6 +410,11 @@ POST  /api/v1/jobs/{job_id}/cancel
 POST  /api/v1/jobs/{job_id}/retry
 POST /api/v1/cases/{case_id}/repositories
 POST /api/v1/repositories/{repository_id}/index
+GET  /api/v1/repositories/{repository_id}/graph
+GET  /api/v1/repositories/{repository_id}/graph/search
+GET  /api/v1/repositories/{repository_id}/commit-graph
+POST /api/v1/cases/{case_id}/agentic-search
+GET  /api/v1/cases/{case_id}/memories
 POST /api/v1/repositories/{repository_id}/static-analysis
 POST /api/v1/cases/{case_id}/patch-suggestions
 POST /api/v1/cases/{case_id}/analyses/{analysis_id}/reports/{format}
@@ -469,7 +498,7 @@ GitHub Actions 会在 Windows/Ubuntu 构建前后端，在 Windows 执行隔离�
 
 - 内置解析器是面向常见 GW/AP 语义的通用实现，真实产品日志格式仍需根据公司内部样例扩展；
 - 本地检索使用 BM25/精确词项、当前 Embedding 向量和可选 Reranker；SQLite 保存向量回退，配置 Qdrant 后会同步写入按模型隔离的 collection；
-- 当前知识层次是分类树和文档型故障树，尚未构建实体—关系知识图谱；
+- 当前已具备代码/Commit 工程图谱；知识层次仍是分类树和文档型故障树，尚未构建设备—事件—根因—方案的领域知识图谱；
 - 本地后台任务适合当前单机/单后端进程；若扩展为多实例部署，应换用带租约的 Redis/Celery 或专用队列；
 - 静态分析是否可运行取决于后端环境是否安装工具和项目是否具备编译数据库；
 - 报告中的根因候选用于辅助人工排查，不替代工程师确认；

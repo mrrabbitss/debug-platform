@@ -184,6 +184,29 @@ class KnowledgeDocumentCategory(Base):
     )
 
 
+class KnowledgeDerivation(Base):
+    __tablename__ = "knowledge_derivations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_document_id",
+            "derivation_type",
+            name="uq_knowledge_derivation_source_type",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    source_document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True
+    )
+    derived_document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True
+    )
+    derivation_type: Mapped[str] = mapped_column(String(64), index=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class ModelProfile(Base):
     __tablename__ = "model_profiles"
     __table_args__ = (
@@ -239,6 +262,10 @@ class Repository(Base):
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     commit_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="UPLOADED")
+    graph_status: Mapped[str] = mapped_column(String(32), default="NOT_INDEXED", index=True)
+    commit_graph_status: Mapped[str] = mapped_column(String(32), default="NOT_INDEXED", index=True)
+    index_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -257,6 +284,98 @@ class CodeSymbol(Base):
     module: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     calls_json: Mapped[str] = mapped_column(Text, default="[]")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class CodeRelation(Base):
+    __tablename__ = "code_relations"
+    __table_args__ = (
+        Index("ix_code_relations_repo_type", "repository_id", "relation_type"),
+        Index("ix_code_relations_source_target", "source_symbol_id", "target_symbol_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    source_symbol_id: Mapped[str] = mapped_column(
+        ForeignKey("code_symbols.id", ondelete="CASCADE"), index=True
+    )
+    target_symbol_id: Mapped[str | None] = mapped_column(
+        ForeignKey("code_symbols.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    target_name: Mapped[str] = mapped_column(String(512))
+    relation_type: Mapped[str] = mapped_column(String(32), index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    evidence_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CommitRecord(Base):
+    __tablename__ = "commit_records"
+    __table_args__ = (
+        UniqueConstraint("repository_id", "commit_hash", name="uq_commit_repository_hash"),
+        Index("ix_commit_records_repo_time", "repository_id", "authored_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    commit_hash: Mapped[str] = mapped_column(String(64), index=True)
+    parent_hashes_json: Mapped[str] = mapped_column(Text, default="[]")
+    author_name: Mapped[str] = mapped_column(String(255), default="")
+    authored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    subject: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CommitFileChange(Base):
+    __tablename__ = "commit_file_changes"
+    __table_args__ = (
+        Index("ix_commit_file_changes_repo_path", "repository_id", "file_path"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    commit_id: Mapped[str] = mapped_column(
+        ForeignKey("commit_records.id", ondelete="CASCADE"), index=True
+    )
+    change_type: Mapped[str] = mapped_column(String(16), index=True)
+    file_path: Mapped[str] = mapped_column(Text)
+    old_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class AgentMemory(Base):
+    __tablename__ = "agent_memories"
+    __table_args__ = (
+        Index("ix_agent_memories_kind_outcome", "memory_type", "outcome"),
+        Index("ix_agent_memories_case_kind", "case_id", "memory_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    case_id: Mapped[str | None] = mapped_column(
+        ForeignKey("cases.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    memory_type: Mapped[str] = mapped_column(String(32), index=True)
+    source_kind: Mapped[str] = mapped_column(String(64), index=True)
+    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    content: Mapped[str] = mapped_column(Text)
+    context_json: Mapped[str] = mapped_column(Text, default="{}")
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    outcome: Mapped[str] = mapped_column(String(32), default="UNKNOWN", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
+    reuse_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class AnalysisRun(Base):

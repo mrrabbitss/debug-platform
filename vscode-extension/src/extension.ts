@@ -1,7 +1,6 @@
 import * as vscode from 'vscode'
 import axios from 'axios'
 import FormData from 'form-data'
-import archiver from 'archiver'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -44,10 +43,11 @@ async function uploadFile(
 }
 
 async function zipWorkspace(root: string): Promise<string> {
+  const { ZipArchive } = await import('archiver')
   const target = path.join(os.tmpdir(), `gwap-workspace-${Date.now()}.zip`)
   await new Promise<void>((resolve, reject) => {
     const output = fs.createWriteStream(target)
-    const archive = archiver('zip', { zlib: { level: 6 } })
+    const archive = new ZipArchive({ zlib: { level: 6 } })
     output.on('close', resolve)
     archive.on('error', reject)
     archive.pipe(output)

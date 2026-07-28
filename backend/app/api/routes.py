@@ -3,38 +3,59 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import (
-    AccessToken, AnalysisRun, Artifact, AuditEvent, Case, CaseMember, CodeSymbol, Job,
-    KnowledgeCategory, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentCategory,
+    AccessToken, AgentMemory, AnalysisRun, Artifact, AuditEvent, Case, CaseMember,
+    CodeRelation, CodeSymbol, CommitRecord, Job, KnowledgeCategory, KnowledgeChunk,
+    KnowledgeDerivation, KnowledgeDocument, KnowledgeDocumentCategory,
     KnowledgeEmbedding, LogEvent, ModelProfile, Repository, Report, UserAccount,
 )
 from app.schemas import (
-    AccessTokenCreate, AnalysisOut, ArtifactOut, CaseCreate, CaseMemberUpdate, CaseOut,
-    CaseUpdate, ChatRequest, ChatResponse, JobOut, KnowledgeCategoryCreate,
+    AccessTokenCreate, AgenticSearchRequest, AnalysisOut, ArtifactOut, CaseCreate,
+    CaseMemberUpdate, CaseOut, CaseUpdate, ChatRequest, ChatResponse, JobOut, KnowledgeCategoryCreate,
     KnowledgeCategoryOut, KnowledgeCategoryUpdate, KnowledgeCreate, KnowledgeDetailOut,
     KnowledgeOut, KnowledgeUpdate, ModelProfileCreate, ModelProfileOut, ModelProfileUpdate,
     PatchRequest, StaticAnalysisRequest, UserCreate, UserUpdate,
 )
 from app.services.archive import UnsafeArchiveError, extract_archive
 from app.services.access_control import accessible_case_clause, case_permission, issue_access_token
+from app.services.agentic_search import agentic_search
 from app.services.audit import record_audit_event
+from app.services.code_graph import code_graph_snapshot, search_code_graph
 from app.services.code_index import index_repository_job
+from app.services.commit_graph import commit_graph_snapshot
 from app.services.diagnosis import analyze_case_job, chat_about_case
 from app.services.events import active_log_event_clause
+from app.services.git_repository import (
+    GitRepositoryError,
+    clone_git_bundle,
+    find_git_worktree_root,
+    repository_head,
+    validate_git_worktree,
+)
 from app.services.health import readiness_report, system_status_report
 from app.services.jobs import job_runner
 from app.services.knowledge import index_document, reindex_knowledge_job
+from app.services.knowledge_methods import (
+    FAULT_CASE_TEMPLATE,
+    STRUCTURED_SOURCE_TYPES,
+    analysis_method_is_unmodified,
+    derive_analysis_method,
+)
 from app.services.knowledge_taxonomy import (
     category_document_counts, descendant_category_ids, get_default_category_id,
     new_category_code, new_category_id, set_document_category, validate_category_parent,
 )
 from app.services.llm import LLMError, get_active_chat_model_info, get_llm_provider
+from app.services.memory import (
+    memory_to_dict,
+    search_memories,
+)
 from app.services.model_profiles import (
     activate_model_profile, get_active_model_profile, model_profile_to_dict,
     new_model_profile_id, set_profile_api_key, validate_model_profile,
@@ -772,6 +793,61 @@ async def case_chat(case_id: str, payload: ChatRequest, db: Db) -> ChatResponse:
     return ChatResponse(answer=answer, citations=citations)
 
 
+@router.post("/cases/{case_id}/agentic-search")
+def run_agentic_search(
+    case_id: str,
+    payload: AgenticSearchRequest,
+    db: Db,
+) -> dict:
+    if not db.get(Case, case_id):
+        raise HTTPException(404, "Case not found")
+    try:
+        return agentic_search(
+            db,
+            case_id=case_id,
+            query=payload.query,
+            top_k=payload.top_k,
+            max_hops=payload.max_hops,
+            requested_modules=payload.modules,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/cases/{case_id}/memories")
+def list_case_memories(
+    case_id: str,
+    db: Db,
+    memory_type: str | None = Query(
+        default=None,
+        pattern="^(EPISODIC|PROCEDURAL|FAILURE)$",
+    ),
+    search: str | None = Query(default=None, max_length=10000),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict]:
+    if not db.get(Case, case_id):
+        raise HTTPException(404, "Case not found")
+    if search:
+        results = search_memories(
+            db,
+            search,
+            case_id=case_id,
+            memory_types={memory_type} if memory_type else None,
+            limit=limit,
+        )
+        return [memory_to_dict(memory, score) for memory, score in results]
+    query = select(AgentMemory).where(or_(
+        AgentMemory.case_id == case_id,
+        AgentMemory.case_id.is_(None),
+    ))
+    if memory_type:
+        query = query.where(AgentMemory.memory_type == memory_type)
+    memories = list(db.scalars(
+        query.order_by(AgentMemory.updated_at.desc()).limit(limit)
+    ).all())
+    return [memory_to_dict(memory) for memory in memories]
+
+
 @router.get("/cases/{case_id}/analyses/{analysis_id}/report/preview", response_class=HTMLResponse)
 def preview_report(case_id: str, analysis_id: str) -> str:
     try:
@@ -858,6 +934,24 @@ def _knowledge_response_maps(
 def _single_knowledge_response(db: Session, document: KnowledgeDocument, *, detail: bool = False) -> dict:
     categories, chunks = _knowledge_response_maps(db, [document.id])
     return _knowledge_to_dict(document, categories, chunks, include_content=detail)
+
+
+def _delete_knowledge_rows(db: Session, document_id: str) -> None:
+    chunk_ids = select(KnowledgeChunk.id).where(
+        KnowledgeChunk.document_id == document_id
+    )
+    db.execute(delete(KnowledgeEmbedding).where(
+        KnowledgeEmbedding.chunk_id.in_(chunk_ids)
+    ))
+    db.execute(delete(KnowledgeChunk).where(
+        KnowledgeChunk.document_id == document_id
+    ))
+    link = db.get(KnowledgeDocumentCategory, document_id)
+    if link:
+        db.delete(link)
+    document = db.get(KnowledgeDocument, document_id)
+    if document:
+        db.delete(document)
 
 
 @router.post("/knowledge", response_model=KnowledgeDetailOut)
@@ -1044,12 +1138,44 @@ def reindex_knowledge(db: Db) -> Job:
     )
 
 
+@router.get("/knowledge/templates/fault-case")
+def get_fault_case_template() -> dict:
+    return {
+        "name": "structured_fault_case_markdown_v1",
+        "source_type": "fault_case",
+        "required_sections": ["错误形式", "日志分析", "错误定位", "解决方案"],
+        "optional_sections": ["验证结果", "适用范围与限制"],
+        "content": FAULT_CASE_TEMPLATE,
+    }
+
+
 @router.get("/knowledge/{document_id}", response_model=KnowledgeDetailOut)
 def get_knowledge(document_id: str, db: Db) -> dict:
     document = db.get(KnowledgeDocument, document_id)
     if not document:
         raise HTTPException(404, "Knowledge document not found")
     return _single_knowledge_response(db, document, detail=True)
+
+
+@router.post("/knowledge/{document_id}/extract-method")
+def extract_knowledge_method(document_id: str, db: Db) -> dict:
+    document = db.get(KnowledgeDocument, document_id)
+    if not document:
+        raise HTTPException(404, "Knowledge document not found")
+    if document.source_type not in STRUCTURED_SOURCE_TYPES:
+        raise HTTPException(
+            409,
+            "Only fault cases, fault trees, historical cases or analysis skills can be extracted",
+        )
+    try:
+        derived, created = derive_analysis_method(db, document)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "created": created,
+        "source_document_id": document.id,
+        "derived_document": _single_knowledge_response(db, derived, detail=True),
+    }
 
 
 @router.patch("/knowledge/{document_id}", response_model=KnowledgeDetailOut)
@@ -1071,6 +1197,36 @@ def update_knowledge(document_id: str, payload: KnowledgeUpdate, db: Db) -> dict
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
     index_document(db, document)
+    existing_derivation = db.scalar(select(KnowledgeDerivation).where(
+        KnowledgeDerivation.source_document_id == document.id,
+        KnowledgeDerivation.derivation_type == "analysis_method",
+    ))
+    if existing_derivation and document.source_type in STRUCTURED_SOURCE_TYPES:
+        derived = db.get(KnowledgeDocument, existing_derivation.derived_document_id)
+        if derived and analysis_method_is_unmodified(derived):
+            derive_analysis_method(db, document)
+        elif derived:
+            metadata = json_loads(derived.metadata_json, {})
+            metadata["derivation_status"] = "SOURCE_UPDATED_DERIVED_MANUALLY_EDITED"
+            metadata["source_updated_at"] = document.updated_at
+            derived.metadata_json = json_dumps(metadata)
+            derivation_metadata = json_loads(existing_derivation.metadata_json, {})
+            derivation_metadata["status"] = "MANUAL_REVIEW_REQUIRED"
+            existing_derivation.metadata_json = json_dumps(derivation_metadata)
+            existing_derivation.updated_at = utcnow()
+            db.commit()
+    elif existing_derivation:
+        derived = db.get(KnowledgeDocument, existing_derivation.derived_document_id)
+        if derived:
+            derived.active = False
+            metadata = json_loads(derived.metadata_json, {})
+            metadata["derivation_status"] = "SOURCE_TYPE_INCOMPATIBLE"
+            derived.metadata_json = json_dumps(metadata)
+        metadata = json_loads(existing_derivation.metadata_json, {})
+        metadata["status"] = "SOURCE_TYPE_INCOMPATIBLE"
+        existing_derivation.metadata_json = json_dumps(metadata)
+        existing_derivation.updated_at = utcnow()
+        db.commit()
     db.refresh(document)
     return _single_knowledge_response(db, document, detail=True)
 
@@ -1080,14 +1236,39 @@ def delete_knowledge(document_id: str, db: Db) -> dict:
     document = db.get(KnowledgeDocument, document_id)
     if not document:
         raise HTTPException(404, "Knowledge document not found")
-    chunk_ids = select(KnowledgeChunk.id).where(KnowledgeChunk.document_id == document_id)
-    db.execute(delete(KnowledgeEmbedding).where(KnowledgeEmbedding.chunk_id.in_(chunk_ids)))
-    link = db.get(KnowledgeDocumentCategory, document_id)
-    if link:
-        db.delete(link)
-    db.delete(document)
+    source_derivations = list(db.scalars(select(KnowledgeDerivation).where(
+        KnowledgeDerivation.source_document_id == document_id
+    )).all())
+    incoming_derivations = list(db.scalars(select(KnowledgeDerivation).where(
+        KnowledgeDerivation.derived_document_id == document_id
+    )).all())
+    derived_ids = {
+        derivation.derived_document_id
+        for derivation in source_derivations
+        if derivation.derived_document_id != document_id
+    }
+    for derivation in [*source_derivations, *incoming_derivations]:
+        db.delete(derivation)
+    db.flush()
+    for derivation in incoming_derivations:
+        source = db.get(KnowledgeDocument, derivation.source_document_id)
+        if source:
+            metadata = json_loads(source.metadata_json, {})
+            if metadata.get("derived_analysis_method_id") == document_id:
+                metadata.pop("derived_analysis_method_id", None)
+                source.metadata_json = json_dumps(metadata)
+    for derived_id in derived_ids:
+        still_referenced = db.scalar(select(KnowledgeDerivation.id).where(
+            KnowledgeDerivation.derived_document_id == derived_id
+        ).limit(1))
+        if not still_referenced:
+            _delete_knowledge_rows(db, derived_id)
+    _delete_knowledge_rows(db, document_id)
     db.commit()
-    return {"deleted": document_id}
+    return {
+        "deleted": document_id,
+        "deleted_derived_documents": sorted(derived_ids),
+    }
 
 
 @router.post("/cases/{case_id}/repositories", response_model=dict)
@@ -1100,33 +1281,88 @@ async def upload_repository(case_id: str, db: Db, file: UploadFile = File(...)) 
     try:
         path, size, digest = await storage.save_upload(file, artifact_id, target_name=uploaded_name)
         destination = storage.repository_dir(repository_id)
-        manifest = extract_archive(path, destination)
-    except (ValueError, UnsafeArchiveError) as exc:
+        if uploaded_name.lower().endswith(".bundle"):
+            git_manifest = clone_git_bundle(path, destination)
+            source_root = git_manifest.root
+            file_count = git_manifest.file_count
+            extracted_bytes = git_manifest.total_bytes
+            branch = git_manifest.branch
+            commit_hash = git_manifest.commit_hash
+            import_format = "git_bundle"
+        else:
+            manifest = extract_archive(path, destination)
+            detected_git_root = find_git_worktree_root(destination)
+            if detected_git_root:
+                validate_git_worktree(detected_git_root)
+                branch, commit_hash = repository_head(detected_git_root)
+                source_root = detected_git_root
+            else:
+                branch, commit_hash = None, None
+                source_root = destination
+            file_count = len(manifest.files)
+            extracted_bytes = manifest.total_bytes
+            import_format = "archive"
+    except (ValueError, UnsafeArchiveError, GitRepositoryError, OSError) as exc:
         storage.remove_artifact(artifact_id)
         storage.remove_repository(repository_id)
         raise HTTPException(400, str(exc)) from exc
     artifact = Artifact(
         id=artifact_id, case_id=case_id, kind="source_repository", original_name=uploaded_name[:512],
         stored_path=storage.storage_key(path), sha256=digest, size_bytes=size, status="EXTRACTED",
-        metadata_json=json_dumps({"manifest_file_count": len(manifest.files), "extracted_bytes": manifest.total_bytes}),
+        metadata_json=json_dumps({
+            "manifest_file_count": file_count,
+            "extracted_bytes": extracted_bytes,
+            "import_format": import_format,
+            "git_history_available": commit_hash is not None,
+        }),
     )
     repository = Repository(
         id=repository_id, case_id=case_id, artifact_id=artifact_id,
         name=Path(uploaded_name).stem[:255] or "repository",
-        root_path=storage.storage_key(destination),
+        root_path=storage.storage_key(source_root),
+        branch=branch,
+        commit_hash=commit_hash,
         status="UPLOADED",
+        graph_status="NOT_INDEXED",
+        commit_graph_status="NOT_INDEXED" if commit_hash else "UNAVAILABLE",
+        index_metadata_json=json_dumps({
+            "import_format": import_format,
+            "git_history_available": commit_hash is not None,
+        }),
     )
     db.add(artifact)
     db.flush()
     db.add(repository)
     db.commit()
-    return {"repository_id": repository_id, "artifact_id": artifact_id, "files": len(manifest.files)}
+    return {
+        "repository_id": repository_id,
+        "artifact_id": artifact_id,
+        "files": file_count,
+        "import_format": import_format,
+        "git_history_available": commit_hash is not None,
+        "branch": branch,
+        "commit_hash": commit_hash,
+    }
 
 
 @router.get("/cases/{case_id}/repositories")
 def list_repositories(case_id: str, db: Db) -> list[dict]:
     rows = db.scalars(select(Repository).where(Repository.case_id == case_id).order_by(Repository.created_at.desc())).all()
-    return [{"id": row.id, "name": row.name, "status": row.status, "branch": row.branch, "commit_hash": row.commit_hash, "created_at": row.created_at} for row in rows]
+    return [
+        {
+            "id": row.id,
+            "name": row.name,
+            "status": row.status,
+            "graph_status": row.graph_status,
+            "commit_graph_status": row.commit_graph_status,
+            "branch": row.branch,
+            "commit_hash": row.commit_hash,
+            "index_metadata": json_loads(row.index_metadata_json, {}),
+            "indexed_at": row.indexed_at,
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
 
 
 @router.post("/repositories/{repository_id}/index", response_model=JobOut)
@@ -1154,10 +1390,72 @@ def list_symbols(
         {
             "id": row.id, "kind": row.kind, "name": row.name, "file_path": row.file_path,
             "line_start": row.line_start, "line_end": row.line_end, "signature": row.signature,
-            "module": row.module, "calls": json_loads(row.calls_json, []), "code": row.code,
+            "module": row.module, "calls": json_loads(row.calls_json, []),
+            "metadata": json_loads(row.metadata_json, {}), "code": row.code,
         }
         for row in rows
     ]
+
+
+@router.get("/repositories/{repository_id}/graph")
+def get_repository_graph(
+    repository_id: str,
+    db: Db,
+    query: str | None = None,
+    relation_type: str | None = Query(
+        default=None,
+        pattern="^(CALLS|REFERENCES|INHERITS|IMPLEMENTS)$",
+    ),
+    limit: int = Query(default=300, ge=1, le=2000),
+) -> dict:
+    try:
+        return code_graph_snapshot(
+            db,
+            repository_id,
+            query=query,
+            relation_type=relation_type,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/repositories/{repository_id}/graph/search")
+def search_repository_graph(
+    repository_id: str,
+    db: Db,
+    query: str = Query(min_length=2, max_length=10000),
+    max_hops: int = Query(default=2, ge=0, le=3),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict:
+    try:
+        return search_code_graph(
+            db,
+            repository_id,
+            query,
+            max_hops=max_hops,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/repositories/{repository_id}/commit-graph")
+def get_repository_commit_graph(
+    repository_id: str,
+    db: Db,
+    query: str | None = Query(default=None, max_length=10000),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict:
+    try:
+        return commit_graph_snapshot(
+            db,
+            repository_id,
+            query=query,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/repositories/{repository_id}/static-analysis", response_model=JobOut)
@@ -1451,5 +1749,32 @@ def retrieval_config(db: Db) -> dict:
         "embedding": embedding_index_status(db),
         "reranker": model_profile_to_dict(reranker) if reranker else None,
         "knowledge_storage": "SQLite documents/chunks + profile-specific SQLite vector cache",
-        "knowledge_graph": False,
+        "knowledge_graph": {
+            "enabled": True,
+            "kind": "derivation_lineage",
+            "domain_entity_graph_enabled": False,
+            "derivations": int(db.scalar(select(func.count(KnowledgeDerivation.id))) or 0),
+        },
+        "code_graph": {
+            "symbols": int(db.scalar(select(func.count(CodeSymbol.id))) or 0),
+            "relations": int(db.scalar(select(func.count(CodeRelation.id))) or 0),
+        },
+        "commit_graph": {
+            "commits": int(db.scalar(select(func.count(CommitRecord.id))) or 0),
+        },
+        "memory": {
+            "items": int(db.scalar(select(func.count(AgentMemory.id))) or 0),
+            "types": ["EPISODIC", "PROCEDURAL", "FAILURE"],
+        },
+        "agentic_search": {
+            "enabled": True,
+            "modules": ["knowledge", "code", "commit", "memory"],
+            "algorithms": [
+                "BM25",
+                "dense_embedding",
+                "reciprocal_rank_fusion",
+                "reranker",
+                "graph_multi_hop",
+            ],
+        },
     }

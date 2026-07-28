@@ -22,9 +22,12 @@ const sourceTypes = [
   { label: '诊断规则', value: 'diagnostic_rule' },
   { label: '协议诊断规则', value: 'protocol_rule' },
   { label: '安全诊断规则', value: 'security_rule' },
+  { label: '结构化故障案例', value: 'fault_case' },
   { label: '故障树', value: 'fault_tree' },
   { label: '解决方案', value: 'solution' },
   { label: '历史故障/已知问题', value: 'historical_bug' },
+  { label: '错误分析 Skill', value: 'analysis_skill' },
+  { label: '提炼分析方法', value: 'analysis_method' },
   { label: '产品/协议文档', value: 'document' },
   { label: '测试规范', value: 'test_spec' }
 ]
@@ -87,9 +90,12 @@ function sourceTypeLabel(value: string) {
 
 function sourceTypeForCategory(categoryId: string) {
   const code = categoryMap.value.get(categoryId)?.code || ''
+  if (code === 'history.cases') return 'fault_case'
   if (code === 'history.fault_trees') return 'fault_tree'
   if (code === 'history.solutions') return 'solution'
   if (code === 'history.known_issues') return 'historical_bug'
+  if (code === 'methods.analysis_skills') return 'analysis_skill'
+  if (code === 'methods.extracted') return 'analysis_method'
   if (code === 'diagnosis.log_rules') return 'log_rule'
   if (code === 'diagnosis.protocol_rules') return 'protocol_rule'
   if (code === 'diagnosis.security_rules') return 'security_rule'
@@ -150,6 +156,53 @@ function resetDocumentForm() {
 function openCreateDocument() {
   resetDocumentForm()
   documentDialog.value = true
+}
+
+async function openFaultCaseTemplate() {
+  try {
+    const template = (await api.get('/knowledge/templates/fault-case')).data
+    resetDocumentForm()
+    documentForm.title = '新故障案例'
+    documentForm.source_type = template.source_type
+    documentForm.content = template.content
+    const category = categories.value.find(item => item.code === 'history.cases')
+    documentForm.category_id = category?.id || ''
+    documentDialog.value = true
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  }
+}
+
+function canExtractMethod(document: KnowledgeDocument) {
+  return ['fault_case', 'fault_tree', 'historical_bug', 'analysis_skill'].includes(
+    document.source_type
+  )
+}
+
+async function extractMethod(document: KnowledgeDocument) {
+  if (document.metadata?.derived_analysis_method_id) {
+    try {
+      await ElMessageBox.confirm(
+        '该来源已经存在派生分析方法。重新提炼会用当前来源覆盖派生方法正文，包括其中的人工修改。是否继续？',
+        '重新提炼分析方法',
+        { type: 'warning', confirmButtonText: '重新提炼', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+  }
+  saving.value = true
+  try {
+    const result = (await api.post(`/knowledge/${document.id}/extract-method`)).data
+    ElMessage.success(
+      result.created ? '已提炼并建立可复用分析方法' : '已根据最新内容更新分析方法'
+    )
+    await load()
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  } finally {
+    saving.value = false
+  }
 }
 
 async function openEditDocument(document: KnowledgeDocument) {
@@ -298,6 +351,7 @@ onMounted(load)
     <div class="toolbar">
       <h1 class="page-title" style="margin-right:auto">分层知识库</h1>
       <el-button type="primary" @click="openCreateDocument">新增知识</el-button>
+      <el-button type="success" plain @click="openFaultCaseTemplate">故障案例模板</el-button>
       <el-button @click="openUpload">上传文件</el-button>
       <el-button @click="load">刷新</el-button>
     </div>
@@ -342,8 +396,42 @@ onMounted(load)
           <el-table-column prop="device_type" label="设备" width="80" />
           <el-table-column prop="module" label="模块" width="100" />
           <el-table-column label="可信级别" width="100"><template #default="scope"><el-tag :type="scope.row.trust_level === 'HIGH' ? 'success' : scope.row.trust_level === 'LOW' ? 'warning' : 'info'">{{ scope.row.trust_level }}</el-tag></template></el-table-column>
+          <el-table-column label="结构完整度" width="120">
+            <template #default="scope">
+              <template v-if="scope.row.metadata?.markdown_structure">
+                <el-tooltip
+                  :content="scope.row.metadata.markdown_structure.complete ? '必需章节齐全' : `缺少：${scope.row.metadata.markdown_structure.missing_sections.join('、')}`"
+                >
+                  <el-tag :type="scope.row.metadata.markdown_structure.complete ? 'success' : 'warning'">
+                    {{ Math.round(scope.row.metadata.markdown_structure.completeness * 100) }}%
+                  </el-tag>
+                </el-tooltip>
+              </template>
+              <el-tooltip
+                v-else-if="scope.row.metadata?.derivation_status"
+                content="来源已更新，但派生方法曾被人工修改；请复核后决定是否重新提炼。"
+              >
+                <el-tag type="warning">需复核</el-tag>
+              </el-tooltip>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="索引" width="100"><template #default="scope"><el-tooltip v-if="scope.row.metadata?.embedding_error" :content="scope.row.metadata.embedding_error"><el-tag type="danger">向量失败</el-tag></el-tooltip><el-tag v-else type="success">{{ scope.row.chunk_count }} 分块</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openEditDocument(scope.row as KnowledgeDocument)">修改</el-button><el-button link type="danger" @click="removeDocument(scope.row as KnowledgeDocument)">删除</el-button></template></el-table-column>
+          <el-table-column label="操作" width="230" fixed="right">
+            <template #default="scope">
+              <el-button link type="primary" @click="openEditDocument(scope.row as KnowledgeDocument)">修改</el-button>
+              <el-button
+                v-if="canExtractMethod(scope.row as KnowledgeDocument)"
+                link
+                type="success"
+                :loading="saving"
+                @click="extractMethod(scope.row as KnowledgeDocument)"
+              >
+                提炼方法
+              </el-button>
+              <el-button link type="danger" @click="removeDocument(scope.row as KnowledgeDocument)">删除</el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </el-card>
     </div>

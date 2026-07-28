@@ -57,7 +57,11 @@ def test_model_and_layered_knowledge_api_round_trip(tmp_path: Path):
         retrieval = client.get("/api/v1/system/retrieval")
         assert retrieval.status_code == 200
         assert retrieval.json()["embedding"]["complete"] is True
-        assert retrieval.json()["knowledge_graph"] is False
+        assert retrieval.json()["knowledge_graph"]["enabled"] is True
+        assert retrieval.json()["knowledge_graph"]["kind"] == "derivation_lineage"
+        assert retrieval.json()["knowledge_graph"]["domain_entity_graph_enabled"] is False
+        assert "reciprocal_rank_fusion" in retrieval.json()["agentic_search"]["algorithms"]
+        assert retrieval.json()["agentic_search"]["enabled"] is True
 
         embedding_test = client.post("/api/v1/system/models/MODEL-embedding-hashing/test")
         assert embedding_test.status_code == 200

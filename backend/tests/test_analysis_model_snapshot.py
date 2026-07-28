@@ -26,7 +26,13 @@ def test_analysis_records_safe_model_configuration_snapshot(tmp_path: Path, monk
         db.commit()
 
     monkeypatch.setattr(diagnosis, "SessionLocal", session_factory)
-    monkeypatch.setattr(diagnosis.retriever, "search", lambda *args, **kwargs: [])
+    monkeypatch.setattr(diagnosis, "agentic_search", lambda *args, **kwargs: {
+        "results": [],
+        "plan": {"selected_modules": [], "algorithms": [], "rationale": []},
+        "trace": [],
+        "paths": [],
+        "summary": {},
+    })
     monkeypatch.setattr(diagnosis, "_find_related_symbols", lambda case_id, events: [])
     monkeypatch.setattr(diagnosis, "get_active_chat_model_info", lambda: {
         "profile_id": "MODEL-qwen",

@@ -342,7 +342,13 @@ onMounted(load)
     <el-card style="margin-top:16px">
       <template #header>本地模型说明</template>
       <p class="muted">本地 BGE Embedding 与 Qwen3 Reranker 使用 Sentence Transformers。运行 <span class="mono">scripts\install_local_models.bat</span> 后，模型会下载到项目的 <span class="mono">models\embedding</span> 与 <span class="mono">models\reranker</span>，并可直接选择带“项目 models 目录”的预置配置。</p>
-      <p class="muted">当前知识存储：{{ retrieval.knowledge_storage || '加载中' }}；知识图谱：{{ retrieval.knowledge_graph ? '已启用' : '尚未构建' }}。</p>
+      <p class="muted">
+        当前知识存储：{{ retrieval.knowledge_storage || '加载中' }}；
+        方法派生关系 {{ retrieval.knowledge_graph?.derivations || 0 }}；
+        代码符号/关系 {{ retrieval.code_graph?.symbols || 0 }}/{{ retrieval.code_graph?.relations || 0 }}；
+        Commit {{ retrieval.commit_graph?.commits || 0 }}；
+        任务记忆 {{ retrieval.memory?.items || 0 }}。
+      </p>
     </el-card>
 
     <el-card style="margin-top:16px;max-width:760px">

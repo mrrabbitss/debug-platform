@@ -8,6 +8,7 @@ from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id
 from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeEmbedding, ModelProfile
 from app.services.jobs import JobContext
+from app.services.knowledge_methods import enrich_knowledge_metadata
 from app.services.retrieval_models import RetrievalModelError, index_active_embeddings, reindex_all_embeddings
 
 
@@ -46,6 +47,11 @@ def chunk_document(content: str, max_chars: int = 1800, overlap_chars: int = 180
 
 
 def index_document(db: Session, document: KnowledgeDocument) -> int:
+    document.metadata_json = json_dumps(enrich_knowledge_metadata(
+        document.source_type,
+        document.content,
+        json_loads(document.metadata_json, {}),
+    ))
     old_chunk_ids = select(KnowledgeChunk.id).where(KnowledgeChunk.document_id == document.id)
     db.execute(delete(KnowledgeEmbedding).where(KnowledgeEmbedding.chunk_id.in_(old_chunk_ids)))
     db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id))

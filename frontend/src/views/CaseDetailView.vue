@@ -394,13 +394,17 @@ async function ask() {
 }
 
 async function uploadRepo() {
-  if (!repoFile.value) return ElMessage.warning('请选择代码仓库压缩包')
+  if (!repoFile.value) return ElMessage.warning('请选择代码仓库归档或 Git Bundle')
   const data = new FormData()
   data.append('file', repoFile.value)
   const result = (await api.post(`/cases/${caseId}/repositories`, data)).data
   repoFile.value = null
   repositories.value = (await api.get(`/cases/${caseId}/repositories`)).data
-  ElMessage.success(`代码仓库已上传，共 ${result.files} 个文件`)
+  ElMessage.success(
+    result.git_history_available
+      ? `代码仓库和 Git 历史已上传，共 ${result.files} 个文件`
+      : `代码仓库已上传，共 ${result.files} 个文件；普通压缩包不包含 Commit 历史`
+  )
 }
 
 async function indexRepo(repositoryId: string) {
@@ -656,9 +660,26 @@ onBeforeUnmount(() => {
       </el-tab-pane>
 
       <el-tab-pane label="代码仓库" name="code">
-        <div class="toolbar"><input type="file" accept=".zip,.tar,.gz,.tgz" :disabled="!canEditCase" @change="(e:any) => repoFile = e.target.files?.[0] || null"/><el-button type="primary" :disabled="!canEditCase" @click="uploadRepo">上传代码仓库</el-button><span class="muted">支持 C/C++ 函数、宏、结构体索引；不会自动覆盖源码。</span></div>
+        <div class="toolbar">
+          <input type="file" accept=".zip,.tar,.gz,.tgz,.bundle" :disabled="!canEditCase" @change="(e:any) => repoFile = e.target.files?.[0] || null"/>
+          <el-button type="primary" :disabled="!canEditCase" @click="uploadRepo">上传代码仓库</el-button>
+          <router-link :to="{ path: '/cognitive-search', query: { case: caseId } }">
+            <el-button>打开认知检索</el-button>
+          </router-link>
+        </div>
+        <el-alert
+          type="info"
+          :closable="false"
+          style="margin-bottom:12px"
+          title="代码图谱支持 C/C++、Python、Java、JavaScript/TypeScript、Go；需要 Commit 追溯时，请在源码仓执行 git bundle create repository.bundle --all 后上传 .bundle。系统只建立索引，不会覆盖源码。"
+        />
         <el-table :data="repositories">
-          <el-table-column prop="name" label="仓库" min-width="220"/><el-table-column prop="status" label="状态" width="120"/><el-table-column prop="commit_hash" label="Commit" width="160"/>
+          <el-table-column prop="name" label="仓库" min-width="190"/>
+          <el-table-column prop="status" label="文件状态" width="110"/>
+          <el-table-column prop="graph_status" label="代码图谱" width="120"/>
+          <el-table-column prop="commit_graph_status" label="Commit 图谱" width="130"/>
+          <el-table-column prop="branch" label="分支" width="120"/>
+          <el-table-column prop="commit_hash" label="Commit" width="160" show-overflow-tooltip/>
           <el-table-column label="操作" width="280"><template #default="scope"><el-button link type="primary" :disabled="!canEditCase" @click="indexRepo(scope.row.id)">建立索引</el-button><el-button link @click="loadSymbols(scope.row.id)">查看符号</el-button><el-button link type="warning" :disabled="!canEditCase" @click="runStatic(scope.row.id)">静态分析</el-button></template></el-table-column>
         </el-table>
         <div class="toolbar" style="margin-top:18px"><el-input v-model="symbolSearch" placeholder="函数名、宏名或文件路径" style="width:300px"/><el-button v-if="repositories[0]" @click="loadSymbols(repositories[0].id)">搜索符号</el-button></div>

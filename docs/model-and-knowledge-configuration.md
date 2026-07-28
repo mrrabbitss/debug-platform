@@ -2,13 +2,14 @@
 
 ## 1. 当前实际使用的检索技术
 
-诊断检索由以下阶段组成：
+诊断检索由 Agentic Search 编排以下阶段：
 
-1. SQLite 中读取启用的知识文档、知识分块和代码符号；
-2. 使用 BM25、精确错误码、函数名、路径和标题匹配生成候选结果；
-3. 使用当前激活的 Embedding 配置计算向量相似度并加入混合分数；
-4. 如果启用了 Reranker，则对前一阶段的候选结果重新排序；
-5. 把最终知识证据连同结构化日志事件交给规则诊断和当前激活的诊断大模型。
+1. 按 query 意图选择知识、记忆、代码图谱和 Commit 图谱；
+2. 各模块使用 BM25、精确错误码、函数名、路径、标题或图关系生成候选；
+3. 使用 RRF 融合不同模块；
+4. 使用当前激活的 Embedding 对跨模块候选计算余弦相似度；
+5. 如果启用了 Reranker，则对融合候选重新排序；
+6. 把最终证据和可解释路径连同结构化日志事件交给规则诊断和当前诊断大模型。
 
 默认 Embedding 是无需下载模型的 384 维字符 Hashing 向量，主要用于保证新克隆的电脑开箱可用。它不是训练过的语义模型。切换到本地 BGE 或 Embedding API 并重建索引后，系统才会使用相应的语义向量。
 
@@ -22,7 +23,10 @@
 - `knowledge_chunks`：按 Markdown 标题和段落生成的检索分块；
 - `knowledge_categories`：可分层的知识分类；
 - `knowledge_document_categories`：文档与分类的关联；
+- `knowledge_derivations`：来源案例/Skill 与派生分析方法的 lineage；
 - `knowledge_embeddings`：按 Embedding 配置隔离保存的向量缓存；
+- `code_relations`、`commit_records`、`commit_file_changes`：代码与 Commit 工程图谱；
+- `agent_memories`：情景、程序和失败记忆；
 - `model_profiles`：Chat、Embedding、Reranker 配置和加密后的 API Key。
 
 配置 `QDRANT_URL` 后，向量也会按模型配置写入独立 Qdrant collection。SQLite 向量仍是本地可靠回退，因此 Qdrant 临时不可用不会阻止知识正文和分块入库。
@@ -34,7 +38,10 @@
 - `backend/data` 和 `.env` 已被 Git 忽略，不会上传到仓库；
 - 如果密钥文件丢失，旧 API Key 无法解密，需要在前端重新填写。
 
-API 模式会传输业务内容：诊断大模型接收案例证据，Embedding API 在重建索引时接收知识分块，Reranker API 接收检索问题和候选知识。只能配置公司批准且允许接收这些数据的端点；生产环境应同时启用 HTTPS 和后端鉴权。
+API 模式会传输业务内容：诊断大模型接收案例证据，Embedding API 在重建索引时接收
+知识分块，在 Agentic Search 中还可能接收记忆或源码候选；Reranker API 接收检索问题
+和跨模块候选。只能配置公司批准且允许接收这些数据的端点；生产环境应同时启用
+HTTPS 和后端鉴权。
 
 后端会在保存、启用和每次实际调用前验证 Base URL：
 
@@ -63,7 +70,11 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 历史问题诊断
 ├─ 故障树
 ├─ 解决方案
-└─ 已知问题与案例
+├─ 已知问题与案例
+└─ 结构化故障案例
+分析方法与 Skill
+├─ 错误分析 Skill
+└─ 提炼分析方法
 参考资料
 ├─ 产品文档
 ├─ 协议文档
@@ -79,6 +90,8 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 - 新增文本知识或上传 Markdown/TXT/JSON/LOG；
 - 修改标题、正文、分类、设备、模块、固件范围、可信等级和可见级别；
 - 修改正文时重新切分并重建当前 Embedding 的向量；
+- 使用模板维护结构化故障案例并检查必需章节；
+- 从故障案例或错误分析 Skill 提炼可追溯的分析方法；
 - 删除正文、分块和对应向量。
 
 内置分类不能删除，但可以在其下继续增加公司自己的层次。
@@ -175,9 +188,17 @@ https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-api/v1
 
 ## 9. 关于知识图谱
 
-当前版本没有构建实体—关系知识图谱，也没有图数据库。分类树、历史故障树文档和代码符号的调用信息不等于知识图谱。
+当前版本已经构建代码关系图谱和 Commit 意图图谱，但尚未构建设备、版本、事件码、
+症状、根因、解决方案之间的领域知识图谱，也没有强制依赖图数据库。
 
-目前优先保证可解释的分层文档 RAG：每个结果都能返回知识分块、文档和日志证据 ID。后续如果要增加图谱，建议单独设计设备、版本、模块、事件码、症状、根因、解决方案以及它们的关系，再增加图检索与现有混合检索的融合；不要仅从自由文本自动生成关系后直接用于确定性诊断。
+代码图谱使用 `CALLS`、`REFERENCES`、`INHERITS`、`IMPLEMENTS` 关系；Commit 图谱支持
+query → Commit → 变更文件 → 当前代码符号。两者通过 SQL 关系表保存，并由 Agentic
+Search 与知识、记忆和向量检索融合。完整使用方式见
+[认知检索与图谱使用说明](cognitive-retrieval.md)。
+
+领域知识目前仍优先保证可解释的分层文档 RAG：每个结果都能返回知识分块、文档和
+日志证据 ID。后续增加领域图谱时，应单独设计设备、版本、模块、事件码、症状、根因、
+解决方案以及它们的关系；不要仅从自由文本自动生成关系后直接用于确定性诊断。
 
 ## 10. 推荐使用顺序
 

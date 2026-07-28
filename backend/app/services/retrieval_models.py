@@ -3,6 +3,7 @@ import math
 import re
 import uuid
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from functools import lru_cache
 from pathlib import Path
 from time import perf_counter
@@ -338,14 +339,20 @@ def embedding_index_status(db: Session) -> dict[str, Any]:
     }
 
 
-def embedding_scores(query: str, chunk_ids: set[str]) -> dict[str, float]:
+def embedding_scores(
+    query: str,
+    chunk_ids: set[str],
+    *,
+    db: Session | None = None,
+) -> dict[str, float]:
     if not chunk_ids:
         return {}
-    with SessionLocal() as db:
-        profile = get_active_model_profile("embedding", db)
+    session_context = nullcontext(db) if db is not None else SessionLocal()
+    with session_context as active_db:
+        profile = get_active_model_profile("embedding", active_db)
         if not profile:
             return {}
-        rows = db.execute(
+        rows = active_db.execute(
             select(KnowledgeEmbedding.chunk_id, KnowledgeEmbedding.dimension, KnowledgeEmbedding.vector_json)
             .where(
                 KnowledgeEmbedding.profile_id == profile.id,
@@ -462,8 +469,11 @@ def rerank_documents(
     raise RetrievalModelError(f"Unsupported reranker provider: {profile.provider}")
 
 
-def candidate_count_for_reranker(default: int) -> int:
-    profile = get_active_model_profile("reranker")
+def candidate_count_for_reranker(
+    default: int,
+    profile: ModelProfile | None = None,
+) -> int:
+    profile = profile or get_active_model_profile("reranker")
     if not profile or profile.provider == "disabled":
         return default
     config = json_loads(profile.config_json, {})

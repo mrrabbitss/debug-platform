@@ -16,6 +16,12 @@ def new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:16]}"
 
 
+def stable_id(prefix: str, *parts: Any) -> str:
+    payload = json.dumps(parts, ensure_ascii=False, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"{prefix}-{digest[:32]}"
+
+
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 

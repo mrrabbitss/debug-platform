@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
 
 from app.core.db import Base
-from app.models import AccessToken, Case, CaseMember, UserAccount
+from app.models import AccessToken, Artifact, Case, CaseMember, Repository, UserAccount
 from app.services.access_control import (
     authenticate_access_token,
     authorize_request,
@@ -73,6 +73,23 @@ def test_case_membership_enforces_read_only_and_isolation(tmp_path: Path) -> Non
         db.add(Case(id="CASE-private", title="private", description="", owner_id=owner.id))
         db.add(Case(id="CASE-legacy", title="legacy", description="", owner_id=None))
         db.flush()
+        db.add(Artifact(
+            id="ART-private",
+            case_id="CASE-private",
+            kind="source_repository",
+            original_name="source.zip",
+            stored_path="artifacts/ART-private/source.zip",
+            sha256="a" * 64,
+            size_bytes=1,
+        ))
+        db.flush()
+        db.add(Repository(
+            id="REPO-private",
+            case_id="CASE-private",
+            artifact_id="ART-private",
+            name="private",
+            root_path="repositories/REPO-private",
+        ))
         db.add(CaseMember(
             id="MEM-viewer",
             case_id="CASE-private",
@@ -83,14 +100,38 @@ def test_case_membership_enforces_read_only_and_isolation(tmp_path: Path) -> Non
 
         viewer_principal = {"id": viewer.id, "role": "ENGINEER", "type": "user_token"}
         authorize_request(db, _request("GET", "/api/v1/cases/CASE-private"), viewer_principal)
+        authorize_request(
+            db,
+            _request("GET", "/api/v1/cases/CASE-private/memories"),
+            viewer_principal,
+        )
+        authorize_request(
+            db,
+            _request("GET", "/api/v1/repositories/REPO-private/graph"),
+            viewer_principal,
+        )
         with pytest.raises(HTTPException) as read_only:
             authorize_request(db, _request("PATCH", "/api/v1/cases/CASE-private"), viewer_principal)
         assert read_only.value.status_code == 403
+        with pytest.raises(HTTPException) as search_read_only:
+            authorize_request(
+                db,
+                _request("POST", "/api/v1/cases/CASE-private/agentic-search"),
+                viewer_principal,
+            )
+        assert search_read_only.value.status_code == 403
 
         outsider_principal = {"id": outsider.id, "role": "ENGINEER", "type": "user_token"}
         with pytest.raises(HTTPException) as forbidden:
             authorize_request(db, _request("GET", "/api/v1/cases/CASE-private"), outsider_principal)
         assert forbidden.value.status_code == 403
+        with pytest.raises(HTTPException) as graph_forbidden:
+            authorize_request(
+                db,
+                _request("GET", "/api/v1/repositories/REPO-private/commit-graph"),
+                outsider_principal,
+            )
+        assert graph_forbidden.value.status_code == 403
         authorize_request(db, _request("GET", "/api/v1/cases/CASE-legacy"), outsider_principal)
     engine.dispose()
 

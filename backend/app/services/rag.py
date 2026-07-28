@@ -1,15 +1,18 @@
 import math
 import re
 from collections import Counter
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_loads
 from app.models import CodeSymbol, KnowledgeChunk, KnowledgeDocument, Repository
+from app.services.model_profiles import get_active_model_profile
 from app.services.retrieval_models import (
     RetrievalModelError,
     candidate_count_for_reranker,
@@ -45,20 +48,23 @@ class LocalHybridRetriever:
         self,
         query: str,
         *,
+        db: Session | None = None,
         case_id: str | None = None,
         device_type: str | None = None,
         module: str | None = None,
         top_k: int | None = None,
+        include_code_symbols: bool = True,
     ) -> list[RetrievalHit]:
         top_k = top_k or get_settings().retrieval_top_k
-        with SessionLocal() as db:
-            rows = db.execute(
+        session_context = nullcontext(db) if db is not None else SessionLocal()
+        with session_context as active_db:
+            rows = active_db.execute(
                 select(KnowledgeChunk, KnowledgeDocument)
                 .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
                 .where(KnowledgeDocument.active.is_(True))
             ).all()
             symbol_query = select(CodeSymbol)
-            if case_id:
+            if case_id and include_code_symbols:
                 symbol_query = (
                     symbol_query
                     .join(Repository, CodeSymbol.repository_id == Repository.id)
@@ -66,7 +72,7 @@ class LocalHybridRetriever:
                 )
             else:
                 symbol_query = symbol_query.where(False)
-            symbols = db.scalars(symbol_query.limit(5000)).all()
+            symbols = active_db.scalars(symbol_query.limit(5000)).all()
 
         docs: list[dict[str, Any]] = []
         for chunk, document in rows:
@@ -118,9 +124,15 @@ class LocalHybridRetriever:
 
         exact_terms = set(query_tokens)
         try:
-            vector_scores = embedding_scores(
-                query,
-                {str(doc["id"]) for doc in docs if doc["source_type"] != "code_symbol"},
+            knowledge_ids = {
+                str(doc["id"])
+                for doc in docs
+                if doc["source_type"] != "code_symbol"
+            }
+            vector_scores = (
+                embedding_scores(query, knowledge_ids, db=db)
+                if db is not None
+                else embedding_scores(query, knowledge_ids)
             )
         except RetrievalModelError:
             vector_scores = {}
@@ -142,20 +154,37 @@ class LocalHybridRetriever:
             trust = str(doc["metadata"].get("trust_level", "MEDIUM")).upper()
             trust_bonus = {"HIGH": 0.25, "MEDIUM": 0.1, "LOW": 0.0}.get(trust, 0.05)
             vector_bonus = vector_scores.get(doc["id"], 0.0) * 2.0
-            score = bm25 + overlap * 2.0 + title_bonus * 1.5 + trust_bonus + vector_bonus
-            if score > 0:
+            relevance = bm25 + overlap * 2.0 + title_bonus * 1.5 + vector_bonus
+            if relevance > 0:
+                score = relevance + trust_bonus
                 results.append(RetrievalHit(
                     evidence_id=doc["id"], source_type=doc["source_type"], title=doc["title"],
                     content=doc["content"], score=round(score, 6), metadata=doc["metadata"],
                 ))
-        candidate_count = candidate_count_for_reranker(max(top_k * 3, 20))
+        reranker_profile = get_active_model_profile("reranker", db) if db is not None else None
+        candidate_count = candidate_count_for_reranker(
+            max(top_k * 3, 20),
+            profile=reranker_profile,
+        )
         candidates = sorted(results, key=lambda item: item.score, reverse=True)[:candidate_count]
         try:
-            ranking = rerank_documents(
-                query,
-                [f"{item.title}\n{item.content}" for item in candidates],
-                top_k,
-            )
+            if db is None:
+                ranking = rerank_documents(
+                    query,
+                    [f"{item.title}\n{item.content}" for item in candidates],
+                    top_k,
+                )
+            else:
+                ranking = (
+                    rerank_documents(
+                        query,
+                        [f"{item.title}\n{item.content}" for item in candidates],
+                        top_k,
+                        profile=reranker_profile,
+                    )
+                    if reranker_profile is not None
+                    else None
+                )
         except RetrievalModelError:
             ranking = None
         if ranking is None:

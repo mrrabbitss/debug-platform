@@ -41,7 +41,6 @@ exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const axios_1 = __importDefault(require("axios"));
 const form_data_1 = __importDefault(require("form-data"));
-const archiver_1 = __importDefault(require("archiver"));
 const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
 const path = __importStar(require("path"));
@@ -73,10 +72,11 @@ async function uploadFile(context, caseId, uri, endpoint, field = 'file') {
     return axios_1.default.post(`${c.backend}${endpoint}`, form, { headers: { ...form.getHeaders(), ...c.headers }, maxBodyLength: Infinity, timeout: 300000 });
 }
 async function zipWorkspace(root) {
+    const { ZipArchive } = await import('archiver');
     const target = path.join(os.tmpdir(), `gwap-workspace-${Date.now()}.zip`);
     await new Promise((resolve, reject) => {
         const output = fs.createWriteStream(target);
-        const archive = (0, archiver_1.default)('zip', { zlib: { level: 6 } });
+        const archive = new ZipArchive({ zlib: { level: 6 } });
         output.on('close', resolve);
         archive.on('error', reject);
         archive.pipe(output);

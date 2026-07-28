@@ -10,10 +10,16 @@ from sqlalchemy import case as sql_case, select
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import AnalysisRun, Artifact, Case, CodeSymbol, ConversationMessage, LogEvent, Repository
+from app.services.agentic_search import agentic_search
 from app.services.events import active_log_event_clause
 from app.services.jobs import JobCancelledError, JobContext
 from app.services.llm import LLMError, get_active_chat_model_info, get_llm_provider
-from app.services.rag import RetrievalHit, retriever
+from app.services.memory import (
+    extract_memories_from_analysis,
+    extract_memories_from_chat,
+    record_failed_analysis_memory,
+)
+from app.services.rag import RetrievalHit
 
 
 HYPOTHESIS_RULES: dict[str, dict[str, Any]] = {
@@ -396,9 +402,42 @@ def _analyze_case_impl(ctx: JobContext, case_id: str) -> dict:
     query_parts += [f"{event.event_code} {event.component} {event.message[:160]}" for event in events[:30]]
     query = "\n".join(query_parts)
     ctx.update(30, "Retrieving protocol, product and historical evidence")
-    hits = retriever.search(query, case_id=case_id, device_type=case.device_type, top_k=12)
+    with SessionLocal() as db:
+        search_result = agentic_search(
+            db,
+            case_id=case_id,
+            query=query,
+            top_k=12,
+            max_hops=2,
+        )
+    hits = [
+        RetrievalHit(
+            evidence_id=str(item["evidence_id"]),
+            source_type=str(item["source_type"]),
+            title=str(item["title"]),
+            content=str(item["content"]),
+            score=float(
+                item.get("reranker_score")
+                or item.get("combined_score")
+                or item.get("source_score")
+                or 0.0
+            ),
+            metadata={
+                **item.get("metadata", {}),
+                "agentic_modules": item.get("modules", []),
+                "agentic_paths": item.get("paths", []),
+            },
+        )
+        for item in search_result["results"]
+    ]
     code_symbols = _find_related_symbols(case_id, events)
     result = _build_rule_result(case, events, hits, code_symbols)
+    result["agentic_search"] = {
+        "plan": search_result["plan"],
+        "trace": search_result["trace"],
+        "paths": search_result["paths"],
+        "summary": search_result["summary"],
+    }
     evidence = [_event_to_evidence(event) for event in events[:100]] + [_retrieval_to_evidence(hit) for hit in hits]
 
     ctx.update(60, "Running constrained LLM synthesis")
@@ -424,6 +463,7 @@ def _analyze_case_impl(ctx: JobContext, case_id: str) -> dict:
         case.status = "COMPLETED"
         if result.get("hypotheses"):
             case.severity = result["hypotheses"][0].get("priority", "UNKNOWN")
+        extract_memories_from_analysis(db, case, run, result)
         db.commit()
     return job_result
 
@@ -449,6 +489,13 @@ def _mark_analysis_interrupted(case_id: str, status: str, error_message: str | N
                 .limit(1)
             )
             case.status = "PARSED" if has_events else "UPLOADED"
+            if status == "FAILED" and error_message:
+                record_failed_analysis_memory(
+                    db,
+                    case,
+                    source_id=run.id if run else None,
+                    error_message=error_message,
+                )
         db.commit()
 
 
@@ -473,12 +520,34 @@ async def chat_about_case(case_id: str, question: str) -> tuple[str, list[dict]]
             .order_by(AnalysisRun.created_at.desc()).limit(1)
         ).first()
     diagnosis = json_loads(latest.result_json, {}) if latest else {}
-    hits = retriever.search(
-        f"{case.title} {case.description} {question}",
-        case_id=case_id,
-        device_type=case.device_type,
-        top_k=6,
-    )
+    with SessionLocal() as db:
+        search_result = agentic_search(
+            db,
+            case_id=case_id,
+            query=f"{case.title} {case.description} {question}",
+            top_k=6,
+            max_hops=2,
+        )
+    hits = [
+        RetrievalHit(
+            evidence_id=str(item["evidence_id"]),
+            source_type=str(item["source_type"]),
+            title=str(item["title"]),
+            content=str(item["content"]),
+            score=float(
+                item.get("reranker_score")
+                or item.get("combined_score")
+                or item.get("source_score")
+                or 0.0
+            ),
+            metadata={
+                **item.get("metadata", {}),
+                "agentic_modules": item.get("modules", []),
+                "agentic_paths": item.get("paths", []),
+            },
+        )
+        for item in search_result["results"]
+    ]
     citations = [_retrieval_to_evidence(hit) for hit in hits]
     if latest:
         citations.insert(0, {"evidence_id": latest.id, "source_type": "analysis", "title": "最新诊断结果", "content": latest.result_json[:5000]})
@@ -494,7 +563,28 @@ async def chat_about_case(case_id: str, question: str) -> tuple[str, list[dict]]
             purpose="case_chat",
         )
     with SessionLocal() as db:
-        db.add(ConversationMessage(id=new_id("MSG"), case_id=case_id, role="user", content=question))
-        db.add(ConversationMessage(id=new_id("MSG"), case_id=case_id, role="assistant", content=answer, citations_json=json_dumps(citations)))
+        user_message = ConversationMessage(
+            id=new_id("MSG"),
+            case_id=case_id,
+            role="user",
+            content=question,
+        )
+        assistant_message = ConversationMessage(
+            id=new_id("MSG"),
+            case_id=case_id,
+            role="assistant",
+            content=answer,
+            citations_json=json_dumps(citations),
+        )
+        db.add(user_message)
+        db.add(assistant_message)
+        extract_memories_from_chat(
+            db,
+            case,
+            message_id=assistant_message.id,
+            question=question,
+            answer=answer,
+            citations=citations,
+        )
         db.commit()
     return answer, citations

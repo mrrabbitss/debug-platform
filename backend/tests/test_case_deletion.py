@@ -7,7 +7,16 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api import routes
 from app.core.db import Base, configure_sqlite_engine, get_db
-from app.models import Artifact, Case, Repository
+from app.models import (
+    AgentMemory,
+    Artifact,
+    Case,
+    CodeRelation,
+    CodeSymbol,
+    CommitFileChange,
+    CommitRecord,
+    Repository,
+)
 from app.services.storage import StorageService
 
 
@@ -43,6 +52,61 @@ def test_case_delete_cascades_database_and_managed_files(tmp_path: Path, monkeyp
             name="repo",
             root_path="repositories/REPO-delete",
         ))
+        db.flush()
+        source_symbol = CodeSymbol(
+            id="SYM-delete-source",
+            repository_id="REPO-delete",
+            kind="function",
+            name="source",
+            file_path="main.c",
+            line_start=1,
+            line_end=1,
+            code="int source(void) {}",
+        )
+        target_symbol = CodeSymbol(
+            id="SYM-delete-target",
+            repository_id="REPO-delete",
+            kind="function",
+            name="target",
+            file_path="main.c",
+            line_start=2,
+            line_end=2,
+            code="int target(void) {}",
+        )
+        db.add_all([source_symbol, target_symbol])
+        db.flush()
+        commit = CommitRecord(
+            id="CMT-delete",
+            repository_id="REPO-delete",
+            commit_hash="b" * 40,
+            subject="delete cascade test",
+        )
+        db.add(commit)
+        db.flush()
+        db.add(CodeRelation(
+            id="REL-delete",
+            repository_id="REPO-delete",
+            source_symbol_id=source_symbol.id,
+            target_symbol_id=target_symbol.id,
+            target_name=target_symbol.name,
+            relation_type="CALLS",
+        ))
+        db.add(CommitFileChange(
+            id="CHG-delete",
+            repository_id="REPO-delete",
+            commit_id=commit.id,
+            change_type="M",
+            file_path="main.c",
+        ))
+        db.add(AgentMemory(
+            id="MEM-delete",
+            case_id="CASE-delete",
+            memory_type="EPISODIC",
+            source_kind="test",
+            title="delete",
+            content="delete",
+            fingerprint="c" * 64,
+        ))
         db.commit()
 
     def override_db():
@@ -62,6 +126,11 @@ def test_case_delete_cascades_database_and_managed_files(tmp_path: Path, monkeyp
         assert db.scalar(select(func.count(Case.id))) == 0
         assert db.scalar(select(func.count(Artifact.id))) == 0
         assert db.scalar(select(func.count(Repository.id))) == 0
+        assert db.scalar(select(func.count(CodeSymbol.id))) == 0
+        assert db.scalar(select(func.count(CodeRelation.id))) == 0
+        assert db.scalar(select(func.count(CommitRecord.id))) == 0
+        assert db.scalar(select(func.count(CommitFileChange.id))) == 0
+        assert db.scalar(select(func.count(AgentMemory.id))) == 0
     assert not artifact_dir.exists()
     assert not repository_dir.exists()
     engine.dispose()

@@ -236,6 +236,13 @@ class ChatResponse(BaseModel):
     citations: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class AgenticSearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=10000)
+    top_k: int = Field(default=12, ge=1, le=50)
+    max_hops: int = Field(default=2, ge=0, le=3)
+    modules: list[Literal["knowledge", "code", "commit", "memory"]] | None = None
+
+
 class StaticAnalysisRequest(BaseModel):
     tools: list[Literal["cppcheck", "clang-tidy"]] = Field(default_factory=lambda: ["cppcheck"])
 
