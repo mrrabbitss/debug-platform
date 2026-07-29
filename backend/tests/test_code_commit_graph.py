@@ -184,16 +184,55 @@ def test_repository_index_builds_code_and_commit_graphs(
         assert any(node["node_type"] == "commit" for node in commit_snapshot["nodes"])
         assert any(edge["edge_type"] == "CHANGED" for edge in commit_snapshot["edges"])
         assert db.scalar(select(CommitRecord.id).limit(1)) is not None
+        first_generation_id = repository.active_graph_generation_id
         first_symbol_ids = set(db.scalars(select(CodeSymbol.id)))
+        first_symbol_logical_ids = set(
+            db.scalars(select(CodeSymbol.logical_id))
+        )
         first_relation_ids = set(db.scalars(select(CodeRelation.id)))
+        first_relation_logical_ids = set(
+            db.scalars(select(CodeRelation.logical_id))
+        )
         first_commit_ids = set(db.scalars(select(CommitRecord.id)))
         first_change_ids = set(db.scalars(select(CommitFileChange.id)))
 
     reindexed = code_index._index_repository_impl(context, "REPO-graph")
     assert reindexed["symbols"] == indexed["symbols"]
     with session_factory() as db:
-        assert set(db.scalars(select(CodeSymbol.id))) == first_symbol_ids
-        assert set(db.scalars(select(CodeRelation.id))) == first_relation_ids
+        repository = db.get(Repository, "REPO-graph")
+        assert repository is not None
+        assert repository.active_graph_generation_id != first_generation_id
+        second_symbol_ids = set(db.scalars(select(CodeSymbol.id)))
+        second_symbol_logical_ids = set(
+            db.scalars(select(CodeSymbol.logical_id))
+        )
+        second_relation_ids = set(db.scalars(select(CodeRelation.id)))
+        second_relation_logical_ids = set(
+            db.scalars(select(CodeRelation.logical_id))
+        )
+        assert len(second_symbol_ids) == len(first_symbol_ids)
+        assert len(second_relation_ids) == len(first_relation_ids)
+        assert second_symbol_ids.isdisjoint(first_symbol_ids)
+        assert second_relation_ids.isdisjoint(first_relation_ids)
+        assert second_symbol_logical_ids == first_symbol_logical_ids
+        assert second_relation_logical_ids == first_relation_logical_ids
         assert set(db.scalars(select(CommitRecord.id))) == first_commit_ids
         assert set(db.scalars(select(CommitFileChange.id))) == first_change_ids
+
+    active_generation = reindexed["graph_generation_id"]
+    active_symbol_ids = second_symbol_ids
+
+    def fail_extract(*_args, **_kwargs):
+        raise RuntimeError("synthetic graph build failure")
+
+    monkeypatch.setattr(code_index, "extract_symbols", fail_extract)
+    with pytest.raises(RuntimeError, match="synthetic graph build failure"):
+        code_index.index_repository_job(context, "REPO-graph")
+    with session_factory() as db:
+        repository = db.get(Repository, "REPO-graph")
+        assert repository is not None
+        assert repository.active_graph_generation_id == active_generation
+        assert repository.graph_status == "INDEXED"
+        assert repository.status == "INDEX_FAILED"
+        assert set(db.scalars(select(CodeSymbol.id))) == active_symbol_ids
     engine.dispose()

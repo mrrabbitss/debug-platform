@@ -19,6 +19,7 @@ from app.services.retrieval_models import ensure_builtin_embedding_index
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    job_runner.start()
     run_database_migrations()
     seed_dir = Path(__file__).resolve().parent / "seed_knowledge"
     with SessionLocal() as db:
@@ -28,7 +29,10 @@ async def lifespan(app: FastAPI):
         assign_uncategorized_documents(db)
         ensure_builtin_embedding_index(db)
     job_runner.resume_incomplete()
-    yield
+    try:
+        yield
+    finally:
+        job_runner.shutdown(wait=False)
 
 
 settings = get_settings()

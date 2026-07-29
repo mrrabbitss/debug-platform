@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from sqlalchemy import case as sql_case, select
+from starlette.concurrency import run_in_threadpool
 
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
@@ -282,7 +283,9 @@ def _build_rule_result(case: Case, events: list[LogEvent], hits: list[RetrievalH
         ],
         "related_code": [
             {
-                "symbol_id": symbol.id, "kind": symbol.kind, "name": symbol.name,
+                "symbol_id": symbol.logical_id or symbol.id,
+                "revision_id": symbol.id,
+                "kind": symbol.kind, "name": symbol.name,
                 "file_path": symbol.file_path, "line_start": symbol.line_start,
                 "line_end": symbol.line_end,
             }
@@ -302,7 +305,11 @@ def _find_related_symbols(case_id: str, events: list[LogEvent]) -> list[CodeSymb
     with SessionLocal() as db:
         all_symbols = db.scalars(
             select(CodeSymbol).join(Repository, CodeSymbol.repository_id == Repository.id)
-            .where(Repository.case_id == case_id)
+            .where(
+                Repository.case_id == case_id,
+                CodeSymbol.generation_id
+                == Repository.active_graph_generation_id,
+            )
             .limit(5000)
         ).all()
     scored = []
@@ -520,14 +527,17 @@ async def chat_about_case(case_id: str, question: str) -> tuple[str, list[dict]]
             .order_by(AnalysisRun.created_at.desc()).limit(1)
         ).first()
     diagnosis = json_loads(latest.result_json, {}) if latest else {}
-    with SessionLocal() as db:
-        search_result = agentic_search(
-            db,
-            case_id=case_id,
-            query=f"{case.title} {case.description} {question}",
-            top_k=6,
-            max_hops=2,
-        )
+    def search_case() -> dict:
+        with SessionLocal() as db:
+            return agentic_search(
+                db,
+                case_id=case_id,
+                query=f"{case.title} {case.description} {question}",
+                top_k=6,
+                max_hops=2,
+            )
+
+    search_result = await run_in_threadpool(search_case)
     hits = [
         RetrievalHit(
             evidence_id=str(item["evidence_id"]),

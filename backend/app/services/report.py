@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape
 
 from docx import Document
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -12,6 +13,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
@@ -40,43 +42,90 @@ def get_report_context(case_id: str, analysis_id: str) -> dict[str, Any]:
 def render_html(case_id: str, analysis_id: str) -> str:
     context = get_report_context(case_id, analysis_id)
     template_dir = Path(__file__).resolve().parents[1] / "templates"
-    env = Environment(loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["html", "xml"]))
+    env = Environment(
+        loader=FileSystemLoader(template_dir),
+        autoescape=select_autoescape(
+            enabled_extensions=("html", "xml", "j2"),
+            default_for_string=True,
+            default=True,
+        ),
+    )
     return env.get_template("report.html.j2").render(**context)
 
 
-def _next_version(case_id: str, analysis_id: str, fmt: str) -> int:
-    with SessionLocal() as db:
-        current = db.scalar(select(func.max(Report.version)).where(
-            Report.case_id == case_id, Report.analysis_run_id == analysis_id, Report.format == fmt
-        ))
-    return int(current or 0) + 1
+def _reserve_report(case_id: str, analysis_id: str, fmt: str) -> Report:
+    for _attempt in range(10):
+        with SessionLocal() as db:
+            current = db.scalar(select(func.max(Report.version)).where(
+                Report.case_id == case_id,
+                Report.analysis_run_id == analysis_id,
+                Report.format == fmt,
+            ))
+            report = Report(
+                id=new_id("RPT"),
+                case_id=case_id,
+                analysis_run_id=analysis_id,
+                format=fmt,
+                version=int(current or 0) + 1,
+                stored_path="",
+                sha256="",
+            )
+            db.add(report)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                continue
+            db.refresh(report)
+            return report
+    raise RuntimeError("Unable to reserve a unique report version")
 
 
-def _record_report(case_id: str, analysis_id: str, fmt: str, path: Path, version: int) -> Report:
-    report = Report(
-        id=new_id("RPT"), case_id=case_id, analysis_run_id=analysis_id,
-        format=fmt, version=version, stored_path=storage.storage_key(path), sha256=sha256_file(path),
-    )
+def _discard_report(report_id: str) -> None:
     with SessionLocal() as db:
-        db.add(report)
-        db.commit()
-        db.refresh(report)
-    return report
+        report = db.get(Report, report_id)
+        if report:
+            db.delete(report)
+            db.commit()
+
+
+def _publish_report(report: Report, temporary: Path, target: Path) -> Report:
+    try:
+        temporary.replace(target)
+        with SessionLocal() as db:
+            persisted = db.get(Report, report.id)
+            if not persisted:
+                raise RuntimeError("Report reservation was lost")
+            persisted.stored_path = storage.storage_key(target)
+            persisted.sha256 = sha256_file(target)
+            db.commit()
+            db.refresh(persisted)
+            return persisted
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
+        _discard_report(report.id)
+        raise
 
 
 def generate_html_file(case_id: str, analysis_id: str) -> Report:
-    version = _next_version(case_id, analysis_id, "html")
-    path = storage.report_dir(case_id) / f"{analysis_id}_v{version}.html"
-    path.write_text(render_html(case_id, analysis_id), encoding="utf-8")
-    return _record_report(case_id, analysis_id, "html", path, version)
+    rendered = render_html(case_id, analysis_id)
+    report = _reserve_report(case_id, analysis_id, "html")
+    path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.html"
+    temporary = path.with_name(f".{path.name}.{report.id}.tmp")
+    try:
+        temporary.write_text(rendered, encoding="utf-8")
+        return _publish_report(report, temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        _discard_report(report.id)
+        raise
 
 
 def generate_docx(case_id: str, analysis_id: str) -> Report:
     context = get_report_context(case_id, analysis_id)
     result = context["result"]
     case = context["case"]
-    version = _next_version(case_id, analysis_id, "docx")
-    path = storage.report_dir(case_id) / f"{analysis_id}_v{version}.docx"
     document = Document()
     document.add_heading(context["title"], 0)
     document.add_heading("一、基本信息", level=1)
@@ -103,16 +152,22 @@ def generate_docx(case_id: str, analysis_id: str) -> Report:
     document.add_heading("六、缺失信息与限制", level=1)
     for item in result.get("missing_information", []) + result.get("limitations", []):
         document.add_paragraph(item, style="List Bullet")
-    document.save(path)
-    return _record_report(case_id, analysis_id, "docx", path, version)
+    report = _reserve_report(case_id, analysis_id, "docx")
+    path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.docx"
+    temporary = path.with_name(f".{path.name}.{report.id}.tmp")
+    try:
+        document.save(temporary)
+        return _publish_report(report, temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        _discard_report(report.id)
+        raise
 
 
 def generate_pdf(case_id: str, analysis_id: str) -> Report:
     context = get_report_context(case_id, analysis_id)
     result = context["result"]
     case = context["case"]
-    version = _next_version(case_id, analysis_id, "pdf")
-    path = storage.report_dir(case_id) / f"{analysis_id}_v{version}.pdf"
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("CNTitle", parent=styles["Title"], alignment=TA_CENTER, fontName="STSong-Light")
@@ -125,17 +180,49 @@ def generate_pdf(case_id: str, analysis_id: str) -> Report:
     ]
     table = Table(info, colWidths=[35 * mm, 140 * mm])
     table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    story += [table, Spacer(1, 5 * mm), Paragraph("Summary", heading), Paragraph(result.get("summary", "N/A"), body)]
+    story += [
+        table,
+        Spacer(1, 5 * mm),
+        Paragraph("Summary", heading),
+        Paragraph(escape(str(result.get("summary", "N/A"))), body),
+    ]
     story.append(Paragraph("Confirmed facts", heading))
     for fact in result.get("confirmed_facts", [])[:30]:
-        story.append(Paragraph("• " + fact.get("statement", ""), body))
+        story.append(Paragraph(
+            escape("• " + str(fact.get("statement", ""))),
+            body,
+        ))
     story.append(Paragraph("Root-cause hypotheses", heading))
     for item in result.get("hypotheses", []):
-        story.append(Paragraph(f"{item.get('rank')}. {item.get('title')} [{item.get('confidence_level')}]", body))
-        story.append(Paragraph(item.get("description", ""), body))
+        story.append(Paragraph(escape(
+            f"{item.get('rank')}. {item.get('title')} "
+            f"[{item.get('confidence_level')}]"
+        ), body))
+        story.append(Paragraph(
+            escape(str(item.get("description", ""))),
+            body,
+        ))
     story.append(PageBreak())
     story.append(Paragraph("Recommended actions", heading))
     for action in result.get("recommended_actions", []):
-        story.append(Paragraph(f"[{action.get('priority')}] {action.get('action')} — {action.get('reason')}", body))
-    SimpleDocTemplate(str(path), pagesize=A4, rightMargin=15 * mm, leftMargin=15 * mm, topMargin=15 * mm, bottomMargin=15 * mm).build(story)
-    return _record_report(case_id, analysis_id, "pdf", path, version)
+        story.append(Paragraph(escape(
+            f"[{action.get('priority')}] {action.get('action')} "
+            f"— {action.get('reason')}"
+        ), body))
+    report = _reserve_report(case_id, analysis_id, "pdf")
+    path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.pdf"
+    temporary = path.with_name(f".{path.name}.{report.id}.tmp")
+    try:
+        SimpleDocTemplate(
+            str(temporary),
+            pagesize=A4,
+            rightMargin=15 * mm,
+            leftMargin=15 * mm,
+            topMargin=15 * mm,
+            bottomMargin=15 * mm,
+        ).build(story)
+        return _publish_report(report, temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        _discard_report(report.id)
+        raise

@@ -231,13 +231,28 @@ class ModelProfile(Base):
     config_json: Mapped[str] = mapped_column(Text, default="{}")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    active_embedding_generation_id: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class KnowledgeEmbedding(Base):
     __tablename__ = "knowledge_embeddings"
-    __table_args__ = (UniqueConstraint("chunk_id", "profile_id", name="uq_knowledge_embedding_profile"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "chunk_id",
+            "profile_id",
+            "generation_id",
+            name="uq_knowledge_embedding_generation",
+        ),
+        Index(
+            "ix_knowledge_embeddings_profile_generation",
+            "profile_id",
+            "generation_id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     chunk_id: Mapped[str] = mapped_column(
@@ -246,6 +261,7 @@ class KnowledgeEmbedding(Base):
     profile_id: Mapped[str] = mapped_column(
         ForeignKey("model_profiles.id", ondelete="CASCADE"), index=True
     )
+    generation_id: Mapped[str] = mapped_column(String(40), default="legacy", index=True)
     dimension: Mapped[int] = mapped_column(Integer)
     vector_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -263,6 +279,9 @@ class Repository(Base):
     commit_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="UPLOADED")
     graph_status: Mapped[str] = mapped_column(String(32), default="NOT_INDEXED", index=True)
+    active_graph_generation_id: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, index=True
+    )
     commit_graph_status: Mapped[str] = mapped_column(String(32), default="NOT_INDEXED", index=True)
     index_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -271,9 +290,14 @@ class Repository(Base):
 
 class CodeSymbol(Base):
     __tablename__ = "code_symbols"
+    __table_args__ = (
+        Index("ix_code_symbols_repo_generation", "repository_id", "generation_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     repository_id: Mapped[str] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
+    generation_id: Mapped[str] = mapped_column(String(40), default="legacy", index=True)
+    logical_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(32), index=True)
     name: Mapped[str] = mapped_column(String(255), index=True)
     file_path: Mapped[str] = mapped_column(Text, index=True)
@@ -290,6 +314,7 @@ class CodeRelation(Base):
     __tablename__ = "code_relations"
     __table_args__ = (
         Index("ix_code_relations_repo_type", "repository_id", "relation_type"),
+        Index("ix_code_relations_repo_generation", "repository_id", "generation_id"),
         Index("ix_code_relations_source_target", "source_symbol_id", "target_symbol_id"),
     )
 
@@ -297,6 +322,8 @@ class CodeRelation(Base):
     repository_id: Mapped[str] = mapped_column(
         ForeignKey("repositories.id", ondelete="CASCADE"), index=True
     )
+    generation_id: Mapped[str] = mapped_column(String(40), default="legacy", index=True)
+    logical_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     source_symbol_id: Mapped[str] = mapped_column(
         ForeignKey("code_symbols.id", ondelete="CASCADE"), index=True
     )
@@ -427,6 +454,15 @@ class ConversationMessage(Base):
 
 class Report(Base):
     __tablename__ = "reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id",
+            "analysis_run_id",
+            "format",
+            "version",
+            name="uq_report_case_analysis_format_version",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)

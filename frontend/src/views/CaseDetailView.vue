@@ -251,19 +251,26 @@ async function analyze() {
 
 function watchJob(job: Job) {
   currentJob.value = job
-  if (jobTimer.value) window.clearInterval(jobTimer.value)
-  jobTimer.value = window.setInterval(async () => {
-    const { data } = await api.get(`/jobs/${job.id}`)
-    currentJob.value = data
-    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(data.status)) {
-      if (jobTimer.value) window.clearInterval(jobTimer.value)
+  if (jobTimer.value) window.clearTimeout(jobTimer.value)
+  const poll = async () => {
+    try {
+      const { data } = await api.get(`/jobs/${job.id}`)
+      currentJob.value = data
+      if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(data.status)) {
+        jobTimer.value = null
+        if (data.status === 'COMPLETED') ElMessage.success('任务执行完成')
+        else if (data.status === 'CANCELLED') ElMessage.warning('任务已取消')
+        else ElMessage.error(data.error_message || '任务失败')
+        await loadAll()
+        return
+      }
+      jobTimer.value = window.setTimeout(() => void poll(), 1200)
+    } catch (error: any) {
       jobTimer.value = null
-      if (data.status === 'COMPLETED') ElMessage.success('任务执行完成')
-      else if (data.status === 'CANCELLED') ElMessage.warning('任务已取消')
-      else ElMessage.error(data.error_message || '任务失败')
-      await loadAll()
+      ElMessage.error(error?.response?.data?.detail || error?.message || '任务状态查询失败')
     }
-  }, 1200)
+  }
+  void poll()
 }
 
 async function cancelCurrentJob() {
@@ -395,16 +402,23 @@ async function ask() {
 
 async function uploadRepo() {
   if (!repoFile.value) return ElMessage.warning('请选择代码仓库归档或 Git Bundle')
-  const data = new FormData()
-  data.append('file', repoFile.value)
-  const result = (await api.post(`/cases/${caseId}/repositories`, data)).data
-  repoFile.value = null
-  repositories.value = (await api.get(`/cases/${caseId}/repositories`)).data
-  ElMessage.success(
-    result.git_history_available
-      ? `代码仓库和 Git 历史已上传，共 ${result.files} 个文件`
-      : `代码仓库已上传，共 ${result.files} 个文件；普通压缩包不包含 Commit 历史`
-  )
+  try {
+    const data = new FormData()
+    data.append('file', repoFile.value)
+    const result = (
+      await api.post(
+        `/cases/${caseId}/repositories`,
+        data,
+        { timeout: 15 * 60 * 1000 }
+      )
+    ).data
+    repoFile.value = null
+    repositories.value = (await api.get(`/cases/${caseId}/repositories`)).data
+    ElMessage.info('仓库已上传，正在后台解压并校验')
+    watchJob(result.job)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '仓库上传失败')
+  }
 }
 
 async function indexRepo(repositoryId: string) {
@@ -433,7 +447,7 @@ async function suggestPatch(symbolId: string) {
 
 onMounted(loadAll)
 onBeforeUnmount(() => {
-  if (jobTimer.value) window.clearInterval(jobTimer.value)
+  if (jobTimer.value) window.clearTimeout(jobTimer.value)
 })
 </script>
 
@@ -680,7 +694,7 @@ onBeforeUnmount(() => {
           <el-table-column prop="commit_graph_status" label="Commit 图谱" width="130"/>
           <el-table-column prop="branch" label="分支" width="120"/>
           <el-table-column prop="commit_hash" label="Commit" width="160" show-overflow-tooltip/>
-          <el-table-column label="操作" width="280"><template #default="scope"><el-button link type="primary" :disabled="!canEditCase" @click="indexRepo(scope.row.id)">建立索引</el-button><el-button link @click="loadSymbols(scope.row.id)">查看符号</el-button><el-button link type="warning" :disabled="!canEditCase" @click="runStatic(scope.row.id)">静态分析</el-button></template></el-table-column>
+          <el-table-column label="操作" width="280"><template #default="scope"><el-button link type="primary" :disabled="!canEditCase || !['UPLOADED', 'INDEXED', 'INDEX_FAILED'].includes(scope.row.status)" @click="indexRepo(scope.row.id)">建立索引</el-button><el-button link @click="loadSymbols(scope.row.id)">查看符号</el-button><el-button link type="warning" :disabled="!canEditCase || !['UPLOADED', 'INDEXED', 'INDEX_FAILED'].includes(scope.row.status)" @click="runStatic(scope.row.id)">静态分析</el-button></template></el-table-column>
         </el-table>
         <div class="toolbar" style="margin-top:18px"><el-input v-model="symbolSearch" placeholder="函数名、宏名或文件路径" style="width:300px"/><el-button v-if="repositories[0]" @click="loadSymbols(repositories[0].id)">搜索符号</el-button></div>
         <el-table :data="symbols" height="450">

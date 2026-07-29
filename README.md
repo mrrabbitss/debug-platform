@@ -367,6 +367,13 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 
 后台解析、索引和诊断任务的状态保存在数据库中。后端重启后会恢复未完成任务；同一种输入的活动任务会去重，失败任务会恢复案例/制品状态并保留可读错误信息。
 
+知识文件和代码仓上传采用两阶段协议：HTTP 请求只流式保存原文件并返回
+`202 Accepted` 及 `job`；Markdown 读取/切块/Embedding、归档解压和 Git Bundle
+clone 在后台任务中执行。前端和 VS Code 扩展会跟踪该任务，完成后才允许建立代码图谱。
+
+代码图谱和全量向量重建均使用 generation：新版本在旁路构建，成功后一次切换
+active generation，再清理旧版本；构建失败时查询继续使用最后一次成功结果。
+
 需要 Commit 意图追溯时，普通 ZIP/TAR 不够；请在待分析源码仓根目录生成并上传
 Git Bundle：
 
@@ -387,7 +394,7 @@ GET  /api/v1/cases/{case_id}/events
 GET  /api/v1/cases/{case_id}/timeline
 POST /api/v1/cases/{case_id}/analyses
 POST /api/v1/cases/{case_id}/chat
-POST /api/v1/knowledge/upload
+POST /api/v1/knowledge/upload                       # 202 + import job
 PATCH /api/v1/knowledge/{document_id}
 GET   /api/v1/knowledge/templates/fault-case
 POST  /api/v1/knowledge/{document_id}/extract-method
@@ -408,7 +415,7 @@ GET   /api/v1/health/live
 GET   /api/v1/health/ready
 POST  /api/v1/jobs/{job_id}/cancel
 POST  /api/v1/jobs/{job_id}/retry
-POST /api/v1/cases/{case_id}/repositories
+POST /api/v1/cases/{case_id}/repositories           # 202 + import job
 POST /api/v1/repositories/{repository_id}/index
 GET  /api/v1/repositories/{repository_id}/graph
 GET  /api/v1/repositories/{repository_id}/graph/search

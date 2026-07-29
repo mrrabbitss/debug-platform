@@ -227,6 +227,18 @@ class JobOut(ORMModel):
     completed_at: datetime | None
 
 
+class RepositoryImportOut(BaseModel):
+    repository_id: str
+    artifact_id: str
+    job: JobOut
+
+
+class KnowledgeImportOut(BaseModel):
+    document_id: str
+    artifact_id: str
+    job: JobOut
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=10000)
 

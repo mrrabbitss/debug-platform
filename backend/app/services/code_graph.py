@@ -16,7 +16,8 @@ def _symbol_to_node(
     hop: int = 0,
 ) -> dict[str, Any]:
     return {
-        "id": symbol.id,
+        "id": symbol.logical_id or symbol.id,
+        "revision_id": symbol.id,
         "node_type": "code_symbol",
         "kind": symbol.kind,
         "name": symbol.name,
@@ -32,15 +33,23 @@ def _symbol_to_node(
 
 
 def _relation_to_edge(relation: CodeRelation, *, hop: int = 0) -> dict[str, Any]:
+    evidence = json_loads(relation.evidence_json, {})
     return {
-        "id": relation.id,
-        "source": relation.source_symbol_id,
-        "target": relation.target_symbol_id,
+        "id": relation.logical_id or relation.id,
+        "revision_id": relation.id,
+        "source": (
+            evidence.get("source_evidence_id")
+            or relation.source_symbol_id
+        ),
+        "target": (
+            evidence.get("target_evidence_id")
+            or relation.target_symbol_id
+        ),
         "target_name": relation.target_name,
         "relation_type": relation.relation_type,
         "confidence": relation.confidence,
         "hop": hop,
-        "evidence": json_loads(relation.evidence_json, {}),
+        "evidence": evidence,
     }
 
 
@@ -82,10 +91,46 @@ def search_code_graph(
     repository = db.get(Repository, repository_id)
     if not repository:
         raise ValueError("Repository not found")
+    generation_id = repository.active_graph_generation_id
+    if not generation_id:
+        return {
+            "repository_id": repository_id,
+            "query": query,
+            "generation_id": None,
+            "nodes": [],
+            "edges": [],
+            "paths": [],
+            "stats": {
+                "seed_count": 0,
+                "expanded_hops": 0,
+                "candidate_count": 0,
+            },
+        }
+    query_tokens = sorted(
+        {token for token in tokenize(query) if len(token) >= 2},
+        key=len,
+        reverse=True,
+    )[:12]
+    candidate_query = select(CodeSymbol).where(
+        CodeSymbol.repository_id == repository_id,
+        CodeSymbol.generation_id == generation_id,
+    )
+    if query_tokens:
+        token_conditions = []
+        for token in query_tokens:
+            pattern = f"%{token}%"
+            token_conditions.extend([
+                CodeSymbol.name.ilike(pattern),
+                CodeSymbol.file_path.ilike(pattern),
+                CodeSymbol.module.ilike(pattern),
+                CodeSymbol.signature.ilike(pattern),
+                CodeSymbol.code.ilike(pattern),
+            ])
+        candidate_query = candidate_query.where(or_(*token_conditions))
     symbols = list(db.scalars(
-        select(CodeSymbol)
-        .where(CodeSymbol.repository_id == repository_id)
-        .limit(50_000)
+        candidate_query
+        .order_by(CodeSymbol.file_path, CodeSymbol.line_start)
+        .limit(5_000)
     ).all())
     ranked = _lexical_symbol_scores(symbols, query)
     seeds = ranked[:max(3, min(limit, 20))]
@@ -93,10 +138,15 @@ def search_code_graph(
         return {
             "repository_id": repository_id,
             "query": query,
+            "generation_id": generation_id,
             "nodes": [],
             "edges": [],
             "paths": [],
-            "stats": {"seed_count": 0, "expanded_hops": 0},
+            "stats": {
+                "seed_count": 0,
+                "expanded_hops": 0,
+                "candidate_count": len(symbols),
+            },
         }
 
     symbol_map = {symbol.id: symbol for symbol in symbols}
@@ -114,11 +164,29 @@ def search_code_graph(
         expanded.add(symbol_id)
         relations = list(db.scalars(select(CodeRelation).where(
             CodeRelation.repository_id == repository_id,
+            CodeRelation.generation_id == generation_id,
             or_(
                 CodeRelation.source_symbol_id == symbol_id,
                 CodeRelation.target_symbol_id == symbol_id,
             ),
         ).limit(1000)).all())
+        related_ids = {
+            related_id
+            for relation in relations
+            for related_id in (
+                relation.source_symbol_id,
+                relation.target_symbol_id,
+            )
+            if related_id and related_id not in symbol_map
+        }
+        if related_ids:
+            related_symbols = db.scalars(select(CodeSymbol).where(
+                CodeSymbol.id.in_(related_ids),
+                CodeSymbol.generation_id == generation_id,
+            )).all()
+            symbol_map.update({
+                symbol.id: symbol for symbol in related_symbols
+            })
         for relation in relations:
             edge_map[relation.id] = relation
             neighbor_id = (
@@ -189,13 +257,20 @@ def search_code_graph(
             )
         if current in seed_ids and path_edges:
             paths.append({
-                "from": current,
-                "to": symbol_id,
+                "from": (
+                    symbol_map[current].logical_id
+                    or symbol_map[current].id
+                ),
+                "to": (
+                    symbol_map[symbol_id].logical_id
+                    or symbol_map[symbol_id].id
+                ),
                 "edges": list(reversed(path_edges)),
             })
     return {
         "repository_id": repository_id,
         "query": query,
+        "generation_id": generation_id,
         "nodes": nodes,
         "edges": edges,
         "paths": paths,
@@ -204,6 +279,7 @@ def search_code_graph(
             "expanded_hops": max(hop_map.values(), default=0),
             "node_count": len(nodes),
             "edge_count": len(edges),
+            "candidate_count": len(symbols),
         },
     }
 
@@ -219,6 +295,20 @@ def code_graph_snapshot(
     repository = db.get(Repository, repository_id)
     if not repository:
         raise ValueError("Repository not found")
+    generation_id = repository.active_graph_generation_id
+    if not generation_id:
+        return {
+            "repository_id": repository_id,
+            "generation_id": None,
+            "nodes": [],
+            "edges": [],
+            "stats": {
+                "node_count": 0,
+                "edge_count": 0,
+                "relation_types": {},
+                "symbol_kinds": {},
+            },
+        }
     if query:
         return search_code_graph(
             db,
@@ -228,7 +318,8 @@ def code_graph_snapshot(
             limit=min(limit, 100),
         )
     relation_query = select(CodeRelation).where(
-        CodeRelation.repository_id == repository_id
+        CodeRelation.repository_id == repository_id,
+        CodeRelation.generation_id == generation_id,
     )
     if relation_type:
         relation_query = relation_query.where(
@@ -245,16 +336,23 @@ def code_graph_snapshot(
     )).all()) if symbol_ids else []
     relation_counts = dict(db.execute(
         select(CodeRelation.relation_type, func.count(CodeRelation.id))
-        .where(CodeRelation.repository_id == repository_id)
+        .where(
+            CodeRelation.repository_id == repository_id,
+            CodeRelation.generation_id == generation_id,
+        )
         .group_by(CodeRelation.relation_type)
     ).all())
     symbol_counts = dict(db.execute(
         select(CodeSymbol.kind, func.count(CodeSymbol.id))
-        .where(CodeSymbol.repository_id == repository_id)
+        .where(
+            CodeSymbol.repository_id == repository_id,
+            CodeSymbol.generation_id == generation_id,
+        )
         .group_by(CodeSymbol.kind)
     ).all())
     return {
         "repository_id": repository_id,
+        "generation_id": generation_id,
         "query": None,
         "nodes": [_symbol_to_node(symbol) for symbol in symbols],
         "edges": [_relation_to_edge(relation) for relation in relations],

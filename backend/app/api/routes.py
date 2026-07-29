@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 from app.core.db import get_db
@@ -19,10 +20,10 @@ from app.schemas import (
     AccessTokenCreate, AgenticSearchRequest, AnalysisOut, ArtifactOut, CaseCreate,
     CaseMemberUpdate, CaseOut, CaseUpdate, ChatRequest, ChatResponse, JobOut, KnowledgeCategoryCreate,
     KnowledgeCategoryOut, KnowledgeCategoryUpdate, KnowledgeCreate, KnowledgeDetailOut,
-    KnowledgeOut, KnowledgeUpdate, ModelProfileCreate, ModelProfileOut, ModelProfileUpdate,
-    PatchRequest, StaticAnalysisRequest, UserCreate, UserUpdate,
+    KnowledgeImportOut, KnowledgeOut, KnowledgeUpdate, ModelProfileCreate, ModelProfileOut,
+    ModelProfileUpdate, PatchRequest, RepositoryImportOut, StaticAnalysisRequest, UserCreate,
+    UserUpdate,
 )
-from app.services.archive import UnsafeArchiveError, extract_archive
 from app.services.access_control import accessible_case_clause, case_permission, issue_access_token
 from app.services.agentic_search import agentic_search
 from app.services.audit import record_audit_event
@@ -31,14 +32,8 @@ from app.services.code_index import index_repository_job
 from app.services.commit_graph import commit_graph_snapshot
 from app.services.diagnosis import analyze_case_job, chat_about_case
 from app.services.events import active_log_event_clause
-from app.services.git_repository import (
-    GitRepositoryError,
-    clone_git_bundle,
-    find_git_worktree_root,
-    repository_head,
-    validate_git_worktree,
-)
 from app.services.health import readiness_report, system_status_report
+from app.services.import_jobs import import_knowledge_job, import_repository_job
 from app.services.jobs import job_runner
 from app.services.knowledge import index_document, reindex_knowledge_job
 from app.services.knowledge_methods import (
@@ -75,6 +70,18 @@ Db = Annotated[Session, Depends(get_db)]
 job_runner.register("parse_artifact", parse_artifact_job, ("case_id", "artifact_id"), cancellable=True)
 job_runner.register("analyze_case", analyze_case_job, ("case_id",), cancellable=True)
 job_runner.register("reindex_knowledge", reindex_knowledge_job, ("profile_id",), cancellable=True)
+job_runner.register(
+    "import_knowledge",
+    import_knowledge_job,
+    ("document_id", "artifact_id"),
+    cancellable=True,
+)
+job_runner.register(
+    "import_repository",
+    import_repository_job,
+    ("repository_id",),
+    cancellable=True,
+)
 job_runner.register("index_repository", index_repository_job, ("repository_id",))
 job_runner.register("static_analysis", static_analysis_job, ("repository_id", "tools"), cancellable=True)
 
@@ -972,7 +979,11 @@ def create_knowledge(payload: KnowledgeCreate, db: Db) -> dict:
     return _single_knowledge_response(db, document, detail=True)
 
 
-@router.post("/knowledge/upload", response_model=KnowledgeDetailOut)
+@router.post(
+    "/knowledge/upload",
+    response_model=KnowledgeImportOut,
+    status_code=202,
+)
 async def upload_knowledge(
     db: Db,
     file: UploadFile = File(...),
@@ -982,21 +993,70 @@ async def upload_knowledge(
     trust_level: str = Form(default="MEDIUM"),
     category_id: str | None = Form(default=None),
 ) -> dict:
-    raw = await file.read(get_settings().max_single_file_bytes + 1)
-    if len(raw) > get_settings().max_single_file_bytes:
+    artifact_id = new_id("ART")
+    document_id = new_id("DOC")
+    uploaded_name = Path(
+        (file.filename or "knowledge.md").replace("\\", "/")
+    ).name
+    try:
+        path, size, digest = await storage.save_upload(
+            file,
+            artifact_id,
+            target_name=uploaded_name,
+        )
+    except ValueError as exc:
+        storage.remove_artifact(artifact_id)
+        raise HTTPException(413, str(exc)) from exc
+    if size > get_settings().max_single_file_bytes:
+        storage.remove_artifact(artifact_id)
         raise HTTPException(413, "Knowledge file is too large")
-    content = raw.decode("utf-8", errors="replace")
-    document = KnowledgeDocument(
-        id=new_id("DOC"), title=file.filename or "Knowledge document", source_type=source_type,
-        device_type=device_type, module=module, trust_level=trust_level,
-        content=content, metadata_json=json_dumps({"original_name": file.filename}),
+    artifact = Artifact(
+        id=artifact_id,
+        case_id=None,
+        kind="knowledge_source",
+        original_name=uploaded_name,
+        stored_path=storage.storage_key(path),
+        sha256=digest,
+        size_bytes=size,
+        status="UPLOADED",
+        metadata_json=json_dumps({"document_id": document_id}),
     )
+    document = KnowledgeDocument(
+        id=document_id,
+        title=uploaded_name or "Knowledge document",
+        source_type=source_type,
+        device_type=device_type, module=module, trust_level=trust_level,
+        content="",
+        active=False,
+        metadata_json=json_dumps({
+            "original_name": uploaded_name,
+            "artifact_id": artifact_id,
+            "import_status": "QUEUED",
+            "source_bytes": size,
+        }),
+    )
+    db.add(artifact)
+    db.flush()
     db.add(document)
     db.flush()
     set_document_category(db, document.id, category_id or get_default_category_id(db, source_type))
-    index_document(db, document)
-    db.refresh(document)
-    return _single_knowledge_response(db, document, detail=True)
+    db.commit()
+    job = job_runner.submit(
+        db,
+        "import_knowledge",
+        import_knowledge_job,
+        document_id,
+        artifact_id,
+        input_data={
+            "document_id": document_id,
+            "artifact_id": artifact_id,
+        },
+    )
+    return {
+        "document_id": document_id,
+        "artifact_id": artifact_id,
+        "job": job,
+    }
 
 
 @router.get("/knowledge", response_model=list[KnowledgeOut])
@@ -1271,7 +1331,11 @@ def delete_knowledge(document_id: str, db: Db) -> dict:
     }
 
 
-@router.post("/cases/{case_id}/repositories", response_model=dict)
+@router.post(
+    "/cases/{case_id}/repositories",
+    response_model=RepositoryImportOut,
+    status_code=202,
+)
 async def upload_repository(case_id: str, db: Db, file: UploadFile = File(...)) -> dict:
     if not db.get(Case, case_id):
         raise HTTPException(404, "Case not found")
@@ -1280,68 +1344,56 @@ async def upload_repository(case_id: str, db: Db, file: UploadFile = File(...)) 
     uploaded_name = Path((file.filename or "repository.zip").replace("\\", "/")).name
     try:
         path, size, digest = await storage.save_upload(file, artifact_id, target_name=uploaded_name)
-        destination = storage.repository_dir(repository_id)
-        if uploaded_name.lower().endswith(".bundle"):
-            git_manifest = clone_git_bundle(path, destination)
-            source_root = git_manifest.root
-            file_count = git_manifest.file_count
-            extracted_bytes = git_manifest.total_bytes
-            branch = git_manifest.branch
-            commit_hash = git_manifest.commit_hash
-            import_format = "git_bundle"
-        else:
-            manifest = extract_archive(path, destination)
-            detected_git_root = find_git_worktree_root(destination)
-            if detected_git_root:
-                validate_git_worktree(detected_git_root)
-                branch, commit_hash = repository_head(detected_git_root)
-                source_root = detected_git_root
-            else:
-                branch, commit_hash = None, None
-                source_root = destination
-            file_count = len(manifest.files)
-            extracted_bytes = manifest.total_bytes
-            import_format = "archive"
-    except (ValueError, UnsafeArchiveError, GitRepositoryError, OSError) as exc:
+    except ValueError as exc:
         storage.remove_artifact(artifact_id)
-        storage.remove_repository(repository_id)
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(413, str(exc)) from exc
+    import_format = (
+        "git_bundle"
+        if uploaded_name.lower().endswith(".bundle")
+        else "archive"
+    )
+    destination = storage.repository_dir(repository_id)
     artifact = Artifact(
         id=artifact_id, case_id=case_id, kind="source_repository", original_name=uploaded_name[:512],
-        stored_path=storage.storage_key(path), sha256=digest, size_bytes=size, status="EXTRACTED",
+        stored_path=storage.storage_key(path), sha256=digest, size_bytes=size, status="UPLOADED",
         metadata_json=json_dumps({
-            "manifest_file_count": file_count,
-            "extracted_bytes": extracted_bytes,
             "import_format": import_format,
-            "git_history_available": commit_hash is not None,
+            "import_status": "QUEUED",
         }),
     )
     repository = Repository(
         id=repository_id, case_id=case_id, artifact_id=artifact_id,
         name=Path(uploaded_name).stem[:255] or "repository",
-        root_path=storage.storage_key(source_root),
-        branch=branch,
-        commit_hash=commit_hash,
-        status="UPLOADED",
+        root_path=storage.storage_key(destination),
+        branch=None,
+        commit_hash=None,
+        status="IMPORT_QUEUED",
         graph_status="NOT_INDEXED",
-        commit_graph_status="NOT_INDEXED" if commit_hash else "UNAVAILABLE",
+        commit_graph_status="NOT_INDEXED",
         index_metadata_json=json_dumps({
             "import_format": import_format,
-            "git_history_available": commit_hash is not None,
+            "import_status": "QUEUED",
         }),
     )
     db.add(artifact)
     db.flush()
     db.add(repository)
     db.commit()
+    job = job_runner.submit(
+        db,
+        "import_repository",
+        import_repository_job,
+        repository_id,
+        input_data={
+            "case_id": case_id,
+            "repository_id": repository_id,
+            "artifact_id": artifact_id,
+        },
+    )
     return {
         "repository_id": repository_id,
         "artifact_id": artifact_id,
-        "files": file_count,
-        "import_format": import_format,
-        "git_history_available": commit_hash is not None,
-        "branch": branch,
-        "commit_hash": commit_hash,
+        "job": job,
     }
 
 
@@ -1354,6 +1406,7 @@ def list_repositories(case_id: str, db: Db) -> list[dict]:
             "name": row.name,
             "status": row.status,
             "graph_status": row.graph_status,
+            "active_graph_generation_id": row.active_graph_generation_id,
             "commit_graph_status": row.commit_graph_status,
             "branch": row.branch,
             "commit_hash": row.commit_hash,
@@ -1367,8 +1420,14 @@ def list_repositories(case_id: str, db: Db) -> list[dict]:
 
 @router.post("/repositories/{repository_id}/index", response_model=JobOut)
 def index_repository(repository_id: str, db: Db) -> Job:
-    if not db.get(Repository, repository_id):
+    repository = db.get(Repository, repository_id)
+    if not repository:
         raise HTTPException(404, "Repository not found")
+    if repository.status not in {"UPLOADED", "INDEXED", "INDEX_FAILED"}:
+        raise HTTPException(
+            409,
+            f"Repository import is not ready: {repository.status}",
+        )
     return job_runner.submit(db, "index_repository", index_repository_job, repository_id, input_data={"repository_id": repository_id})
 
 
@@ -1380,7 +1439,16 @@ def list_symbols(
     kind: str | None = None,
     limit: int = Query(default=300, ge=1, le=2000),
 ) -> list[dict]:
-    query = select(CodeSymbol).where(CodeSymbol.repository_id == repository_id)
+    repository = db.get(Repository, repository_id)
+    if not repository:
+        raise HTTPException(404, "Repository not found")
+    if not repository.active_graph_generation_id:
+        return []
+    query = select(CodeSymbol).where(
+        CodeSymbol.repository_id == repository_id,
+        CodeSymbol.generation_id
+        == repository.active_graph_generation_id,
+    )
     if search:
         query = query.where((CodeSymbol.name.ilike(f"%{search}%")) | (CodeSymbol.file_path.ilike(f"%{search}%")))
     if kind:
@@ -1388,7 +1456,9 @@ def list_symbols(
     rows = db.scalars(query.order_by(CodeSymbol.file_path, CodeSymbol.line_start).limit(limit)).all()
     return [
         {
-            "id": row.id, "kind": row.kind, "name": row.name, "file_path": row.file_path,
+            "id": row.logical_id or row.id,
+            "revision_id": row.id,
+            "kind": row.kind, "name": row.name, "file_path": row.file_path,
             "line_start": row.line_start, "line_end": row.line_end, "signature": row.signature,
             "module": row.module, "calls": json_loads(row.calls_json, []),
             "metadata": json_loads(row.metadata_json, {}), "code": row.code,
@@ -1460,8 +1530,14 @@ def get_repository_commit_graph(
 
 @router.post("/repositories/{repository_id}/static-analysis", response_model=JobOut)
 def run_static_analysis(repository_id: str, payload: StaticAnalysisRequest, db: Db) -> Job:
-    if not db.get(Repository, repository_id):
+    repository = db.get(Repository, repository_id)
+    if not repository:
         raise HTTPException(404, "Repository not found")
+    if repository.status not in {"UPLOADED", "INDEXED", "INDEX_FAILED"}:
+        raise HTTPException(
+            409,
+            f"Repository import is not ready: {repository.status}",
+        )
     return job_runner.submit(
         db, "static_analysis", static_analysis_job, repository_id, payload.tools,
         input_data={"repository_id": repository_id, "tools": payload.tools},
@@ -1471,9 +1547,28 @@ def run_static_analysis(repository_id: str, payload: StaticAnalysisRequest, db: 
 @router.post("/cases/{case_id}/patch-suggestions")
 async def patch_suggestion(case_id: str, payload: PatchRequest, db: Db) -> dict:
     case = db.get(Case, case_id)
-    symbol = db.get(CodeSymbol, payload.symbol_id)
+    symbol = db.scalars(
+        select(CodeSymbol)
+        .join(Repository, CodeSymbol.repository_id == Repository.id)
+        .where(
+            Repository.case_id == case_id,
+            CodeSymbol.generation_id
+            == Repository.active_graph_generation_id,
+            or_(
+                CodeSymbol.logical_id == payload.symbol_id,
+                CodeSymbol.id == payload.symbol_id,
+            ),
+        )
+        .limit(1)
+    ).first()
     repository = db.get(Repository, symbol.repository_id) if symbol else None
-    if not case or not symbol or not repository or repository.case_id != case_id:
+    if (
+        not case
+        or not symbol
+        or not repository
+        or repository.case_id != case_id
+        or symbol.generation_id != repository.active_graph_generation_id
+    ):
         raise HTTPException(404, "Case or symbol not found")
     latest = db.scalars(
         select(AnalysisRun).where(AnalysisRun.case_id == case_id, AnalysisRun.status == "COMPLETED")
@@ -1666,6 +1761,7 @@ def update_model_profile(profile_id: str, payload: ModelProfileUpdate, db: Db) -
     after_signature = (profile.mode, profile.provider, profile.model_name, profile.base_url, profile.config_json)
     if profile.task_type == "embedding" and before_signature != after_signature:
         db.execute(delete(KnowledgeEmbedding).where(KnowledgeEmbedding.profile_id == profile.id))
+        profile.active_embedding_generation_id = None
     db.commit()
     db.refresh(profile)
     return model_profile_to_dict(profile)
@@ -1721,19 +1817,23 @@ async def test_model_profile(profile_id: str, db: Db) -> dict:
                 "model": provider.model_name,
             }
         if profile.task_type == "embedding":
-            vectors = embed_texts(
-                profile,
-                ["GW 无法上线", "AP 认证失败"],
-                purpose="connection_test",
+            vectors = await run_in_threadpool(
+                lambda: embed_texts(
+                    profile,
+                    ["GW 无法上线", "AP 认证失败"],
+                    purpose="connection_test",
+                )
             )
             dimension = len(vectors[0]) if vectors else 0
             return {"ok": bool(dimension), "dimension": dimension, "vectors": len(vectors)}
-        ranking = rerank_documents(
-            "AP 认证失败如何排查",
-            ["检查 EAP 和四次握手日志", "查询设备外壳颜色"],
-            2,
-            profile,
-            purpose="connection_test",
+        ranking = await run_in_threadpool(
+            lambda: rerank_documents(
+                "AP 认证失败如何排查",
+                ["检查 EAP 和四次握手日志", "查询设备外壳颜色"],
+                2,
+                profile,
+                purpose="connection_test",
+            )
         )
         return {"ok": ranking is None or bool(ranking), "ranking": ranking or [], "disabled": ranking is None}
     except (LLMError, RetrievalModelError, ValueError) as exc:
@@ -1748,7 +1848,10 @@ def retrieval_config(db: Db) -> dict:
     return {
         "embedding": embedding_index_status(db),
         "reranker": model_profile_to_dict(reranker) if reranker else None,
-        "knowledge_storage": "SQLite documents/chunks + profile-specific SQLite vector cache",
+        "knowledge_storage": (
+            f"{db.get_bind().dialect.name} documents/chunks + "
+            "generation-scoped vector cache"
+        ),
         "knowledge_graph": {
             "enabled": True,
             "kind": "derivation_lineage",
@@ -1756,8 +1859,22 @@ def retrieval_config(db: Db) -> dict:
             "derivations": int(db.scalar(select(func.count(KnowledgeDerivation.id))) or 0),
         },
         "code_graph": {
-            "symbols": int(db.scalar(select(func.count(CodeSymbol.id))) or 0),
-            "relations": int(db.scalar(select(func.count(CodeRelation.id))) or 0),
+            "symbols": int(db.scalar(
+                select(func.count(CodeSymbol.id))
+                .join(Repository, CodeSymbol.repository_id == Repository.id)
+                .where(
+                    CodeSymbol.generation_id
+                    == Repository.active_graph_generation_id
+                )
+            ) or 0),
+            "relations": int(db.scalar(
+                select(func.count(CodeRelation.id))
+                .join(Repository, CodeRelation.repository_id == Repository.id)
+                .where(
+                    CodeRelation.generation_id
+                    == Repository.active_graph_generation_id
+                )
+            ) or 0),
         },
         "commit_graph": {
             "commits": int(db.scalar(select(func.count(CommitRecord.id))) or 0),

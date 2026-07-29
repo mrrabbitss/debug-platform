@@ -203,11 +203,15 @@ Commit 图谱保存 hash、父提交、作者、时间、主题、正文以及�
 
 统一排序流程：
 
-1. 知识模块执行 BM25、精确词、已索引 Dense 和可选 Reranker；
+1. 知识模块先生成有界 BM25/精确词原始候选，不在模块内重复调用模型；
 2. 记忆和 Commit 模块执行 BM25，代码模块执行词法定位和关系扩展；
-3. 使用 Reciprocal Rank Fusion 合并不同模块；
+3. 使用加权 Reciprocal Rank Fusion 合并不同模块，并以轮询配额避免单模块挤占候选；
 4. 使用当前活动 Embedding 对跨模块候选统一计算余弦相似度；
-5. 当前活动 Reranker 对候选进行最终排序；未配置或失败时保留融合结果。
+5. 当前活动 Reranker 只执行一次最终排序；未配置或失败时保留融合结果。
+
+知识 Dense 检索在配置 Qdrant 时直接执行有界 top-K；SQLite/PostgreSQL 回退只扫描
+向量行并在取回正文前裁剪候选。全量 Embedding 和代码图谱重建都使用 generation
+旁路构建，只有完整成功后才切换活动版本。
 
 Embedding 或 Reranker 使用 API Profile 时，候选知识、记忆或源码片段可能发送到该
 模型端点。企业环境必须先确认日志和源码的数据出站策略；需要完全本地处理时使用
@@ -221,6 +225,7 @@ GET  /api/v1/knowledge/templates/fault-case
 POST /api/v1/knowledge/{document_id}/extract-method
 
 POST /api/v1/cases/{case_id}/repositories
+GET  /api/v1/jobs/{job_id}
 POST /api/v1/repositories/{repository_id}/index
 GET  /api/v1/repositories/{repository_id}/graph
 GET  /api/v1/repositories/{repository_id}/graph/search
@@ -230,6 +235,9 @@ POST /api/v1/cases/{case_id}/agentic-search
 GET  /api/v1/cases/{case_id}/memories
 GET  /api/v1/system/retrieval
 ```
+
+仓库上传返回 `202 Accepted`，响应中的 `job` 完成后才能调用索引接口。知识文件上传
+同样返回后台导入任务，避免大文件读取、解压、切块和模型推理占用 FastAPI 事件循环。
 
 Agentic Search 示例：
 
@@ -270,7 +278,7 @@ npm.cmd run build
 - 真实临时 Git 仓的 Commit、Unicode 路径和 Git Bundle 导入；
 - 三类记忆生成、去重、脱敏、案例隔离和复用计数；
 - Agentic Search 计划、知识/记忆融合、Dense、Reranker 回退和失败记忆；
-- Alembic `0007` 新建数据库及旧数据库升级。
+- Alembic `0008` 新建数据库、旧数据库升级、generation 回滚和报告版本唯一性。
 
 真实企业源码和日志仍应在内部环境建立经过脱敏的 Golden Corpus，用 Recall、MRR、
 NDCG、多跳路径准确率和工程师复核结果持续评估。

@@ -40,6 +40,7 @@ def _case_repository(
         artifact_id=artifact_id,
         name=case_id,
         root_path=f"repositories/{repository_id}/extracted",
+        active_graph_generation_id="legacy",
     ))
     db.flush()
     db.add(CodeSymbol(
@@ -84,7 +85,11 @@ def _database(tmp_path: Path):
 def test_code_retrieval_never_crosses_case_boundary(tmp_path: Path, monkeypatch) -> None:
     engine, session_factory = _database(tmp_path)
     monkeypatch.setattr(rag, "SessionLocal", session_factory)
-    monkeypatch.setattr(rag, "embedding_scores", lambda query, chunk_ids: {})
+    monkeypatch.setattr(
+        rag,
+        "embedding_search",
+        lambda query, limit, **kwargs: {},
+    )
     monkeypatch.setattr(rag, "rerank_documents", lambda query, documents, top_n: None)
 
     case_a_hits = rag.LocalHybridRetriever().search("caseonlyneedle", case_id="CASE-A")

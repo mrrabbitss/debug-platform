@@ -3,7 +3,7 @@ import math
 from time import perf_counter
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import CodeSymbol, Repository
@@ -30,6 +30,12 @@ CODE_INTENT_TERMS = {
     "代码", "函数", "方法", "调用", "引用", "继承", "实现", "接口", "类", "宏",
     "文件", "源码", "堆栈", "崩溃", "定位", "symbol", "function", "call", "reference",
     "inherit", "implement", "class", "interface", "source", "stack", "crash",
+}
+MODULE_WEIGHTS = {
+    "knowledge": 1.0,
+    "code": 1.0,
+    "commit": 0.9,
+    "memory": 0.9,
 }
 COMMIT_INTENT_TERMS = {
     "commit", "提交", "修改", "变更", "引入", "回归", "版本", "历史", "修复记录",
@@ -114,6 +120,7 @@ def _knowledge_candidates(
         device_type=device_type,
         top_k=limit,
         include_code_symbols=False,
+        apply_models=False,
     )
     return [
         {
@@ -172,9 +179,15 @@ def _code_candidates(
         )
         node_ids = {node["id"] for node in result["nodes"]}
         symbol_map = {
-            symbol.id: symbol
+            (symbol.logical_id or symbol.id): symbol
             for symbol in db.scalars(select(CodeSymbol).where(
-                CodeSymbol.id.in_(node_ids)
+                CodeSymbol.repository_id == repository.id,
+                CodeSymbol.generation_id
+                == repository.active_graph_generation_id,
+                or_(
+                    CodeSymbol.logical_id.in_(node_ids),
+                    CodeSymbol.id.in_(node_ids),
+                ),
             ))
         } if node_ids else {}
         path_by_target: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -232,7 +245,7 @@ def _commit_candidates(
             )
             symbol_summaries = [
                 {
-                    "symbol_id": symbol.id,
+                    "symbol_id": symbol.logical_id or symbol.id,
                     "name": symbol.name,
                     "kind": symbol.kind,
                     "file_path": symbol.file_path,
@@ -259,7 +272,7 @@ def _commit_candidates(
                     "commit_id": commit["evidence_id"],
                     "commit_hash": commit["commit_hash"],
                     "file_path": symbol.file_path,
-                    "symbol_id": symbol.id,
+                    "symbol_id": symbol.logical_id or symbol.id,
                 }
                 for symbol in symbols[:50]
             ]
@@ -290,6 +303,8 @@ def _fuse_module_results(
 ) -> list[dict[str, Any]]:
     fused: dict[tuple[str, str], dict[str, Any]] = {}
     for module, candidates in module_results.items():
+        module_size = max(len(candidates), 1)
+        module_weight = MODULE_WEIGHTS.get(module, 1.0)
         for rank, candidate in enumerate(candidates, start=1):
             key = (str(candidate["source_type"]), str(candidate["evidence_id"]))
             existing = fused.get(key)
@@ -298,12 +313,17 @@ def _fuse_module_results(
                     **candidate,
                     "modules": [],
                     "module_ranks": {},
+                    "module_score": 0.0,
                     "fusion_score": 0.0,
                 }
                 fused[key] = existing
             existing["modules"].append(module)
             existing["module_ranks"][module] = rank
-            existing["fusion_score"] += 1.0 / (60 + rank)
+            existing["fusion_score"] += module_weight / (60 + rank)
+            existing["module_score"] = max(
+                float(existing["module_score"]),
+                module_weight * (module_size - rank + 1) / module_size,
+            )
             existing["source_score"] = max(
                 float(existing.get("source_score", 0.0)),
                 float(candidate.get("source_score", 0.0)),
@@ -315,9 +335,45 @@ def _fuse_module_results(
                 ]
     return sorted(
         fused.values(),
-        key=lambda item: (item["fusion_score"], item["source_score"]),
+        key=lambda item: (item["fusion_score"], item["module_score"]),
         reverse=True,
     )
+
+
+def _balanced_candidate_pool(
+    candidates: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Keep one module from crowding every dense/rerank candidate slot."""
+    if len(candidates) <= limit:
+        return candidates
+    by_module: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for candidate in candidates:
+        modules = candidate.get("modules") or ["unknown"]
+        by_module[str(modules[0])].append(candidate)
+    ordered_modules = [
+        module for module in MODULE_WEIGHTS if by_module.get(module)
+    ]
+    ordered_modules.extend(
+        module
+        for module in by_module
+        if module not in ordered_modules
+    )
+    selected: list[dict[str, Any]] = []
+    offset = 0
+    while len(selected) < limit:
+        added = False
+        for module in ordered_modules:
+            module_candidates = by_module[module]
+            if offset < len(module_candidates):
+                selected.append(module_candidates[offset])
+                added = True
+                if len(selected) >= limit:
+                    break
+        if not added:
+            break
+        offset += 1
+    return selected
 
 
 def _apply_dense_scores(
@@ -328,7 +384,7 @@ def _apply_dense_scores(
     profile = get_active_model_profile("embedding", db)
     if not profile or not candidates:
         return candidates, {"status": "SKIPPED", "reason": "No active embedding profile"}
-    selected = candidates[:80]
+    selected = _balanced_candidate_pool(candidates, 80)
     for item in candidates:
         item["dense_score"] = None
         item["combined_score"] = item["fusion_score"] * 20
@@ -461,7 +517,7 @@ def agentic_search(
     per_module_limit = max(top_k * 3, 20)
     indexed_code_repositories = [
         repository for repository in repositories
-        if repository.graph_status == "INDEXED"
+        if repository.active_graph_generation_id
     ]
     indexed_commit_repositories = [
         repository for repository in repositories

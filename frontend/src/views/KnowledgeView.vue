@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
-import type { KnowledgeCategory, KnowledgeDocument } from '../types'
+import type { Job, KnowledgeCategory, KnowledgeDocument } from '../types'
 
 const documents = ref<KnowledgeDocument[]>([])
 const categories = ref<KnowledgeCategory[]>([])
@@ -82,6 +82,18 @@ const categoryTree = computed(() => {
 
 function errorText(error: any) {
   return error?.response?.data?.detail || error?.message || '操作失败'
+}
+
+async function waitForJob(initialJob: Job): Promise<Job> {
+  let job = initialJob
+  while (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)) {
+    await new Promise(resolve => window.setTimeout(resolve, 1000))
+    job = (await api.get(`/jobs/${job.id}`)).data
+  }
+  if (job.status !== 'COMPLETED') {
+    throw new Error(job.error_message || `知识导入任务${job.status === 'CANCELLED' ? '已取消' : '失败'}`)
+  }
+  return job
 }
 
 function sourceTypeLabel(value: string) {
@@ -269,7 +281,15 @@ async function upload() {
     const data = new FormData()
     data.append('file', file.value)
     Object.entries(uploadForm).forEach(([key, value]) => value && data.append(key, value))
-    await api.post('/knowledge/upload', data)
+    const result = (
+      await api.post(
+        '/knowledge/upload',
+        data,
+        { timeout: 15 * 60 * 1000 }
+      )
+    ).data
+    ElMessage.info('文档已上传，正在后台切分并建立索引')
+    await waitForJob(result.job)
     ElMessage.success('文档已切分并建立索引')
     uploadDialog.value = false
     file.value = null

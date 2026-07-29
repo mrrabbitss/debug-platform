@@ -350,10 +350,15 @@ def symbols_for_commit_paths(
 ) -> list[CodeSymbol]:
     if not file_paths:
         return []
+    repository = db.get(Repository, repository_id)
+    if not repository or not repository.active_graph_generation_id:
+        return []
     return list(db.scalars(
         select(CodeSymbol)
         .where(
             CodeSymbol.repository_id == repository_id,
+            CodeSymbol.generation_id
+            == repository.active_graph_generation_id,
             CodeSymbol.file_path.in_(file_paths),
         )
         .order_by(CodeSymbol.file_path, CodeSymbol.line_start)
@@ -440,8 +445,10 @@ def commit_graph_snapshot(
         limit=max(limit * 5, 100),
     )
     for symbol in symbols:
+        symbol_evidence_id = symbol.logical_id or symbol.id
         nodes.append({
-            "id": symbol.id,
+            "id": symbol_evidence_id,
+            "revision_id": symbol.id,
             "node_type": "code_symbol",
             "name": symbol.name,
             "kind": symbol.kind,
@@ -451,7 +458,7 @@ def commit_graph_snapshot(
         edges.append({
             "edge_type": "CONTAINS_SYMBOL",
             "source": f"FILE:{repository_id}:{symbol.file_path}",
-            "target": symbol.id,
+            "target": symbol_evidence_id,
         })
     return {
         "repository_id": repository_id,

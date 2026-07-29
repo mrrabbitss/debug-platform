@@ -21,6 +21,28 @@ async function config(context: vscode.ExtensionContext) {
   return { ...c, headers: apiKey ? { 'X-API-Key': apiKey } : {} }
 }
 
+async function waitForJob(
+  backend: string,
+  headers: Record<string, string | undefined>,
+  jobId: string,
+): Promise<any> {
+  for (let attempt = 0; attempt < 1800; attempt += 1) {
+    const response = await axios.get(`${backend}/jobs/${jobId}`, {
+      headers,
+      timeout: 30000,
+    })
+    if (response.data.status === 'COMPLETED') return response.data
+    if (['FAILED', 'CANCELLED'].includes(response.data.status)) {
+      throw new Error(
+        response.data.error_message
+        || `Background job ${response.data.status.toLowerCase()}`,
+      )
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000))
+  }
+  throw new Error('Timed out waiting for background import')
+}
+
 async function caseIdPrompt(): Promise<string | undefined> {
   const value = await vscode.window.showInputBox({
     prompt: 'GW/AP Debug Case ID',
@@ -39,7 +61,11 @@ async function uploadFile(
   const form = new FormData()
   form.append(field, fs.createReadStream(uri.fsPath), path.basename(uri.fsPath))
   const c = await config(context)
-  return axios.post(`${c.backend}${endpoint}`, form, { headers: { ...form.getHeaders(), ...c.headers }, maxBodyLength: Infinity, timeout: 300000 })
+  return axios.post(`${c.backend}${endpoint}`, form, {
+    headers: { ...form.getHeaders(), ...c.headers },
+    maxBodyLength: Infinity,
+    timeout: 15 * 60 * 1000,
+  })
 }
 
 async function zipWorkspace(root: string): Promise<string> {
@@ -121,8 +147,9 @@ export function activate(context: vscode.ExtensionContext) {
       try {
         const response = await uploadFile(context, caseId, vscode.Uri.file(zip), `/cases/${caseId}/repositories`)
         const c = await config(context)
+        await waitForJob(c.backend, c.headers, response.data.job.id)
         const job = await axios.post(`${c.backend}/repositories/${response.data.repository_id}/index`, {}, { headers: c.headers })
-        vscode.window.showInformationMessage(`Repository uploaded. Index job: ${job.data.id}`)
+        vscode.window.showInformationMessage(`Repository imported. Index job: ${job.data.id}`)
       } finally { fs.rmSync(zip, { force: true }) }
     })
   }))

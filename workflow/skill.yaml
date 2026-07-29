@@ -1,5 +1,5 @@
 name: gw-ap-debug-assistant
-version: 0.1.0
+version: 0.2.0
 description: Upload and diagnose GW/AP collectDebuginfo through the internal Debug Platform API.
 entrypoints:
   create_case:
@@ -8,6 +8,21 @@ entrypoints:
   upload_debug_info:
     method: POST
     path: /api/v1/cases/{case_id}/artifacts
+  upload_knowledge:
+    method: POST
+    path: /api/v1/knowledge/upload
+  upload_repository:
+    method: POST
+    path: /api/v1/cases/{case_id}/repositories
+  get_job:
+    method: GET
+    path: /api/v1/jobs/{job_id}
+  index_repository:
+    method: POST
+    path: /api/v1/repositories/{repository_id}/index
+  agentic_search:
+    method: POST
+    path: /api/v1/cases/{case_id}/agentic-search
   parse:
     method: POST
     path: /api/v1/cases/{case_id}/artifacts/{artifact_id}/parse
