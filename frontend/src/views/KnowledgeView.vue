@@ -2,7 +2,12 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
-import type { Job, KnowledgeCategory, KnowledgeDocument } from '../types'
+import type {
+  Job,
+  KnowledgeCategory,
+  KnowledgeDocument,
+  KnowledgeRevision
+} from '../types'
 
 const documents = ref<KnowledgeDocument[]>([])
 const categories = ref<KnowledgeCategory[]>([])
@@ -12,8 +17,12 @@ const loading = ref(false)
 const documentDialog = ref(false)
 const uploadDialog = ref(false)
 const categoryDialog = ref(false)
+const revisionDialog = ref(false)
 const editingDocumentId = ref<string | null>(null)
+const editingLockVersion = ref<number | null>(null)
 const editingCategoryId = ref<string | null>(null)
+const revisionDocument = ref<KnowledgeDocument | null>(null)
+const revisions = ref<KnowledgeRevision[]>([])
 const saving = ref(false)
 const file = ref<File | null>(null)
 
@@ -42,8 +51,7 @@ const documentForm = reactive({
   module: '',
   trust_level: 'MEDIUM',
   confidentiality: 'INTERNAL',
-  content: '',
-  active: true
+  content: ''
 })
 
 const uploadForm = reactive({
@@ -100,6 +108,23 @@ function sourceTypeLabel(value: string) {
   return sourceTypes.find(item => item.value === value)?.label || value
 }
 
+function reviewStatusLabel(value: KnowledgeDocument['review_status']) {
+  return {
+    DRAFT: '草稿',
+    IN_REVIEW: '待审核',
+    ACTIVE: '已发布',
+    REJECTED: '已驳回',
+    ARCHIVED: '已归档'
+  }[value] || value
+}
+
+function reviewStatusType(value: KnowledgeDocument['review_status']) {
+  if (value === 'ACTIVE') return 'success'
+  if (value === 'IN_REVIEW') return 'warning'
+  if (value === 'REJECTED') return 'danger'
+  return 'info'
+}
+
 function sourceTypeForCategory(categoryId: string) {
   const code = categoryMap.value.get(categoryId)?.code || ''
   if (code === 'history.cases') return 'fault_case'
@@ -152,6 +177,7 @@ function selectCategory(category: KnowledgeCategory) {
 
 function resetDocumentForm() {
   editingDocumentId.value = null
+  editingLockVersion.value = null
   documentForm.title = ''
   documentForm.category_id = selectedCategoryId.value
   documentForm.source_type = sourceTypeForCategory(selectedCategoryId.value)
@@ -162,7 +188,6 @@ function resetDocumentForm() {
   documentForm.trust_level = 'MEDIUM'
   documentForm.confidentiality = 'INTERNAL'
   documentForm.content = ''
-  documentForm.active = true
 }
 
 function openCreateDocument() {
@@ -231,7 +256,7 @@ async function openEditDocument(document: KnowledgeDocument) {
     documentForm.trust_level = detail.trust_level
     documentForm.confidentiality = detail.confidentiality
     documentForm.content = detail.content || ''
-    documentForm.active = detail.active
+    editingLockVersion.value = detail.lock_version
     documentDialog.value = true
   } catch (error) {
     ElMessage.error(errorText(error))
@@ -250,11 +275,18 @@ async function saveDocument() {
       device_type: documentForm.device_type || null,
       device_model: documentForm.device_model || null,
       firmware_range: documentForm.firmware_range || null,
-      module: documentForm.module || null
+      module: documentForm.module || null,
+      ...(editingDocumentId.value
+        ? { expected_lock_version: editingLockVersion.value }
+        : {})
     }
     if (editingDocumentId.value) await api.patch(`/knowledge/${editingDocumentId.value}`, payload)
     else await api.post('/knowledge', payload)
-    ElMessage.success(editingDocumentId.value ? '知识内容已修改并重建索引' : '知识内容已新增并建立索引')
+    ElMessage.success(
+      editingDocumentId.value
+        ? '知识内容已修改并生成新草稿版本，请重新审核发布'
+        : '知识草稿已新增并建立索引，请审核后发布'
+    )
     documentDialog.value = false
     await load()
   } catch (error) {
@@ -290,7 +322,7 @@ async function upload() {
     ).data
     ElMessage.info('文档已上传，正在后台切分并建立索引')
     await waitForJob(result.job)
-    ElMessage.success('文档已切分并建立索引')
+    ElMessage.success('文档已切分并建立草稿，请审核后发布')
     uploadDialog.value = false
     file.value = null
     await load()
@@ -307,6 +339,65 @@ async function removeDocument(document: KnowledgeDocument) {
     await api.delete(`/knowledge/${document.id}`)
     ElMessage.success('知识已删除')
     await load()
+  } catch (error: any) {
+    if (error !== 'cancel') ElMessage.error(errorText(error))
+  }
+}
+
+async function reviewAction(
+  document: KnowledgeDocument,
+  action: 'submit' | 'approve' | 'reject' | 'archive'
+) {
+  const labels = {
+    submit: '提交审核',
+    approve: '审核通过并发布',
+    reject: '驳回',
+    archive: '归档'
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认对“${document.title}”执行“${labels[action]}”？`,
+      labels[action],
+      { type: action === 'reject' || action === 'archive' ? 'warning' : 'info' }
+    )
+    await api.post(`/knowledge/${document.id}/review/${action}`, {
+      expected_lock_version: document.lock_version
+    })
+    ElMessage.success(`${labels[action]}成功`)
+    await loadDocuments()
+  } catch (error: any) {
+    if (error !== 'cancel') ElMessage.error(errorText(error))
+  }
+}
+
+async function openRevisions(document: KnowledgeDocument) {
+  try {
+    revisionDocument.value = document
+    revisions.value = (
+      await api.get(`/knowledge/${document.id}/revisions`)
+    ).data
+    revisionDialog.value = true
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  }
+}
+
+async function rollbackRevision(revision: KnowledgeRevision) {
+  const document = revisionDocument.value
+  if (!document) return
+  try {
+    await ElMessageBox.confirm(
+      `将“${document.title}”恢复为 v${revision.version} 的内容？系统会生成一个新的草稿版本，不会覆盖历史。`,
+      '恢复历史版本',
+      { type: 'warning' }
+    )
+    await api.post(
+      `/knowledge/${document.id}/revisions/${revision.version}/rollback`,
+      { expected_lock_version: document.lock_version }
+    )
+    ElMessage.success('已从历史版本生成新草稿')
+    revisionDialog.value = false
+    await loadDocuments()
   } catch (error: any) {
     if (error !== 'cancel') ElMessage.error(errorText(error))
   }
@@ -416,6 +507,16 @@ onMounted(load)
           <el-table-column prop="device_type" label="设备" width="80" />
           <el-table-column prop="module" label="模块" width="100" />
           <el-table-column label="可信级别" width="100"><template #default="scope"><el-tag :type="scope.row.trust_level === 'HIGH' ? 'success' : scope.row.trust_level === 'LOW' ? 'warning' : 'info'">{{ scope.row.trust_level }}</el-tag></template></el-table-column>
+          <el-table-column label="审核状态" width="105">
+            <template #default="scope">
+              <el-tag :type="reviewStatusType(scope.row.review_status)">
+                {{ reviewStatusLabel(scope.row.review_status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="版本" width="80">
+            <template #default="scope">v{{ scope.row.version }}</template>
+          </el-table-column>
           <el-table-column label="结构完整度" width="120">
             <template #default="scope">
               <template v-if="scope.row.metadata?.markdown_structure">
@@ -437,9 +538,33 @@ onMounted(load)
             </template>
           </el-table-column>
           <el-table-column label="索引" width="100"><template #default="scope"><el-tooltip v-if="scope.row.metadata?.embedding_error" :content="scope.row.metadata.embedding_error"><el-tag type="danger">向量失败</el-tag></el-tooltip><el-tag v-else type="success">{{ scope.row.chunk_count }} 分块</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="230" fixed="right">
+          <el-table-column label="操作" width="420" fixed="right">
             <template #default="scope">
               <el-button link type="primary" @click="openEditDocument(scope.row as KnowledgeDocument)">修改</el-button>
+              <el-button
+                v-if="['DRAFT', 'REJECTED'].includes(scope.row.review_status)"
+                link
+                type="warning"
+                @click="reviewAction(scope.row as KnowledgeDocument, 'submit')"
+              >
+                提交审核
+              </el-button>
+              <el-button
+                v-if="scope.row.review_status === 'IN_REVIEW'"
+                link
+                type="success"
+                @click="reviewAction(scope.row as KnowledgeDocument, 'approve')"
+              >
+                发布
+              </el-button>
+              <el-button
+                v-if="scope.row.review_status === 'IN_REVIEW'"
+                link
+                type="danger"
+                @click="reviewAction(scope.row as KnowledgeDocument, 'reject')"
+              >
+                驳回
+              </el-button>
               <el-button
                 v-if="canExtractMethod(scope.row as KnowledgeDocument)"
                 link
@@ -449,6 +574,15 @@ onMounted(load)
               >
                 提炼方法
               </el-button>
+              <el-button link @click="openRevisions(scope.row as KnowledgeDocument)">版本</el-button>
+              <el-button
+                v-if="scope.row.review_status === 'ACTIVE'"
+                link
+                type="warning"
+                @click="reviewAction(scope.row as KnowledgeDocument, 'archive')"
+              >
+                归档
+              </el-button>
               <el-button link type="danger" @click="removeDocument(scope.row as KnowledgeDocument)">删除</el-button>
             </template>
           </el-table-column>
@@ -457,6 +591,12 @@ onMounted(load)
     </div>
 
     <el-dialog v-model="documentDialog" :title="editingDocumentId ? '修改知识内容' : '新增知识内容'" width="800px" destroy-on-close>
+      <el-alert
+        title="保存会生成草稿；只有经过审核并发布的版本才会参与诊断检索。"
+        type="info"
+        :closable="false"
+        style="margin-bottom:16px"
+      />
       <el-form label-width="110px">
         <el-form-item label="标题"><el-input v-model="documentForm.title" /></el-form-item>
         <el-form-item label="所属分类"><el-tree-select v-model="documentForm.category_id" :data="categoryTree" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly clearable style="width:100%" /></el-form-item>
@@ -470,9 +610,36 @@ onMounted(load)
           <el-form-item label="可见级别"><el-select v-model="documentForm.confidentiality"><el-option label="内部" value="INTERNAL"/><el-option label="受限" value="RESTRICTED"/><el-option label="公开" value="PUBLIC"/></el-select></el-form-item>
         </div>
         <el-form-item label="正文"><el-input v-model="documentForm.content" type="textarea" :rows="16" placeholder="支持 Markdown。故障树可按“现象 → 检查 → 分支 → 根因 → 解决方案”的结构编写。" /></el-form-item>
-        <el-form-item label="参与检索"><el-switch v-model="documentForm.active" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="documentDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="saveDocument">保存并重建索引</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="revisionDialog" title="知识版本历史" width="760px">
+      <el-alert
+        title="恢复历史版本会创建一个新的草稿版本，已有版本和审核记录不会被覆盖。"
+        type="info"
+        :closable="false"
+        style="margin-bottom:16px"
+      />
+      <el-table :data="revisions" stripe>
+        <el-table-column label="版本" width="80"><template #default="scope">v{{ scope.row.version }}</template></el-table-column>
+        <el-table-column prop="change_summary" label="变更说明" min-width="220" />
+        <el-table-column prop="created_by" label="操作者" width="140" />
+        <el-table-column prop="created_at" label="时间" width="190" />
+        <el-table-column label="内容哈希" min-width="170"><template #default="scope"><span class="mono">{{ scope.row.content_hash.slice(0, 16) }}</span></template></el-table-column>
+        <el-table-column label="操作" width="90">
+          <template #default="scope">
+            <el-button
+              link
+              type="warning"
+              :disabled="scope.row.version === revisionDocument?.version"
+              @click="rollbackRevision(scope.row as KnowledgeRevision)"
+            >
+              恢复
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
     </el-dialog>
 
     <el-dialog v-model="uploadDialog" title="上传知识文件" width="600px">

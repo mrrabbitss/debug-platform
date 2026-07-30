@@ -23,7 +23,12 @@ from app.models import (
 
 VALID_ROLES = {"ADMIN", "ENGINEER", "VIEWER"}
 VALID_CASE_PERMISSIONS = {"EDITOR", "VIEWER"}
-ADMIN_ONLY_PREFIXES = ("/system/audit", "/system/status", "/system/users")
+ADMIN_ONLY_PREFIXES = (
+    "/system/audit",
+    "/system/status",
+    "/system/users",
+    "/evaluation",
+)
 ENGINEER_READ_PREFIXES = ("/system/models", "/system/retrieval", "/system/user-directory")
 CASE_SCOPED_RESOURCES = {"cases", "artifacts", "analyses", "reports", "repositories", "jobs"}
 

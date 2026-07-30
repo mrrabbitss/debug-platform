@@ -381,6 +381,8 @@ def derive_analysis_method(
             confidentiality=source.confidentiality,
             content=method_content,
             metadata_json=json_dumps(method_metadata),
+            active=False,
+            review_status="DRAFT",
         )
         db.add(derived)
         db.flush()
@@ -407,12 +409,33 @@ def derive_analysis_method(
         derived.confidentiality = source.confidentiality
         derived.content = method_content
         derived.metadata_json = json_dumps(method_metadata)
-        derived.active = True
         derivation.updated_at = utcnow()
 
+    from app.services.knowledge_governance import (
+        advance_document_version,
+        create_document_revision,
+    )
+
+    if not created:
+        advance_document_version(
+            db,
+            derived,
+            created_by="derivation-engine",
+            change_summary=f"Regenerated from source {source.id}",
+        )
     source_metadata = json_loads(source.metadata_json, {})
     source_metadata["derived_analysis_method_id"] = derived.id
     source.metadata_json = json_dumps(source_metadata)
+    # Existing published methods have already transitioned to DRAFT before
+    # index_document performs its internal commits.
     index_document(db, derived)
+    if created:
+        create_document_revision(
+            db,
+            derived,
+            created_by="derivation-engine",
+            change_summary="Initial deterministic method extraction",
+        )
+    db.commit()
     db.refresh(derived)
     return derived, created

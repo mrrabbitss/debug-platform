@@ -5,7 +5,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
-from app.core.utils import json_dumps, json_loads, new_id
+from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeEmbedding, ModelProfile
 from app.services.jobs import JobContext
 from app.services.knowledge_methods import enrich_knowledge_metadata
@@ -181,6 +181,7 @@ def seed_builtin_knowledge(db: Session, seed_dir: Path) -> int:
             id=new_id("DOC"), title=title, source_type="builtin_rule", trust_level="HIGH",
             confidentiality="INTERNAL", content=content,
             metadata_json=json_dumps({"seed_file": path.name}),
+            active=True, review_status="ACTIVE", published_at=utcnow(),
         )
         lower = path.stem.lower()
         if "wifi" in lower or "ap" in lower:
@@ -192,5 +193,14 @@ def seed_builtin_knowledge(db: Session, seed_dir: Path) -> int:
         db.add(document)
         db.flush()
         index_document(db, document)
+        from app.services.knowledge_governance import create_document_revision
+
+        create_document_revision(
+            db,
+            document,
+            created_by="system-seed",
+            change_summary="Built-in knowledge seed",
+        )
+        db.commit()
         count += 1
     return count

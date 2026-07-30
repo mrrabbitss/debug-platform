@@ -13,6 +13,7 @@ from app.services.git_repository import (
 )
 from app.services.jobs import JobCancelledError, JobContext
 from app.services.knowledge import index_document
+from app.services.knowledge_governance import create_document_revision
 from app.services.storage import storage
 
 
@@ -207,12 +208,20 @@ def import_knowledge_job(
             metadata["chunk_count"] = chunk_count
             metadata.pop("import_error", None)
             document.metadata_json = json_dumps(metadata)
-            document.active = True
+            document.active = False
+            document.review_status = "DRAFT"
             artifact.status = "INDEXED"
+            create_document_revision(
+                db,
+                document,
+                created_by="background-worker",
+                change_summary="Imported knowledge document",
+            )
             result = {
                 "document_id": document_id,
                 "artifact_id": artifact_id,
                 "chunks": chunk_count,
+                "review_status": document.review_status,
             }
             ctx.complete_in_transaction(
                 db,

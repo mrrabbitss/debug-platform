@@ -48,6 +48,7 @@ def test_model_and_layered_knowledge_api_round_trip(tmp_path: Path):
         assert created.json()["chunk_count"] == 2
 
         updated = client.patch(f"/api/v1/knowledge/{document_id}", json={
+            "expected_lock_version": created.json()["lock_version"],
             "title": "Updated AP authentication fault tree",
             "content": "# Symptom\nAuthentication fails.\n\n# Solution\nCheck EAP and handshake logs.",
         })
@@ -58,9 +59,15 @@ def test_model_and_layered_knowledge_api_round_trip(tmp_path: Path):
         assert retrieval.status_code == 200
         assert retrieval.json()["embedding"]["complete"] is True
         assert retrieval.json()["knowledge_graph"]["enabled"] is True
-        assert retrieval.json()["knowledge_graph"]["kind"] == "derivation_lineage"
-        assert retrieval.json()["knowledge_graph"]["domain_entity_graph_enabled"] is False
+        assert (
+            retrieval.json()["knowledge_graph"]["kind"]
+            == "derivation_lineage_and_domain_entities"
+        )
+        assert retrieval.json()["knowledge_graph"]["domain_entity_graph_enabled"] is True
+        assert retrieval.json()["knowledge_graph"]["domain_graph"]["status"] == "NOT_BUILT"
         assert "reciprocal_rank_fusion" in retrieval.json()["agentic_search"]["algorithms"]
+        assert "graphrag" in retrieval.json()["agentic_search"]["algorithms"]
+        assert "domain_graph" in retrieval.json()["agentic_search"]["modules"]
         assert retrieval.json()["agentic_search"]["enabled"] is True
 
         embedding_test = client.post("/api/v1/system/models/MODEL-embedding-hashing/test")

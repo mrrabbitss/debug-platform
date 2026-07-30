@@ -9,6 +9,10 @@ from sqlalchemy.orm import Session
 from app.models import CodeSymbol, Repository
 from app.services.code_graph import search_code_graph
 from app.services.commit_graph import search_commits, symbols_for_commit_paths
+from app.services.knowledge_graph import (
+    domain_graph_candidates,
+    domain_graph_status,
+)
 from app.services.memory import (
     extract_memories_from_search,
     mark_memories_reused,
@@ -25,7 +29,7 @@ from app.services.retrieval_models import (
 )
 
 
-SEARCH_MODULES = {"knowledge", "code", "commit", "memory"}
+SEARCH_MODULES = {"knowledge", "domain_graph", "code", "commit", "memory"}
 CODE_INTENT_TERMS = {
     "代码", "函数", "方法", "调用", "引用", "继承", "实现", "接口", "类", "宏",
     "文件", "源码", "堆栈", "崩溃", "定位", "symbol", "function", "call", "reference",
@@ -33,6 +37,7 @@ CODE_INTENT_TERMS = {
 }
 MODULE_WEIGHTS = {
     "knowledge": 1.0,
+    "domain_graph": 0.95,
     "code": 1.0,
     "commit": 0.9,
     "memory": 0.9,
@@ -62,6 +67,7 @@ def build_search_plan(
     repository_count: int,
     requested_modules: list[str] | None,
     max_hops: int,
+    domain_graph_available: bool = False,
 ) -> dict[str, Any]:
     signals = _query_signals(query)
     if requested_modules is not None:
@@ -77,6 +83,11 @@ def build_search_plan(
     else:
         modules = ["knowledge", "memory"]
         rationale = ["知识与经验是诊断检索的默认第一跳"]
+        if domain_graph_available:
+            modules.insert(1, "domain_graph")
+            rationale.append(
+                "Active domain knowledge graph detected; enable GraphRAG expansion"
+            )
         if repository_count and signals.intersection(CODE_INTENT_TERMS):
             modules.append("code")
             rationale.append("检测到代码定位/调用关系意图，启用代码图谱")
@@ -100,6 +111,7 @@ def build_search_plan(
             "reciprocal_rank_fusion",
             "reranker",
             "graph_multi_hop",
+            "graphrag",
         ],
         "rationale": rationale,
     }
@@ -496,6 +508,7 @@ def agentic_search(
     top_k: int = 12,
     max_hops: int = 2,
     requested_modules: list[str] | None = None,
+    record_memory: bool = True,
 ) -> dict[str, Any]:
     from app.models import Case
 
@@ -505,11 +518,15 @@ def agentic_search(
     repositories = list(db.scalars(select(Repository).where(
         Repository.case_id == case_id
     )).all())
+    graph_status = domain_graph_status(db, include_counts=False)
     plan = build_search_plan(
         query,
         repository_count=len(repositories),
         requested_modules=requested_modules,
         max_hops=max_hops,
+        domain_graph_available=bool(
+            graph_status.get("active_generation_id")
+        ),
     )
     traces: list[dict[str, Any]] = []
     module_results: dict[str, list[dict[str, Any]]] = {}
@@ -538,6 +555,18 @@ def agentic_search(
                     limit=per_module_limit,
                 )
                 paths: list[dict[str, Any]] = []
+            elif module == "domain_graph":
+                if graph_status.get("active_generation_id"):
+                    candidates, paths = domain_graph_candidates(
+                        db,
+                        query,
+                        top_k=per_module_limit,
+                        max_hops=max_hops,
+                    )
+                else:
+                    candidates, paths = [], []
+                    stage_status = "SKIPPED"
+                    stage_reason = "No active domain knowledge graph"
             elif module == "memory":
                 candidates = _memory_candidates(
                     db,
@@ -595,6 +624,9 @@ def agentic_search(
         "code" in plan["selected_modules"] and bool(indexed_code_repositories)
     ) or (
         "commit" in plan["selected_modules"] and bool(indexed_commit_repositories)
+    ) or (
+        "domain_graph" in plan["selected_modules"]
+        and bool(graph_status.get("active_generation_id"))
     )
     traces.append({
         "stage": "graph_multi_hop",
@@ -629,22 +661,23 @@ def agentic_search(
         **reranker_trace,
         "duration_ms": int((perf_counter() - rerank_started) * 1000),
     })
-    reused_memory_ids = {
-        str(item["evidence_id"])
-        for item in final_results
-        if str(item["source_type"]).startswith("memory_")
-    }
-    mark_memories_reused(db, reused_memory_ids)
-    extract_memories_from_search(
-        db,
-        case,
-        query=query,
-        plan=plan,
-        traces=traces,
-        results=final_results,
-        path_count=len(all_paths),
-    )
-    db.commit()
+    if record_memory:
+        reused_memory_ids = {
+            str(item["evidence_id"])
+            for item in final_results
+            if str(item["source_type"]).startswith("memory_")
+        }
+        mark_memories_reused(db, reused_memory_ids)
+        extract_memories_from_search(
+            db,
+            case,
+            query=query,
+            plan=plan,
+            traces=traces,
+            results=final_results,
+            path_count=len(all_paths),
+        )
+        db.commit()
     return {
         "case_id": case_id,
         "query": query,

@@ -27,17 +27,21 @@ flowchart TB
     VSCode --> API
 
     API --> Auth["鉴权、RBAC、案例权限、审计"]
-    API --> Domain["案例 / 日志 / 知识 / 模型 / 报告服务"]
+    API --> Domain["案例 / 日志 / 知识治理 / 模型 / 报告服务"]
     API --> Jobs["数据库持久化任务 + ThreadPoolExecutor"]
 
     Jobs --> Parse["安全解压、文本识别、Parser Registry"]
     Jobs --> Diagnose["规则诊断、RAG、LLM 证据校验"]
     Jobs --> Code["代码索引、静态工具"]
     Jobs --> Reindex["知识切片、Embedding 重建"]
+    Jobs --> Graph["领域图谱 generation 构建"]
+    Jobs --> Eval["检索评测"]
 
     Domain --> DB["SQLite（本地）或 PostgreSQL（部署）"]
     Domain --> Files["文件存储：日志、解压内容、报告、源码包"]
     Reindex --> DB
+    Graph --> DB
+    Eval --> DB
     Reindex -.可选镜像.-> Qdrant["Qdrant"]
 
     Diagnose --> LocalModels["本地 BGE / Qwen3 Reranker"]
@@ -95,8 +99,9 @@ flowchart TB
 
 - `CasesView.vue`：案例列表和创建；
 - `CaseDetailView.vue`：上传、解析、原文浏览、搜索、事件、时间线、诊断、报告和代码关联；
-- `KnowledgeView.vue`：知识分类树、文档新增、上传、修改、删除；
+- `KnowledgeView.vue`：知识分类树、文档新增、上传、修改、审核、版本和回滚；
 - `CognitiveSearchView.vue`：Agentic Search、可解释多跳路径、代码/Commit 图谱和三类记忆；
+- `QualityGovernanceView.vue`：领域 GraphRAG、检索评测集/运行和人工诊断反馈；
 - `SettingsView.vue`：Chat、Embedding、Reranker 模型配置、测试、激活和重建索引；
 - `SecurityView.vue`：用户、令牌、系统状态和审计事件。
 
@@ -162,7 +167,10 @@ debugplatform/
 
 ### 5.1 API 与访问控制
 
-`backend/app/api/routes.py` 暴露系统、案例、附件、事件、诊断、知识、代码仓库、任务、模型和安全管理接口。
+`backend/app/api/routes.py` 仍承载基础系统、案例、附件、事件、诊断、知识、代码仓库、
+任务、模型和安全管理接口。新一轮已把知识治理、领域图谱和检索评测分别拆到
+`knowledge_governance.py`、`knowledge_graph.py` 和 `retrieval_evaluation.py`，
+由总路由统一挂载；旧路由仍需继续按领域拆分。
 
 鉴权支持三种模式：
 
@@ -303,9 +311,14 @@ Python 使用标准 AST，其余语言主要使用正则和花括号扫描，不
 | `LogEvent` | 标准化日志事件、时间、级别、模块、行号和 Parser 信息 |
 | `KnowledgeCategory` | 支持父子层级的知识分类 |
 | `KnowledgeDocument` | 诊断规则、历史问题、故障树、方案和参考资料 |
+| `KnowledgeRevision` | 不可变知识版本快照、内容哈希和变更说明 |
 | `KnowledgeDerivation` | 来源案例/Skill 与派生分析方法的 lineage |
 | `KnowledgeChunk` | 可检索的知识分块 |
 | `KnowledgeEmbedding` | 按 Embedding Profile 隔离的向量 |
+| `KnowledgeGraphState` | 领域图谱活动/构建 generation、状态和错误 |
+| `KnowledgeEntity` | 领域实体的稳定逻辑 ID 和 generation 修订 |
+| `KnowledgeEntityMention` | 实体到已审核文档/分块的证据提及 |
+| `KnowledgeRelation` | 带证据的领域关系 |
 | `ModelProfile` | Chat、Embedding、Reranker 的本地/API 配置 |
 | `Repository` | 与案例绑定的源码仓库 |
 | `CodeSymbol` | 多语言源码符号及位置 |
@@ -314,7 +327,11 @@ Python 使用标准 AST，其余语言主要使用正则和花括号扫描，不
 | `CommitFileChange` | Commit 的文件变更 |
 | `AgentMemory` | 情景、程序和失败记忆 |
 | `AnalysisRun` | 一次诊断结果、证据和模型快照 |
+| `DiagnosisFeedback` | 人工诊断结论、修正、审核和知识草稿关联 |
 | `Job` | 后台任务状态 |
+| `RetrievalEvaluationDataset` | 可重复运行的检索评测集 |
+| `RetrievalEvaluationCase` | query、预期证据/根因、模块和 Top-K |
+| `RetrievalEvaluationRun` | 配置快照、逐例结果和聚合指标 |
 | `ConversationMessage` | 案例问答和引用 |
 | `Report` | 报告版本、格式、路径和哈希 |
 | `AuditEvent` | 操作者、动作、资源、结果和请求上下文 |
@@ -335,10 +352,17 @@ erDiagram
     ARTIFACT ||--o{ LOG_EVENT : parsed_into
     REPOSITORY ||--o{ CODE_SYMBOL : indexes
     KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_CHUNK : splits
+    KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_REVISION : versions
+    KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_ENTITY_MENTION : evidences
     KNOWLEDGE_CATEGORY ||--o{ KNOWLEDGE_CATEGORY : nests
     KNOWLEDGE_CATEGORY ||--o{ KNOWLEDGE_DOCUMENT : classifies
     KNOWLEDGE_CHUNK ||--o{ KNOWLEDGE_EMBEDDING : embeds
     MODEL_PROFILE ||--o{ KNOWLEDGE_EMBEDDING : generates
+    KNOWLEDGE_ENTITY ||--o{ KNOWLEDGE_ENTITY_MENTION : mentioned_in
+    KNOWLEDGE_ENTITY ||--o{ KNOWLEDGE_RELATION : connects
+    CASE ||--o{ DIAGNOSIS_FEEDBACK : receives
+    RETRIEVAL_EVALUATION_DATASET ||--o{ RETRIEVAL_EVALUATION_CASE : contains
+    RETRIEVAL_EVALUATION_DATASET ||--o{ RETRIEVAL_EVALUATION_RUN : executes
     ANALYSIS_RUN ||--o{ REPORT : exports
 ```
 
@@ -348,12 +372,15 @@ erDiagram
 
 当前 Alembic 迁移包含：
 
-1. 基础业务表；
-2. 运行期完整性和约束增强；
-3. 分析模型配置快照；
-4. 原子解析批次；
-5. 审计事件；
-6. RBAC、令牌和案例成员。
+1. `0001` 基础业务表；
+2. `0002` 运行期完整性和约束增强；
+3. `0003` 分析模型配置快照；
+4. `0004` 原子解析批次；
+5. `0005` 审计事件；
+6. `0006` RBAC、令牌和案例成员；
+7. `0007` 代码/Commit 图谱、三类记忆和 Agentic Search；
+8. `0008` 代码/向量 generation、报告发布约束和导入状态；
+9. `0009` 知识版本审核、领域图谱、人工反馈和检索评测。
 
 后端启动时会自动执行迁移。生产升级前仍应先备份，并禁止手工修改 `alembic_version`。
 
@@ -421,9 +448,14 @@ BM25 / 图多跳 / RRF / Embedding / 可选 Reranker
 - 内容切片；
 - 切换 Embedding 后异步重建全量向量。
 
+新建、上传、编辑和回滚均进入 `DRAFT`，经过 `IN_REVIEW` 后才能发布为 `ACTIVE`。
+每次内容版本保存不可变快照和 SHA-256；数据库使用 `lock_version` 拒绝并发覆盖。
+编辑已发布文档时先切换为不可检索草稿，再提交新的分块/向量。
+
 故障案例和故障树仍以 Markdown 文档为权威内容；来源与提炼分析方法之间保存派生
-lineage。代码关系与 Commit 历史使用独立关系表，不把自由文本章节直接伪装成已确认
-的领域知识边。
+lineage。领域图谱只从已发布知识的元数据和结构化章节提取可审计实体/关系，并以
+generation 旁路构建、输入签名校验和 CAS 切换。确定性抽取结果不等同于人工确认的
+全部因果事实，仍需通过知识审核和后续实体治理提高精度。
 
 ### 7.4 模型配置与切换
 
@@ -564,10 +596,13 @@ Docker Compose 包含：
 - 层级分类；
 - 诊断规则、历史故障、故障树、解决方案和参考资料分类；
 - 文档新增、上传、查看、修改和删除；
+- 草稿、待审核、发布、驳回和归档状态机；
+- 不可变版本快照、历史恢复和数据库乐观锁；
 - 结构化 Markdown 故障案例模板、必需章节检查和完整度；
 - 错误分析 Skill 管理，以及来源可追溯的分析方法提炼；
 - 内容切片、Embedding 索引和全量重建；
-- 设备、版本、模块、可信度和保密性元数据。
+- 设备、版本、模块、可信度和保密性元数据；
+- 已发布知识的确定性实体/关系抽取及原子领域图谱 generation。
 
 ### 模型网关
 
@@ -599,8 +634,18 @@ Docker Compose 包含：
 - 指纹去重、出现/复用计数、来源证据和失败经验；
 - 案例记忆隔离，全局程序记忆写入前脱敏；
 - Agentic Search 动态编排知识、记忆、代码和 Commit；
+- Agentic Search 自动调度领域 GraphRAG；
 - BM25、Dense Embedding、Reranker、RRF 和图关系多跳；
 - 返回计划、阶段耗时、候选统计和可解释路径。
+
+### 质量治理与评测
+
+- 固定案例、query、预期证据、预期根因和检索模块的评测数据集；
+- 后台评测运行和无密钥模型配置快照；
+- Recall@K、Precision@K、MRR、NDCG@K 和 Root Cause Top-K；
+- 评测显式关闭记忆写入，并且结果不复制日志、知识或源码正文；
+- 人工诊断反馈提交、管理员审核和知识草稿生成；
+- 反馈生成的草稿必须再次经过知识审核才能进入检索。
 
 ### 安全与运维
 
@@ -636,6 +681,7 @@ Docker Compose 包含：
 | 2026-07-23 | 本文版本 | 模型下载诊断和回退 | 增加脱敏检测报告、固定 revision、curl 断点续传和哈希校验 |
 | 2026-07-28 | 本次提交 | 认知检索与工程图谱 | 结构化故障案例、方法提炼、稳定 ID 的代码/Commit 图谱、三类记忆和 Agentic Search；同步消除 VS Code 扩展高危传递依赖 |
 | 2026-07-29 | 本次提交 | 异步导入与原子索引 | 仓库/知识大文件后台导入、代码图谱与向量 generation 原子切换、有界混合检索、模块均衡、报告原子发布和 ZIP 清理 |
+| 2026-07-30 | 本次提交 | P1/P2 质量与知识治理 | 知识版本审核和数据库乐观锁、已审核知识领域图谱/GraphRAG、可重复检索评测、人工反馈双重审批和独立 API 路由 |
 
 这段迭代体现了项目从“功能原型”逐步转向“可在多台 Win11 电脑复现、可诊断、可回滚、可审计”的工程化过程。
 
@@ -669,7 +715,9 @@ Parser、模型 Profile、知识分类、任务类型、报告格式和静态工
 
 ### 13.1 API 路由文件过大
 
-多数接口集中在 `routes.py`，领域边界虽在 Service 层存在，但路由层继续增长会增加合并冲突和权限遗漏风险。应按 `cases`、`artifacts`、`knowledge`、`models`、`security` 拆分 APIRouter。
+多数旧接口仍集中在 `routes.py`，领域边界虽在 Service 层存在，但路由层继续增长会增加
+合并冲突和权限遗漏风险。本轮已把知识治理、领域图谱和检索评测拆成独立 APIRouter；
+后续仍应继续拆分 `cases`、`artifacts`、基础 `knowledge`、`models` 和 `security`。
 
 ### 13.2 后台任务不适合多实例
 
@@ -679,11 +727,12 @@ Parser、模型 Profile、知识分类、任务类型、报告格式和静态工
 
 SQLite 回退可靠，但向量仍以 JSON 文本保存，文档数量大时存储和全量向量行扫描成本会上升。本轮已让 Qdrant 走有界 top-K，并通过 generation 避免半套索引；双写告警和自动一致性修复仍可继续完善。
 
-### 13.4 领域知识图谱尚未构建
+### 13.4 领域知识图谱抽取与治理仍有限
 
-当前已有代码关系图谱、Commit 图谱、关系查询和 Agentic Search，但设备、版本、事件
-码、症状、根因、解决方案之间仍是分层文档，没有经过审核的领域实体边、冲突消解和
-图版本。因此不能把“知识分类层级”描述为完整领域知识图谱。
+当前已经从已审核知识构建设备、版本、模块、症状、事件码、日志模式、根因、诊断步骤、
+解决方案、验证和范围实体/关系，并支持 generation 原子切换和 GraphRAG。但提取仍是
+确定性 Markdown/元数据规则，尚无同义实体合并、冲突关系审批、复杂跨文档因果推断和
+图形化编辑。因此它是可审计的领域图谱基础，不是完整企业知识本体。
 
 ### 13.5 Parser 的真实产品覆盖仍有限
 
@@ -697,7 +746,9 @@ Python 使用 AST，其余语言当前主要使用安全语法启发式。对常
 
 ### 13.7 前端自动化不足
 
-前端有 TypeScript 构建检查和 Windows 运行时冒烟，但没有 Playwright/Cypress 页面级回归，也没有组件测试。页面逻辑较多集中在大型 View 中，Pinia 尚未承担统一任务、权限和模型状态。
+前端有 TypeScript 构建检查、Windows 运行时冒烟和人工控制的真实浏览器流程验证，
+但仓库内没有可在 CI 自动重复的 Playwright/Cypress 页面级回归，也没有组件测试。
+页面逻辑较多集中在大型 View 中，Pinia 尚未承担统一任务、权限和模型状态。
 
 ### 13.8 本地模型资源要求和供应链仍需治理
 
@@ -750,26 +801,30 @@ CPU 可以加载模型，但 Qwen3 Reranker 首次启动慢、内存占用高。
 
 ### P1：规模化和可维护性
 
-1. 拆分大型 API 路由和前端大型 View；
-2. 引入分布式任务队列和独立 Worker；
-3. 生产统一 PostgreSQL，明确事务和连接池参数；
-4. 使用 S3/MinIO 取代单机文件目录；
-5. 将 Qdrant 提升为正式向量检索服务，并实现可重放索引任务；
-6. 增加 Playwright 端到端测试；
-7. 把 Parser 做成带版本和样本契约的插件包；
-8. 使用 Tree-sitter 或 Clang AST 改进代码索引；
-9. 增加诊断评测集，衡量召回率、排序质量、证据正确率和根因 Top-K；
-10. 支持 GPU 自动探测、精度/量化选择和模型懒加载。
+| 能力 | 状态 | 当前结果与下一步 |
+| --- | --- | --- |
+| 拆分大型 API 路由和前端 View | `IN_PROGRESS` | 已拆知识治理、领域图谱、检索评测路由；基础 `routes.py` 和大型 View 仍需继续拆分 |
+| 分布式任务队列和独立 Worker | `PLANNED` | 当前仍是数据库状态加单进程线程池 |
+| 生产统一 PostgreSQL | `PLANNED` | Compose 和 CI 已验证 PostgreSQL；尚未禁止生产 SQLite 或固化容量参数 |
+| S3/MinIO 对象存储 | `PLANNED` | 当前仍是单机文件目录 |
+| Qdrant 正式服务与可重放索引 | `IN_PROGRESS` | 已有 generation、失败回滚和有界查询；仍需任务租约、对账和自动修复 |
+| Playwright 端到端测试 | `PLANNED` | 本轮完成人工真实浏览器冒烟，尚未形成仓库内 CI 用例 |
+| Parser 版本化插件与样本契约 | `PLANNED` | 现有注册表可扩展，但包边界和 Golden Contract 未完成 |
+| Tree-sitter / Clang AST | `PLANNED` | 当前 Python AST，其余语言主要为启发式解析 |
+| 检索与诊断评测 | `AVAILABLE` | 已有可重复检索评测和五项指标；仍需最终诊断语义评分与内网回归门禁 |
+| GPU、量化和模型懒加载 | `PLANNED` | 当前由 Profile 手工设置设备和批量 |
 
 ### P2：平台化能力
 
-1. 构建实体—关系知识图谱和 GraphRAG；
-2. 支持多租户、部门空间和知识 ACL；
-3. 增加诊断工作流编排、人工审批和结果反馈；
-4. 通过反馈闭环评估规则和模型，但禁止未经审批自动学习敏感日志；
-5. 支持 Kubernetes、弹性 Worker 和灾备；
-6. 建立 Parser、规则、模型和知识文档的版本发布体系；
-7. 增加设备拓扑图、事件传播链和跨设备时间对齐。
+| 能力 | 状态 | 当前结果与下一步 |
+| --- | --- | --- |
+| 实体—关系知识图谱和 GraphRAG | `LIMITED` | 已支持已审核知识的确定性实体/关系、原子 generation 和 Agentic 调度；待实体消歧、冲突审核和图编辑 |
+| 多租户、部门空间和知识 ACL | `PLANNED` | 当前是全局知识加案例级权限 |
+| 诊断工作流、人工审批和反馈 | `IN_PROGRESS` | 已有知识状态机和人工反馈双重审批；尚无通用可配置工作流引擎 |
+| 反馈驱动规则/模型评估 | `AVAILABLE` | 反馈和离线评测已隔离；不会未经审批自动学习敏感内容，待建立内网门禁 |
+| Kubernetes、弹性 Worker 和灾备 | `PLANNED` | 需先完成分布式队列与对象存储 |
+| Parser、规则、模型和知识版本发布 | `IN_PROGRESS` | 知识版本/审核已完成；Parser、规则和模型制品发布仍待实现 |
+| 拓扑、事件传播链和跨设备时间对齐 | `PLANNED` | 当前仅保存基础拓扑文本和单案例时间线 |
 
 ## 15. 推荐的目标架构
 
@@ -805,9 +860,13 @@ flowchart LR
 - Job 去重、取消、恢复和失败状态；
 - RAG、模型 Profile、模型快照和 LLM 输出校验；
 - 故障案例结构检查、方法派生及删除一致性；
+- 知识审核状态机、不可变版本、并发乐观锁和历史恢复；
+- 领域图谱构建、GraphRAG、失败/输入变化时保留旧 generation；
 - 多语言代码四类关系、Commit/Unicode 路径和 Git Bundle；
 - 三类记忆的去重、脱敏、案例隔离和复用；
 - Agentic Search 规划、融合、Dense/Reranker 回退和多跳路径；
+- 检索评测指标、配置快照及评测期间零记忆写入；
+- 人工反馈审核和生成待二次审核知识草稿；
 - 迁移、外键和数据库完整性；
 - 健康、备份、删除级联和部署文件；
 - Windows 启动、Doctor、模型安装器和隔离冒烟；
@@ -828,8 +887,8 @@ GitHub Actions 当前验证：
 ## 17. 架构结论
 
 当前项目最强的部分是：从真实 Win11 使用问题出发，已经形成日志解析、证据检索、
-模型切换、结构化知识、工程图谱、经验记忆、认知检索、权限审计和报告的完整闭环，
-并且保留了无 API、无 GPU 时的可用路径。
+模型切换、知识审核、领域/工程图谱、经验记忆、认知检索、离线评测、人工反馈、
+权限审计和报告的完整闭环，并且保留了无 API、无 GPU 时的可用路径。
 
 当前最大的风险不是“功能数量不够”，而是三个工程化问题：
 
@@ -837,4 +896,6 @@ GitHub Actions 当前验证：
 2. 单进程任务、本地文件和 SQLite 回退不适合大规模多实例；
 3. 生产级 SSO、可观测、模型制品治理和安全扫描仍需接入公司基础设施。
 
-后续迭代应优先提高解析和诊断的可验证性，再扩展图谱、自动化和分布式能力。这样可以避免功能不断增加，但准确率、可复现性和生产安全无法证明。
+后续迭代应优先把真实日志 Golden Corpus、自动 E2E、评测回归门禁和分布式执行补齐，
+再扩展复杂图谱推理和多租户能力。这样可以避免功能不断增加，但准确率、可复现性和
+生产安全无法证明。

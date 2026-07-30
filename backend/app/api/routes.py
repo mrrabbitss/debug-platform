@@ -7,6 +7,9 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from app.api.knowledge_governance import router as knowledge_governance_router
+from app.api.knowledge_graph import router as knowledge_graph_router
+from app.api.retrieval_evaluation import router as retrieval_evaluation_router
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
@@ -36,6 +39,14 @@ from app.services.health import readiness_report, system_status_report
 from app.services.import_jobs import import_knowledge_job, import_repository_job
 from app.services.jobs import job_runner
 from app.services.knowledge import index_document, reindex_knowledge_job
+from app.services.knowledge_graph import domain_graph_status
+from app.services.knowledge_governance import (
+    actor_id,
+    advance_document_version,
+    create_document_revision,
+    mark_domain_graph_stale,
+    require_lock_version,
+)
 from app.services.knowledge_methods import (
     FAULT_CASE_TEMPLATE,
     STRUCTURED_SOURCE_TYPES,
@@ -65,6 +76,9 @@ from app.services.storage import normalize_debug_log_filename, storage
 from app.services.text_files import read_text_range, search_text_lines
 
 router = APIRouter()
+router.include_router(knowledge_governance_router)
+router.include_router(knowledge_graph_router)
+router.include_router(retrieval_evaluation_router)
 Db = Annotated[Session, Depends(get_db)]
 
 job_runner.register("parse_artifact", parse_artifact_job, ("case_id", "artifact_id"), cancellable=True)
@@ -904,6 +918,13 @@ def _knowledge_to_dict(
         "trust_level": document.trust_level,
         "confidentiality": document.confidentiality,
         "active": document.active,
+        "review_status": document.review_status,
+        "version": document.version,
+        "lock_version": document.lock_version,
+        "reviewed_by": document.reviewed_by,
+        "reviewed_at": document.reviewed_at,
+        "review_comment": document.review_comment,
+        "published_at": document.published_at,
         "category_id": category[0] if category else None,
         "category_name": category[1] if category else None,
         "chunk_count": chunk_counts.get(document.id, 0),
@@ -962,19 +983,27 @@ def _delete_knowledge_rows(db: Session, document_id: str) -> None:
 
 
 @router.post("/knowledge", response_model=KnowledgeDetailOut)
-def create_knowledge(payload: KnowledgeCreate, db: Db) -> dict:
+def create_knowledge(payload: KnowledgeCreate, request: Request, db: Db) -> dict:
     document = KnowledgeDocument(
         id=new_id("DOC"), title=payload.title, source_type=payload.source_type,
         device_type=payload.device_type, device_model=payload.device_model,
         firmware_range=payload.firmware_range, module=payload.module,
         trust_level=payload.trust_level, confidentiality=payload.confidentiality,
         content=payload.content, metadata_json=json_dumps(payload.metadata),
+        active=False, review_status="DRAFT",
     )
     db.add(document)
     db.flush()
     category_id = payload.category_id or get_default_category_id(db, payload.source_type)
     set_document_category(db, document.id, category_id)
     index_document(db, document)
+    create_document_revision(
+        db,
+        document,
+        created_by=actor_id(getattr(request.state, "principal", {})),
+        change_summary="Initial version",
+    )
+    db.commit()
     db.refresh(document)
     return _single_knowledge_response(db, document, detail=True)
 
@@ -1028,6 +1057,7 @@ async def upload_knowledge(
         device_type=device_type, module=module, trust_level=trust_level,
         content="",
         active=False,
+        review_status="DRAFT",
         metadata_json=json_dumps({
             "original_name": uploaded_name,
             "artifact_id": artifact_id,
@@ -1239,14 +1269,29 @@ def extract_knowledge_method(document_id: str, db: Db) -> dict:
 
 
 @router.patch("/knowledge/{document_id}", response_model=KnowledgeDetailOut)
-def update_knowledge(document_id: str, payload: KnowledgeUpdate, db: Db) -> dict:
+def update_knowledge(
+    document_id: str,
+    payload: KnowledgeUpdate,
+    request: Request,
+    db: Db,
+) -> dict:
     document = db.get(KnowledgeDocument, document_id)
     if not document:
         raise HTTPException(404, "Knowledge document not found")
     values = payload.model_dump(exclude_unset=True)
+    expected_lock_version = values.pop("expected_lock_version", None)
+    try:
+        require_lock_version(document, expected_lock_version)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     category_was_set = "category_id" in values
     category_id = values.pop("category_id", None)
     metadata = values.pop("metadata", None)
+    if "active" in values:
+        raise HTTPException(
+            409,
+            "Use the knowledge review endpoints to publish or archive a document",
+        )
     for key, value in values.items():
         setattr(document, key, value)
     if metadata is not None:
@@ -1256,7 +1301,21 @@ def update_knowledge(document_id: str, payload: KnowledgeUpdate, db: Db) -> dict
             set_document_category(db, document.id, category_id)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+    try:
+        advance_document_version(
+            db,
+            document,
+            created_by=actor_id(getattr(request.state, "principal", {})),
+            change_summary="Knowledge document updated",
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    # The DRAFT/active=False transition is flushed before index_document can
+    # commit chunks, preventing edited content from being briefly searchable
+    # under the previously published lifecycle state.
     index_document(db, document)
+    db.commit()
     existing_derivation = db.scalar(select(KnowledgeDerivation).where(
         KnowledgeDerivation.source_document_id == document.id,
         KnowledgeDerivation.derivation_type == "analysis_method",
@@ -1296,6 +1355,11 @@ def delete_knowledge(document_id: str, db: Db) -> dict:
     document = db.get(KnowledgeDocument, document_id)
     if not document:
         raise HTTPException(404, "Knowledge document not found")
+    if document.active:
+        mark_domain_graph_stale(
+            db,
+            f"knowledge document {document.id} deleted",
+        )
     source_derivations = list(db.scalars(select(KnowledgeDerivation).where(
         KnowledgeDerivation.source_document_id == document_id
     )).all())
@@ -1845,6 +1909,7 @@ async def test_model_profile(profile_id: str, db: Db) -> dict:
 @router.get("/system/retrieval")
 def retrieval_config(db: Db) -> dict:
     reranker = get_active_model_profile("reranker", db)
+    domain_graph = domain_graph_status(db)
     return {
         "embedding": embedding_index_status(db),
         "reranker": model_profile_to_dict(reranker) if reranker else None,
@@ -1854,8 +1919,9 @@ def retrieval_config(db: Db) -> dict:
         ),
         "knowledge_graph": {
             "enabled": True,
-            "kind": "derivation_lineage",
-            "domain_entity_graph_enabled": False,
+            "kind": "derivation_lineage_and_domain_entities",
+            "domain_entity_graph_enabled": True,
+            "domain_graph": domain_graph,
             "derivations": int(db.scalar(select(func.count(KnowledgeDerivation.id))) or 0),
         },
         "code_graph": {
@@ -1885,13 +1951,20 @@ def retrieval_config(db: Db) -> dict:
         },
         "agentic_search": {
             "enabled": True,
-            "modules": ["knowledge", "code", "commit", "memory"],
+            "modules": [
+                "knowledge",
+                "domain_graph",
+                "code",
+                "commit",
+                "memory",
+            ],
             "algorithms": [
                 "BM25",
                 "dense_embedding",
                 "reciprocal_rank_fusion",
                 "reranker",
                 "graph_multi_hop",
+                "graphrag",
             ],
         },
     }

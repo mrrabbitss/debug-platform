@@ -145,6 +145,7 @@ def test_fault_case_api_extracts_updates_and_cascades_analysis_method(
         assert "auth_retry" in derived["content"]
 
         updated = client.patch(f"/api/v1/knowledge/{source['id']}", json={
+            "expected_lock_version": source["lock_version"],
             "content": _completed_fault_case("回退错误 Commit 并增加计时器单元测试。"),
         })
         assert updated.status_code == 200, updated.text
@@ -153,12 +154,16 @@ def test_fault_case_api_extracts_updates_and_cascades_analysis_method(
         assert "回退错误 Commit" in refreshed_method.json()["content"]
 
         manually_edited = client.patch(f"/api/v1/knowledge/{derived['id']}", json={
+            "expected_lock_version": refreshed_method.json()["lock_version"],
             "content": "# 人工复核方法\n\n保留工程师补充的专用检查步骤。",
         })
         assert manually_edited.status_code == 200
         source_changed_again = client.patch(
             f"/api/v1/knowledge/{source['id']}",
-            json={"content": _completed_fault_case("升级到新的认证模块版本。")},
+            json={
+                "expected_lock_version": updated.json()["lock_version"],
+                "content": _completed_fault_case("升级到新的认证模块版本。"),
+            },
         )
         assert source_changed_again.status_code == 200
         preserved = client.get(f"/api/v1/knowledge/{derived['id']}").json()

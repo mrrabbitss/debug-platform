@@ -12,7 +12,13 @@ const repositories = ref<any[]>([])
 const selectedRepositoryId = ref('')
 const query = ref('')
 const autoPlan = ref(true)
-const selectedModules = ref<string[]>(['knowledge', 'memory', 'code', 'commit'])
+const selectedModules = ref<string[]>([
+  'knowledge',
+  'domain_graph',
+  'memory',
+  'code',
+  'commit'
+])
 const topK = ref(12)
 const maxHops = ref(2)
 const loading = ref(false)
@@ -233,6 +239,7 @@ onMounted(async () => {
             <el-form-item v-if="!autoPlan" label="检索模块">
               <el-checkbox-group v-model="selectedModules">
                 <el-checkbox value="knowledge">知识库</el-checkbox>
+                <el-checkbox value="domain_graph">领域图谱</el-checkbox>
                 <el-checkbox value="code">代码图谱</el-checkbox>
                 <el-checkbox value="commit">Commit 图谱</el-checkbox>
                 <el-checkbox value="memory">记忆</el-checkbox>

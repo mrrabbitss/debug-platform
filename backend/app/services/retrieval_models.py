@@ -18,7 +18,12 @@ from sqlalchemy.orm import Session
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id
-from app.models import KnowledgeChunk, KnowledgeEmbedding, ModelProfile
+from app.models import (
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeEmbedding,
+    ModelProfile,
+)
 from app.services.audit import record_model_egress
 from app.services.model_profiles import (
     get_active_model_profile,
@@ -579,20 +584,49 @@ def embedding_search(
         qdrant = _qdrant_scores(
             profile,
             query_vector,
-            limit,
+            min(max(limit * 8, limit), 1000),
             generation_id=profile.active_embedding_generation_id,
         )
         if qdrant:
-            return qdrant
+            searchable_ids = set(active_db.scalars(
+                select(KnowledgeChunk.id)
+                .join(
+                    KnowledgeDocument,
+                    KnowledgeChunk.document_id == KnowledgeDocument.id,
+                )
+                .where(
+                    KnowledgeChunk.id.in_(set(qdrant)),
+                    KnowledgeDocument.active.is_(True),
+                    KnowledgeDocument.review_status == "ACTIVE",
+                )
+            ).all())
+            filtered_qdrant = {
+                chunk_id: score
+                for chunk_id, score in qdrant.items()
+                if chunk_id in searchable_ids
+            }
+            if filtered_qdrant:
+                return dict(list(filtered_qdrant.items())[:limit])
         rows = active_db.execute(
             select(
                 KnowledgeEmbedding.chunk_id,
                 KnowledgeEmbedding.dimension,
                 KnowledgeEmbedding.vector_json,
-            ).where(
+            )
+            .join(
+                KnowledgeChunk,
+                KnowledgeEmbedding.chunk_id == KnowledgeChunk.id,
+            )
+            .join(
+                KnowledgeDocument,
+                KnowledgeChunk.document_id == KnowledgeDocument.id,
+            )
+            .where(
                 KnowledgeEmbedding.profile_id == profile.id,
                 KnowledgeEmbedding.generation_id
                 == profile.active_embedding_generation_id,
+                KnowledgeDocument.active.is_(True),
+                KnowledgeDocument.review_status == "ACTIVE",
             )
         ).all()
     ranked: list[tuple[str, float]] = []

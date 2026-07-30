@@ -83,7 +83,10 @@ class LocalHybridRetriever:
             knowledge_query = (
                 select(KnowledgeChunk, KnowledgeDocument)
                 .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
-                .where(KnowledgeDocument.active.is_(True))
+                .where(
+                    KnowledgeDocument.active.is_(True),
+                    KnowledgeDocument.review_status == "ACTIVE",
+                )
             )
             if search_terms:
                 knowledge_conditions = []
@@ -111,6 +114,7 @@ class LocalHybridRetriever:
                     )
                     .where(
                         KnowledgeDocument.active.is_(True),
+                        KnowledgeDocument.review_status == "ACTIVE",
                         KnowledgeChunk.id.in_(missing_dense_ids),
                     )
                 ).all()

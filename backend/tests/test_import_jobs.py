@@ -147,7 +147,8 @@ def test_knowledge_document_is_read_and_indexed_by_background_handler(
         artifact = db.get(Artifact, "ART-knowledge")
         assert document is not None
         assert artifact is not None
-        assert document.active is True
+        assert document.active is False
+        assert document.review_status == "DRAFT"
         assert "认证失败" in document.content
         assert artifact.status == "INDEXED"
         assert db.scalar(select(func.count(KnowledgeChunk.id))) == 2

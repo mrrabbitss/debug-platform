@@ -4,7 +4,7 @@
 
 诊断检索由 Agentic Search 编排以下阶段：
 
-1. 按 query 意图选择知识、记忆、代码图谱和 Commit 图谱；
+1. 按 query 意图选择知识、领域图谱、记忆、代码图谱和 Commit 图谱；
 2. 各模块使用 BM25、精确错误码、函数名、路径、标题或图关系生成候选；
 3. 使用 RRF 融合不同模块；
 4. 使用当前激活的 Embedding 对跨模块候选计算余弦相似度；
@@ -24,9 +24,13 @@
 - `knowledge_categories`：可分层的知识分类；
 - `knowledge_document_categories`：文档与分类的关联；
 - `knowledge_derivations`：来源案例/Skill 与派生分析方法的 lineage；
+- `knowledge_revisions`：不可变版本快照、内容哈希和变更说明；
 - `knowledge_embeddings`：按 Embedding 配置隔离保存的向量缓存；
+- `knowledge_graph_states`、`knowledge_entities`、`knowledge_entity_mentions`、
+  `knowledge_relations`：领域图谱 generation、实体、证据提及和关系；
 - `code_relations`、`commit_records`、`commit_file_changes`：代码与 Commit 工程图谱；
 - `agent_memories`：情景、程序和失败记忆；
+- `diagnosis_feedback`、`retrieval_evaluation_*`：人工反馈与检索评测；
 - `model_profiles`：Chat、Embedding、Reranker 配置和加密后的 API Key。
 
 配置 `QDRANT_URL` 后，向量也会按模型配置写入独立 Qdrant collection。SQLite 向量仍是本地可靠回退，因此 Qdrant 临时不可用不会阻止知识正文和分块入库。
@@ -90,6 +94,7 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 - 新增文本知识或上传 Markdown/TXT/JSON/LOG；
 - 修改标题、正文、分类、设备、模块、固件范围、可信等级和可见级别；
 - 修改正文时重新切分并重建当前 Embedding 的向量；
+- 提交审核、发布、驳回、归档，以及查看/恢复历史版本；
 - 使用模板维护结构化故障案例并检查必需章节；
 - 从故障案例或错误分析 Skill 提炼可追溯的分析方法；
 - 删除正文、分块和对应向量。
@@ -188,17 +193,18 @@ https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-api/v1
 
 ## 9. 关于知识图谱
 
-当前版本已经构建代码关系图谱和 Commit 意图图谱，但尚未构建设备、版本、事件码、
-症状、根因、解决方案之间的领域知识图谱，也没有强制依赖图数据库。
+当前版本同时包含领域知识图谱、代码关系图谱和 Commit 意图图谱，均通过 SQL 关系表
+保存，不强制依赖图数据库。
+
+领域图谱只读取已审核发布的知识，从元数据和结构化 Markdown 确定性提取设备、版本、
+模块、症状、日志模式、事件码、根因、诊断步骤、方案、验证和范围关系。它使用 generation
+旁路构建，发布前校验输入签名；失败或构建期间知识变化时继续保留上一版本。
 
 代码图谱使用 `CALLS`、`REFERENCES`、`INHERITS`、`IMPLEMENTS` 关系；Commit 图谱支持
-query → Commit → 变更文件 → 当前代码符号。两者通过 SQL 关系表保存，并由 Agentic
-Search 与知识、记忆和向量检索融合。完整使用方式见
-[认知检索与图谱使用说明](cognitive-retrieval.md)。
-
-领域知识目前仍优先保证可解释的分层文档 RAG：每个结果都能返回知识分块、文档和
-日志证据 ID。后续增加领域图谱时，应单独设计设备、版本、模块、事件码、症状、根因、
-解决方案以及它们的关系；不要仅从自由文本自动生成关系后直接用于确定性诊断。
+query → Commit → 变更文件 → 当前代码符号。三类图谱均由 Agentic Search 与知识、
+记忆和向量检索融合。领域自动提取关系是候选检索路径，不会越过知识审核直接成为
+确定性诊断事实。完整使用方式见 [认知检索与图谱使用说明](cognitive-retrieval.md) 和
+[知识治理、领域图谱与检索评测](quality-governance-and-evaluation.md)。
 
 ## 10. 推荐使用顺序
 
@@ -206,5 +212,6 @@ Search 与知识、记忆和向量检索融合。完整使用方式见
 2. 添加并测试公司批准的诊断大模型 API；
 3. 根据数据是否允许出网，选择本地 BGE 或 Embedding API；
 4. 激活 Embedding 后重建向量索引，确认向量数等于知识分块数；
-5. 最后启用 Qwen Reranker，对比启用前后的历史案例召回结果；
-6. 生产环境使用 HTTPS、统一后端密钥、SSO/RBAC 和数据库备份。
+5. 审核并发布确认过的知识，再重建领域图谱；
+6. 启用 Qwen Reranker，并用固定评测集对比切换前后的检索指标；
+7. 生产环境使用 HTTPS、统一后端密钥、SSO/RBAC 和数据库备份。

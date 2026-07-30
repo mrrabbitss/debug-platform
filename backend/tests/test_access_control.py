@@ -144,3 +144,34 @@ def test_viewer_role_is_globally_read_only(tmp_path: Path) -> None:
             authorize_request(db, _request("POST", "/api/v1/cases"), principal)
         assert forbidden.value.status_code == 403
     engine.dispose()
+
+
+def test_quality_governance_admin_boundaries(tmp_path: Path) -> None:
+    engine, session_factory = _database(tmp_path)
+    with session_factory() as db:
+        engineer = {
+            "id": "USR-engineer",
+            "role": "ENGINEER",
+            "type": "user_token",
+        }
+        authorize_request(
+            db,
+            _request("GET", "/api/v1/knowledge/graph/status"),
+            engineer,
+        )
+        with pytest.raises(HTTPException) as graph_rebuild:
+            authorize_request(
+                db,
+                _request("POST", "/api/v1/knowledge/graph/rebuild"),
+                engineer,
+            )
+        assert graph_rebuild.value.status_code == 403
+
+        with pytest.raises(HTTPException) as evaluation:
+            authorize_request(
+                db,
+                _request("GET", "/api/v1/evaluation/datasets"),
+                engineer,
+            )
+        assert evaluation.value.status_code == 403
+    engine.dispose()
