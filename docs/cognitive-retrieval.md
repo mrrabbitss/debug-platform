@@ -1,7 +1,10 @@
 # 认知检索、故障知识与图谱使用说明
 
-本文说明结构化故障案例、分析方法提炼、代码图谱、Commit 图谱、任务记忆和
-Agentic Search 的实际使用方式、数据边界与验证方法。项目全部功能状态仍以根目录
+本文说明结构化故障案例、分析方法提炼、领域/代码/Commit 图谱、任务记忆和
+Agentic Search 的实际使用方式、数据边界与验证方法。知识审核、GraphRAG generation、
+评测和人工反馈的完整流程另见
+[`quality-governance-and-evaluation.md`](quality-governance-and-evaluation.md)。
+项目全部功能状态仍以根目录
 [`CAPABILITIES.md`](../CAPABILITIES.md) 为唯一总账。
 
 ## 1. 能力关系
@@ -10,7 +13,8 @@ Agentic Search 的实际使用方式、数据边界与验证方法。项目全�
 Markdown 故障案例 / 错误分析 Skill
               │
               ├─ 结构检查、分块、BM25、Embedding
-              └─ 确定性提炼 → 可复用分析方法
+              ├─ 确定性提炼 → 可复用分析方法
+              └─ 审核发布 → 领域实体/关系 → GraphRAG
 
 代码仓归档 ──→ 代码符号 ──→ CALLS / REFERENCES / INHERITS / IMPLEMENTS
      │
@@ -22,6 +26,7 @@ Git Bundle ──→ Commit ──→ 变更文件 ──→ 当前代码符号
 用户 query
   └─ Agentic Search 动态计划
        ├─ 知识库混合检索
+       ├─ 领域知识图谱多跳
        ├─ 任务记忆
        ├─ 代码图谱多跳
        └─ Commit → 文件 → 代码路径
@@ -32,7 +37,7 @@ Git Bundle ──→ Commit ──→ 变更文件 ──→ 当前代码符号
 ```
 
 这些图谱当前使用 SQLAlchemy 关系表保存在 SQLite 或 PostgreSQL 中，不要求部署图
-数据库。代码符号、关系、Commit 和文件变更使用由仓库及语义身份生成的确定性 ID，
+数据库。领域/代码实体、关系、Commit 和文件变更使用由来源及语义身份生成的确定性 ID，
 同一仓库在内容未变时重建索引不会让已有 evidence ID 漂移。SQLite 仍是单机默认，
 Qdrant 只作为知识向量的可选镜像。
 
@@ -190,8 +195,9 @@ Commit 图谱保存 hash、父提交、作者、时间、主题、正文以及�
 ## 7. Agentic Search
 
 前端“认知检索”页可以选择案例并输入自然语言问题。自动规划器默认使用知识库和
-记忆；检测到函数、调用、继承、实现等意图时增加代码图谱；检测到 Commit、变更、
-回归、版本或“谁改的”等意图时增加 Commit 图谱。
+记忆；存在活动领域图谱时增加 GraphRAG；检测到函数、调用、继承、实现等意图时
+增加代码图谱；检测到 Commit、变更、回归、版本或“谁改的”等意图时增加 Commit
+图谱。
 
 也可以关闭自动规划并手动选择模块。执行结果包含：
 
@@ -203,11 +209,16 @@ Commit 图谱保存 hash、父提交、作者、时间、主题、正文以及�
 
 统一排序流程：
 
-1. 知识模块执行 BM25、精确词、已索引 Dense 和可选 Reranker；
-2. 记忆和 Commit 模块执行 BM25，代码模块执行词法定位和关系扩展；
-3. 使用 Reciprocal Rank Fusion 合并不同模块；
+1. 知识模块先生成有界 BM25/精确词原始候选，不在模块内重复调用模型；
+2. 领域图谱沿已审核知识关系扩展，记忆和 Commit 模块执行 BM25，代码模块执行词法定位和关系扩展；
+3. 使用加权 Reciprocal Rank Fusion 合并不同模块，并以轮询配额避免单模块挤占候选；
 4. 使用当前活动 Embedding 对跨模块候选统一计算余弦相似度；
-5. 当前活动 Reranker 对候选进行最终排序；未配置或失败时保留融合结果。
+5. 当前活动 Reranker 只执行一次最终排序；未配置或失败时保留融合结果。
+
+知识 Dense 检索在配置 Qdrant 时直接执行有界 top-K；SQLite/PostgreSQL 回退只扫描
+向量行并在取回正文前裁剪候选。全量 Embedding、代码图谱和领域图谱重建都使用
+generation 旁路构建，只有完整成功后才切换活动版本。领域图谱还会检测构建期间
+已审核知识是否变化，过期构建不会发布。
 
 Embedding 或 Reranker 使用 API Profile 时，候选知识、记忆或源码片段可能发送到该
 模型端点。企业环境必须先确认日志和源码的数据出站策略；需要完全本地处理时使用
@@ -219,8 +230,12 @@ Hashing/BGE 与本地 Qwen Reranker。系统审计只记录端点来源、用途
 ```text
 GET  /api/v1/knowledge/templates/fault-case
 POST /api/v1/knowledge/{document_id}/extract-method
+GET  /api/v1/knowledge/graph/status
+POST /api/v1/knowledge/graph/rebuild
+POST /api/v1/knowledge/graph/search
 
 POST /api/v1/cases/{case_id}/repositories
+GET  /api/v1/jobs/{job_id}
 POST /api/v1/repositories/{repository_id}/index
 GET  /api/v1/repositories/{repository_id}/graph
 GET  /api/v1/repositories/{repository_id}/graph/search
@@ -230,6 +245,9 @@ POST /api/v1/cases/{case_id}/agentic-search
 GET  /api/v1/cases/{case_id}/memories
 GET  /api/v1/system/retrieval
 ```
+
+仓库上传返回 `202 Accepted`，响应中的 `job` 完成后才能调用索引接口。知识文件上传
+同样返回后台导入任务，避免大文件读取、解压、切块和模型推理占用 FastAPI 事件循环。
 
 Agentic Search 示例：
 
@@ -270,7 +288,7 @@ npm.cmd run build
 - 真实临时 Git 仓的 Commit、Unicode 路径和 Git Bundle 导入；
 - 三类记忆生成、去重、脱敏、案例隔离和复用计数；
 - Agentic Search 计划、知识/记忆融合、Dense、Reranker 回退和失败记忆；
-- Alembic `0007` 新建数据库及旧数据库升级。
+- Alembic `0008` 新建数据库、旧数据库升级、generation 回滚和报告版本唯一性。
 
 真实企业源码和日志仍应在内部环境建立经过脱敏的 Golden Corpus，用 Recall、MRR、
 NDCG、多跳路径准确率和工程师复核结果持续评估。

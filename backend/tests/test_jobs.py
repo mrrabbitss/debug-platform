@@ -198,3 +198,27 @@ def test_transactional_completion_cannot_be_overwritten_by_late_cancel(tmp_path:
 
     runner.shutdown()
     engine.dispose()
+
+
+def test_job_runner_can_restart_after_application_lifespan_shutdown(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_factory = make_session_factory(tmp_path)
+    monkeypatch.setattr(jobs, "SessionLocal", session_factory)
+    runner = jobs.JobRunner(max_workers=1)
+    runner.register("restartable", lambda ctx: {"ok": True}, ())
+
+    runner.shutdown()
+    runner.start()
+    with session_factory() as db:
+        job = runner.submit(
+            db,
+            "restartable",
+            lambda ctx: {"ok": True},
+            input_data={},
+        )
+
+    assert wait_for_terminal(session_factory, job.id).status == "COMPLETED"
+    runner.shutdown()
+    engine.dispose()

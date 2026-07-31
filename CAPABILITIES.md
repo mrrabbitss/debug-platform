@@ -3,7 +3,7 @@
 > 本文件是项目功能范围的唯一总账（Single Source of Truth）。
 > 新需求、在研能力、已交付能力、约束和冲突处理都必须同步更新本文件，防止跨迭代遗忘或重复建设。
 
-最后更新：2026-07-28
+最后更新：2026-07-30
 
 ## 1. 状态说明
 
@@ -39,7 +39,7 @@
 | 日志浏览与任意行读取 | `AVAILABLE` | 支持分页、原文搜索、事件跳转源行 |
 | 事件与时间线 | `AVAILABLE` | 事件分页、级别/模块聚合、时间线数据 |
 | 原子解析版本 | `AVAILABLE` | 新解析失败时保留最后一次成功结果 |
-| 持久化任务 | `AVAILABLE` | 支持进度、重启恢复、取消和重试 |
+| 持久化任务 | `AVAILABLE` | 支持进度、重启恢复、取消、重试和应用生命周期安全关闭 |
 
 ### 2.3 诊断、RAG 与模型
 
@@ -50,8 +50,9 @@
 | 模型网关 | `AVAILABLE` | 前端管理并切换 Chat、Embedding、Reranker 配置 |
 | 本地/API Embedding | `AVAILABLE` | 内置 Hashing、本地 Sentence Transformers、兼容 API |
 | 本地/API Reranker | `AVAILABLE` | 本地 CrossEncoder、Qwen Rerank API |
-| 混合检索 | `AVAILABLE` | BM25、精确词重合、Dense Embedding、Reranker |
-| Qdrant 镜像 | `AVAILABLE` | SQLite 向量为权威存储，配置 Qdrant 时同步向量 |
+| 混合检索 | `AVAILABLE` | 有界 BM25 候选、Dense top-K、加权 RRF、模块均衡和单次 Reranker |
+| Qdrant 镜像 | `AVAILABLE` | 数据库向量为权威存储，按 generation 镜像并执行有界 top-K |
+| 检索评测 | `AVAILABLE` | 固定 query/预期证据/根因和模块，输出 Recall@K、Precision@K、MRR、NDCG@K、Root Cause Top-K |
 | 案例对话 | `AVAILABLE` | 基于当前案例、最新诊断和检索证据回答 |
 
 ### 2.4 分层知识库
@@ -59,23 +60,26 @@
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
 | 树形分类 | `AVAILABLE` | 诊断规则、历史问题、参考资料，可增加和修改分类 |
-| 文档 CRUD | `AVAILABLE` | 新增、上传、查看、修改、删除和启停 |
-| Markdown 分块 | `AVAILABLE` | 按标题和段落切分，保留标题上下文 |
-| 自动向量索引 | `AVAILABLE` | 文档变更后重建当前 Embedding Profile 的向量 |
+| 文档 CRUD | `AVAILABLE` | 新增、后台上传、查看、修改和删除；发布/归档必须走审核状态机 |
+| Markdown 分块 | `AVAILABLE` | 按标题和段落切分，超长单段继续分片并限制 chunk 大小 |
+| 自动向量索引 | `AVAILABLE` | 文档变更后更新活动 generation；全量重建失败保留上一版 |
 | 故障案例结构化 Markdown | `AVAILABLE` | 错误形式、日志分析、错误定位、解决方案、验证结果 |
 | 错误分析 Skill | `AVAILABLE` | 以 Markdown 保存可复用的错误分析技能 |
 | 分析方法提炼 | `AVAILABLE` | 从故障案例或错误分析 Skill 提取输入信号、步骤、决策点和验证方法 |
+| 知识版本与审核 | `AVAILABLE` | DRAFT/IN_REVIEW/ACTIVE/REJECTED/ARCHIVED、不可变快照、回滚和数据库乐观锁 |
+| 人工反馈闭环 | `AVAILABLE` | 诊断反馈先审核，再生成待二次审核的知识草稿；不会自动写入记忆或线上知识 |
+| 领域知识图谱 | `LIMITED` | 从已发布知识确定性提取症状/根因/方案等实体关系，generation 原子切换；同义词与冲突消解仍有限 |
 
 ### 2.5 代码与工程协同
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| 代码仓归档上传 | `AVAILABLE` | ZIP/TAR 安全展开并与案例关联 |
+| 代码仓归档上传 | `AVAILABLE` | 上传后返回后台任务，ZIP/TAR/Git Bundle 解压不会阻塞 API 事件循环 |
 | C/C++ 符号索引 | `AVAILABLE` | 函数、宏、结构体、签名、源码范围和调用名称 |
 | 静态分析 | `AVAILABLE` | cppcheck、clang-tidy，工具不可用时明确报告 |
 | 补丁建议 | `AVAILABLE` | 只生成候选 unified diff，不自动覆盖代码 |
 | VS Code 扩展 | `AVAILABLE` | 上传日志/工作区、关联案例、询问选中代码 |
-| 代码语义图谱 | `LIMITED` | 建模 CALLS、REFERENCES、INHERITS、IMPLEMENTS；默认是多语言静态启发式 |
+| 代码语义图谱 | `LIMITED` | 建模四类关系；generation 旁路构建并原子切换，解析仍是多语言静态启发式 |
 | Commit 意图图谱 | `LIMITED` | query → commit → changed file → 当前 HEAD 代码符号；最多索引 2,000 个 Commit |
 | Git Bundle 导入 | `AVAILABLE` | 在保留完整历史的情况下安全导入仓库 |
 
@@ -145,6 +149,7 @@
 - 定位：认知中枢。
 - 可调度模块：
   - 分层知识库混合检索；
+  - 领域知识图谱 / GraphRAG；
   - 代码图谱；
   - Commit 图谱；
   - 三类记忆。
@@ -154,12 +159,35 @@
   - Reranker；
   - 图关系多跳扩展；
   - 跨模块结果融合。
+- 性能与一致性：
+  - 知识模块在 Agentic Search 中只生成原始候选，Dense/Reranker 不重复调用；
+  - 不同模块按加权 RRF 和候选配额进入统一语义排序；
+  - Qdrant 只取有界 top-K；无 Qdrant 时只扫描紧凑向量行，不加载全部文档正文。
 - 编排原则：
   1. 先识别 query 的日志、代码、历史、回归、处理步骤等意图；
   2. 动态选择模块，不对每次请求盲目执行所有昂贵步骤；
   3. 第一跳找候选，后续跳沿代码边或 commit/file/symbol 边扩展；
   4. 使用融合和 Reranker 统一排序；
   5. 返回执行计划、各阶段耗时/候选数、最终证据和可解释路径。
+
+### 3.5 领域知识图谱与 GraphRAG
+
+- 状态：`LIMITED`
+- 数据源：只使用 `ACTIVE` 且 `active=true` 的已审核知识；
+- 实体：症状、设备、型号、固件、模块、日志模式、事件码、根因、诊断步骤、方案、验证和范围；
+- 关系：症状、日志、事件码、根因、定位步骤、解决、验证和适用范围；
+- 一致性：新 generation 旁路构建，发布前校验知识输入签名并 CAS 切换；
+- 失败语义：构建失败或构建期间知识变化时保留上一活动 generation；
+- 当前限制：确定性 Markdown/元数据抽取，不等同于完成实体消歧的企业级知识图谱。
+
+### 3.6 质量治理与反馈
+
+- 状态：`AVAILABLE`
+- 知识生命周期：草稿、待审核、已发布、已驳回、已归档；
+- 编辑和历史恢复均创建新草稿版本，不覆盖不可变历史；
+- `lock_version` 同时由前端预期值和数据库 UPDATE 条件校验；
+- 检索评测保存模型/算法快照并强制关闭记忆写入；
+- 人工反馈必须经过“反馈审核 → 生成知识草稿 → 知识审核”两道门。
 
 ## 4. 依赖与冲突约束
 
@@ -169,10 +197,14 @@
 | 图谱结果没有 evidence ID | 每个节点、关系、Commit、记忆都必须使用稳定数据库 ID |
 | Commit 历史与普通代码压缩包冲突 | 代码图谱可独立建立；Commit 图谱明确显示 `UNAVAILABLE`，不伪造历史 |
 | 记忆可能放大错误结论 | 保存置信度、结果、来源和失败类型；召回时只作证据候选 |
+| 未审核知识污染检索 | 新增、导入、编辑和回滚均为草稿；查询同时校验 `active` 与 `review_status=ACTIVE` |
+| 图谱构建期间知识变化 | 发布前重算输入签名并校验构建标记；变化时丢弃新 generation，保留旧版 |
+| 评测污染在线记忆 | 评测固定 `record_memory=false`，不新增、不强化、不增加复用次数 |
+| 人工反馈自动学习敏感内容 | 反馈审核通过后也只能生成知识草稿，仍需第二次审核发布 |
 | 不同案例之间的数据隔离 | 代码仓、Commit 和情景记忆继承案例访问控制；全局程序记忆只保存脱敏方法 |
 | 外部模型数据出站 | 沿用模型网关、端点校验和内容无关审计；无 API 时必须有本地确定性回退 |
 | SQLite 与 PostgreSQL 差异 | 所有新表通过 Alembic 建立，查询不依赖数据库专有 JSON 运算 |
-| 大仓库性能 | 索引使用批处理、上限、进度和可重建派生数据；不能逐符号长期占用写锁 |
+| 大仓库性能 | 上传与解压分离；图谱使用 generation 分批旁路构建；查询先做数据库候选过滤 |
 | 源码安全 | 图谱和补丁只读；不自动修改、执行或编译上传代码 |
 | 归档安全 | 保持路径穿越、文件数、深度和大小限制；Git 导入禁用交互凭据和 hooks |
 | 功能入口冲突 | “知识库”管理事实和方法；“认知检索”负责跨知识/代码/Commit/记忆查询 |
@@ -187,22 +219,27 @@
 - [x] Commit 历史、父子关系、文件变更及 query → commit → code 路径；
 - [x] EPISODIC / PROCEDURAL / FAILURE 记忆生成、去重、查询和复用计数；
 - [x] Agentic Search 动态计划、BM25、Dense、Reranker、图扩展和 RRF 融合；
+- [x] 知识不可变版本、审核状态机、数据库乐观锁和新草稿回滚；
+- [x] 已审核知识实体/关系图谱、构建期输入校验、原子 generation 和 GraphRAG；
+- [x] 检索评测数据集、后台运行、配置快照和五项基础指标；
+- [x] 人工诊断反馈审核，以及“通过反馈 → 待二次审核知识草稿”的安全闭环；
 - [x] 前端知识库入口和独立“认知检索”页面；
-- [x] Alembic `0007` 新迁移、幂等升级和 SQLite 兼容测试；
+- [x] 前端“质量与治理”页面，以及知识审核和版本历史操作；
+- [x] Alembic `0009` 知识治理/领域图谱/评测迁移、幂等升级和 SQLite 兼容测试；
 - [x] RBAC、案例隔离、删除级联、备份恢复和审计回归；
 - [x] 更新 README、架构文档、API 使用说明和本总账；
 - [x] 后端、前端、扩展、依赖审计、Win11 启动闭环和真实页面验证。
 
-本轮本地验证基线（2026-07-28）：
+本轮本地验证基线（2026-07-30）：
 
-- 后端：Ruff、compileall、`93 passed, 1 skipped`；跳过项是需要外部
+- 后端：Ruff、compileall、`107 passed, 1 skipped`；跳过项是需要外部
   PostgreSQL/Qdrant 的服务集成测试；
 - 前端：干净 `npm ci` 后通过 `vue-tsc` 和 Vite production build；
 - VS Code 扩展：干净 `npm ci` 后通过 TypeScript 编译，Archiver 8 依赖链审计为 0；
 - 安全审计：pip-audit、前端 npm audit、扩展 npm audit 均无已知漏洞；
 - Windows 运行：隔离 SQLite、独立端口的前后端/API 闭环通过；
-- 页面：故障案例模板、认知检索计划/结果、任务记忆、模型与索引状态均已实测，
-  浏览器控制台无错误。
+- 页面：知识草稿→待审核→发布→版本历史、领域图谱原子重建/检索、评测集、
+  人工反馈、认知检索和模型状态均已实测，浏览器控制台无错误。
 
 外部 PostgreSQL/Qdrant 和 Linux/Windows 矩阵由每次 push 的 GitHub Actions
 继续验证；本机未安装 Docker，因此不把未执行的外部服务项伪装成本地通过。
@@ -215,4 +252,7 @@
 | 增量代码/Commit 索引 | `PLANNED` | 按 commit 增量更新，避免全仓重建 |
 | 图数据库后端 | `PLANNED` | 数据规模达到阈值后评估 Neo4j/AGE；当前关系表保持可迁移 |
 | 记忆衰减与人工审核 | `PLANNED` | 过期、冲突记忆提示和人工批准 |
-| 检索评测集 | `PLANNED` | 建立 query、期望证据、Recall/MRR/NDCG 和多跳正确率基线 |
+| 评测回归门禁 | `PLANNED` | 在内网 CI 固定数据/模型版本、阈值和版本间差异报告 |
+| 知识差异与实体合并 UI | `PLANNED` | 可视化版本 diff、同义实体合并、冲突关系审核 |
+| 分布式任务租约 | `PLANNED` | 多实例部署时引入集中队列、心跳、可见性超时和死信 |
+| 独立知识审核角色 | `PLANNED` | 从 ADMIN 中拆出知识维护者和审核者，支持职责分离 |

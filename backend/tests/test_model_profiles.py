@@ -287,10 +287,121 @@ def test_sqlite_reindex_job_updates_progress_without_write_lock(tmp_path: Path, 
     monkeypatch.setattr(jobs, "SessionLocal", session_factory)
     result = knowledge.reindex_knowledge_job(jobs.JobContext("JOB-reindex"), profile.id)
 
-    assert result == {"profile_id": profile.id, "vectors": 2}
+    assert result["profile_id"] == profile.id
+    assert result["vectors"] == 2
+    assert result["generation_id"].startswith("EGEN-")
     with session_factory() as db:
         assert db.query(KnowledgeEmbedding).count() == 2
         assert db.get(Job, "JOB-reindex").progress == 100
+    engine.dispose()
+
+
+def test_failed_embedding_rebuild_keeps_previous_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'atomic-reindex.db'}")
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    with session_factory() as db:
+        profile = ModelProfile(
+            id="MODEL-atomic",
+            name="Hashing",
+            task_type="embedding",
+            mode="builtin",
+            provider="hashing",
+            model_name="hashing-char-384",
+            is_active=True,
+            config_json='{"batch_size":1}',
+        )
+        document = KnowledgeDocument(
+            id="DOC-atomic",
+            title="Atomic vectors",
+            content=("A" * 1700) + "\n\n" + ("B" * 1700),
+        )
+        db.add_all([profile, document])
+        db.commit()
+        knowledge.index_document(db, document)
+        previous_generation = profile.active_embedding_generation_id
+        previous_ids = set(db.scalars(select(KnowledgeEmbedding.id)))
+        assert previous_generation
+
+        original_embed = retrieval_models.embed_texts
+        calls = 0
+
+        def fail_second_batch(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise retrieval_models.RetrievalModelError(
+                    "synthetic embedding failure"
+                )
+            return original_embed(*args, **kwargs)
+
+        monkeypatch.setattr(
+            retrieval_models,
+            "embed_texts",
+            fail_second_batch,
+        )
+        with pytest.raises(
+            retrieval_models.RetrievalModelError,
+            match="synthetic embedding failure",
+        ):
+            retrieval_models.reindex_all_embeddings(db, profile)
+
+        db.refresh(profile)
+        assert profile.active_embedding_generation_id == previous_generation
+        assert set(db.scalars(select(KnowledgeEmbedding.id))) == previous_ids
+    engine.dispose()
+
+
+def test_cancel_at_embedding_publish_keeps_previous_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'cancel-publish.db'}")
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    with session_factory() as db:
+        profile = ModelProfile(
+            id="MODEL-cancel-publish",
+            name="Hashing",
+            task_type="embedding",
+            mode="builtin",
+            provider="hashing",
+            model_name="hashing-char-384",
+            is_active=True,
+        )
+        document = KnowledgeDocument(
+            id="DOC-cancel-publish",
+            title="Cancellation",
+            content="authentication timeout",
+        )
+        db.add_all([profile, document])
+        db.commit()
+        knowledge.index_document(db, document)
+        previous_generation = profile.active_embedding_generation_id
+        previous_ids = set(db.scalars(select(KnowledgeEmbedding.id)))
+
+    class CancelAtPublish:
+        def update(self, _progress: int, _message: str) -> None:
+            return
+
+        def complete_in_transaction(self, *_args, **_kwargs) -> None:
+            raise jobs.JobCancelledError("cancel at publish")
+
+    monkeypatch.setattr(knowledge, "SessionLocal", session_factory)
+    with pytest.raises(jobs.JobCancelledError, match="cancel at publish"):
+        knowledge.reindex_knowledge_job(
+            CancelAtPublish(),
+            "MODEL-cancel-publish",
+        )
+
+    with session_factory() as db:
+        profile = db.get(ModelProfile, "MODEL-cancel-publish")
+        assert profile is not None
+        assert profile.active_embedding_generation_id == previous_generation
+        assert set(db.scalars(select(KnowledgeEmbedding.id))) == previous_ids
     engine.dispose()
 
 

@@ -179,6 +179,13 @@ export interface KnowledgeDocument {
   trust_level: string
   confidentiality: string
   active: boolean
+  review_status: 'DRAFT' | 'IN_REVIEW' | 'ACTIVE' | 'REJECTED' | 'ARCHIVED'
+  version: number
+  lock_version: number
+  reviewed_by?: string
+  reviewed_at?: string
+  review_comment?: string
+  published_at?: string
   category_id?: string
   category_name?: string
   chunk_count: number
@@ -186,4 +193,65 @@ export interface KnowledgeDocument {
   content?: string
   created_at: string
   updated_at: string
+}
+
+export interface KnowledgeRevision {
+  id: string
+  document_id: string
+  version: number
+  content_hash: string
+  change_summary: string
+  created_by?: string
+  created_at: string
+  snapshot: Record<string, any>
+}
+
+export interface DomainGraphStatus {
+  status: 'NOT_BUILT' | 'BUILDING' | 'READY' | 'STALE' | 'FAILED'
+  active_generation_id?: string
+  building_generation_id?: string
+  entities: number
+  relations: number
+  metadata: Record<string, any>
+  error?: string
+}
+
+export interface EvaluationDataset {
+  id: string
+  name: string
+  description: string
+  active: boolean
+  created_by?: string
+  case_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface EvaluationCase {
+  id: string
+  dataset_id: string
+  case_id: string
+  query: string
+  expected_evidence_ids: string[]
+  expected_root_causes: string[]
+  modules: Array<'knowledge' | 'domain_graph' | 'code' | 'commit' | 'memory'>
+  top_k: number
+  max_hops: number
+  metadata: Record<string, any>
+  created_at: string
+  updated_at: string
+}
+
+export interface EvaluationRun {
+  id: string
+  dataset_id: string
+  job_id?: string
+  status: string
+  config: Record<string, any>
+  metrics: Record<string, number | null>
+  results: Array<Record<string, any>>
+  error_message?: string
+  created_at: string
+  started_at?: string
+  completed_at?: string
 }

@@ -1,13 +1,13 @@
 # Validation Record
 
-Last validated: 2026-07-23 on Windows 11 with Python 3.14 and Node.js 24.
+Last validated: 2026-07-29 on Windows 11.
 
 ## Current regression result
 
 - Backend dependency consistency (`pip check`): passed;
 - Ruff static checks across backend, tests and Python utility scripts: passed;
 - Python compileall: passed;
-- Pytest: 86 passed, 1 external-service test skipped locally;
+- Pytest: 102 passed, 1 external-service test skipped locally;
 - Vue TypeScript check and production Vite build: passed;
 - VS Code extension TypeScript compile: passed;
 - Python, frontend and extension dependency audit: 0 known vulnerabilities after applying current fixes;
@@ -19,7 +19,7 @@ The test environment includes Starlette's supported `httpx2` test client; the su
 
 ## Runtime and browser checks
 
-- Fresh isolated SQLite database upgraded through Alembic revisions 0001-0006;
+- Fresh isolated SQLite database upgraded through Alembic revisions 0001-0008;
 - Backend liveness/readiness, frontend `/api` proxy and case create/read round trip passed on alternate loopback ports;
 - “安全与审计” rendered local identity, database/storage/job status and redacted audit rows;
 - User creation dialog rendered role, initial-token and expiry controls;
@@ -36,8 +36,17 @@ The reusable command is `scripts\runtime_smoke.bat`. It uses temporary storage a
 - Exact 110,904-line streaming parse, sparse line index, arbitrary-line reads and raw keyword search;
 - Event pagination, facets, timeline data and event-to-source navigation;
 - Atomic parse generations: failed reparse retains the last published events;
+- Background repository/knowledge imports: upload returns a job before archive
+  extraction, Git clone, Markdown chunking or embedding begins;
+- Atomic graph/vector generations: failed rebuilds and cancellation at the
+  publish boundary retain the last published graph and embedding index;
+- Bounded hybrid retrieval, Qdrant top-K, single-pass Agentic dense/rerank and
+  balanced weighted RRF candidates;
+- Atomic report version reservation, temporary-file publication and HTML/PDF
+  markup escaping;
 - Persistent jobs, restart recovery, cooperative cancellation, retry and unsafe-cancellation rejection;
-- Fresh/legacy migrations, SQLite foreign keys, cascade deletion and managed storage cleanup;
+- Fresh/legacy migrations, real 0007 graph/vector/report data upgrade,
+  SQLite foreign keys, cascade deletion and managed storage cleanup;
 - Model endpoint SSRF/allowlist checks, evidence-ID validation and deterministic fallback;
 - Chat/Embedding/Reranker profile switching, encrypted key redaction and content-free model-egress audit;
 - Project-relative BGE/Qwen model paths, BGE query instruction handling and local-model installer layout;

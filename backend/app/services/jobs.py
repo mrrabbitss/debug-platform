@@ -94,13 +94,25 @@ class JobRunner:
     """
 
     def __init__(self, max_workers: int | None = None) -> None:
-        self.executor = ThreadPoolExecutor(
-            max_workers=max_workers or get_settings().job_workers,
-            thread_name_prefix="gw-ap-job",
-        )
+        self.max_workers = max_workers or get_settings().job_workers
+        self.executor = self._new_executor()
+        self._shutdown = False
         self.handlers: dict[str, JobHandler] = {}
         self._scheduled: set[str] = set()
         self._lock = threading.Lock()
+
+    def _new_executor(self) -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(
+            max_workers=self.max_workers,
+            thread_name_prefix="gw-ap-job",
+        )
+
+    def start(self) -> None:
+        with self._lock:
+            if not self._shutdown:
+                return
+            self.executor = self._new_executor()
+            self._shutdown = False
 
     def register(
         self,
@@ -229,7 +241,12 @@ class JobRunner:
         return job
 
     def shutdown(self, wait: bool = True) -> None:
-        self.executor.shutdown(wait=wait, cancel_futures=False)
+        with self._lock:
+            if self._shutdown:
+                return
+            executor = self.executor
+            self._shutdown = True
+        executor.shutdown(wait=wait, cancel_futures=False)
 
     def _schedule(
         self,
@@ -237,6 +254,7 @@ class JobRunner:
         fallback_function: Callable[..., Any] | None = None,
         fallback_args: tuple[Any, ...] = (),
     ) -> None:
+        self.start()
         with self._lock:
             if job_id in self._scheduled:
                 return

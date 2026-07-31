@@ -7,6 +7,7 @@
         <el-menu-item index="/cases">故障案例</el-menu-item>
         <el-menu-item index="/knowledge">知识库</el-menu-item>
         <el-menu-item index="/cognitive-search">认知检索</el-menu-item>
+        <el-menu-item index="/quality-governance">质量与治理</el-menu-item>
         <el-menu-item index="/settings">系统设置</el-menu-item>
         <el-menu-item index="/security">安全与审计</el-menu-item>
       </el-menu>

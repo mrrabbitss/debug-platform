@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from fastapi import UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 from app.core.utils import sha256_file
@@ -102,9 +103,24 @@ class StorageService:
         safe_name = Path(target_name or upload.filename or "upload.bin").name
         target = target_dir / safe_name
         max_size = get_settings().max_upload_bytes
+
+        return await run_in_threadpool(
+            self._copy_upload_stream_limited,
+            upload.file,
+            target,
+            max_size,
+        )
+
+    @staticmethod
+    def _copy_upload_stream_limited(
+        stream: BinaryIO,
+        target: Path,
+        max_size: int,
+    ) -> tuple[Path, int, str]:
         size = 0
+        stream.seek(0)
         with target.open("wb") as output:
-            while chunk := await upload.read(1024 * 1024):
+            while chunk := stream.read(1024 * 1024):
                 size += len(chunk)
                 if size > max_size:
                     output.close()

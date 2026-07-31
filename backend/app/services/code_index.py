@@ -4,10 +4,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.core.db import SessionLocal
-from app.core.utils import json_dumps, json_loads, stable_id, utcnow
+from app.core.utils import json_dumps, json_loads, new_id, stable_id, utcnow
 from app.models import CodeRelation, CodeSymbol, Repository
 from app.services.commit_graph import index_commit_graph
 from app.services.jobs import JobContext
@@ -428,10 +428,13 @@ def _choose_target(source: CodeSymbol, candidates: list[CodeSymbol]) -> CodeSymb
     )[0]
 
 
-def _build_code_relations(repository_id: str) -> int:
+def _build_code_relations(repository_id: str, generation_id: str) -> int:
     with SessionLocal() as db:
         symbols = list(db.scalars(
-            select(CodeSymbol).where(CodeSymbol.repository_id == repository_id)
+            select(CodeSymbol).where(
+                CodeSymbol.repository_id == repository_id,
+                CodeSymbol.generation_id == generation_id,
+            )
         ).all())
         exact: dict[str, list[CodeSymbol]] = defaultdict(list)
         short: dict[str, list[CodeSymbol]] = defaultdict(list)
@@ -480,16 +483,29 @@ def _build_code_relations(repository_id: str) -> int:
                 target = _choose_target(source, candidates)
                 if relation_type == "REFERENCES" and target is None:
                     continue
+                source_logical_id = source.logical_id or source.id
+                target_logical_id = (
+                    (target.logical_id or target.id)
+                    if target
+                    else ""
+                )
+                logical_id = stable_id(
+                    "REL",
+                    repository_id,
+                    source_logical_id,
+                    relation_type,
+                    normalized_name,
+                    target_logical_id,
+                )
                 batch.append(CodeRelation(
                     id=stable_id(
-                        "REL",
-                        repository_id,
-                        source.id,
-                        relation_type,
-                        normalized_name,
-                        target.id if target else "",
+                        "RELREV",
+                        logical_id,
+                        generation_id,
                     ),
+                    logical_id=logical_id,
                     repository_id=repository_id,
+                    generation_id=generation_id,
                     source_symbol_id=source.id,
                     target_symbol_id=target.id if target else None,
                     target_name=str(target_name)[:512],
@@ -498,6 +514,8 @@ def _build_code_relations(repository_id: str) -> int:
                     evidence_json=json_dumps({
                         "source_file": source.file_path,
                         "source_line": source.line_start,
+                        "source_evidence_id": source_logical_id,
+                        "target_evidence_id": target_logical_id or None,
                         "resolved": target is not None,
                     }),
                 ))
@@ -512,16 +530,24 @@ def _build_code_relations(repository_id: str) -> int:
         return relation_count
 
 
-def _index_repository_impl(ctx: JobContext, repository_id: str) -> dict[str, Any]:
+def _index_repository_impl(
+    ctx: JobContext,
+    repository_id: str,
+    *,
+    generation_id: str | None = None,
+) -> dict[str, Any]:
+    generation_id = generation_id or new_id("CGEN")
     with SessionLocal() as db:
         repository = db.get(Repository, repository_id)
         if not repository:
             raise ValueError("Repository not found")
+        previous_generation = repository.active_graph_generation_id
         repository.status = "INDEXING"
         repository.graph_status = "INDEXING"
         repository.commit_graph_status = "INDEXING"
-        db.execute(delete(CodeRelation).where(CodeRelation.repository_id == repository_id))
-        db.execute(delete(CodeSymbol).where(CodeSymbol.repository_id == repository_id))
+        metadata = json_loads(repository.index_metadata_json, {})
+        metadata["building_graph_generation_id"] = generation_id
+        repository.index_metadata_json = json_dumps(metadata)
         db.commit()
         root = storage.resolve_path(repository.root_path)
         if not root.is_dir():
@@ -558,9 +584,21 @@ def _index_repository_impl(ctx: JobContext, repository_id: str) -> dict[str, Any
             )
             occurrence = symbol_occurrences[identity]
             symbol_occurrences[identity] += 1
+            logical_id = stable_id(
+                "SYM",
+                repository_id,
+                *identity,
+                occurrence,
+            )
             pending.append(CodeSymbol(
-                id=stable_id("SYM", repository_id, *identity, occurrence),
+                id=stable_id(
+                    "SYMREV",
+                    logical_id,
+                    generation_id,
+                ),
                 repository_id=repository_id,
+                generation_id=generation_id,
+                logical_id=logical_id,
                 kind=symbol["kind"],
                 name=symbol["name"],
                 file_path=symbol["file_path"],
@@ -590,23 +628,59 @@ def _index_repository_impl(ctx: JobContext, repository_id: str) -> dict[str, Any
             )
 
     ctx.update(72, "Building call, reference, inheritance and implementation edges")
-    relation_count = _build_code_relations(repository_id)
+    relation_count = _build_code_relations(repository_id, generation_id)
     with SessionLocal() as db:
+        expected_generation = (
+            Repository.active_graph_generation_id.is_(None)
+            if previous_generation is None
+            else Repository.active_graph_generation_id
+            == previous_generation
+        )
+        published = db.execute(
+            update(Repository)
+            .where(
+                Repository.id == repository_id,
+                expected_generation,
+            )
+            .values(
+                active_graph_generation_id=generation_id,
+                graph_status="INDEXED",
+            )
+        )
+        if published.rowcount != 1:
+            db.rollback()
+            raise RuntimeError(
+                "Code graph build was superseded by another generation"
+            )
         repository = db.get(Repository, repository_id)
-        if repository:
-            repository.graph_status = "INDEXED"
-            metadata = json_loads(repository.index_metadata_json, {})
-            metadata["code_graph"] = {
-                "status": "INDEXED",
-                "files_scanned": len(files),
-                "files_skipped_oversized": skipped_oversized,
-                "max_source_file_bytes": MAX_SOURCE_INDEX_BYTES,
-                "symbols": symbol_count,
-                "relations": relation_count,
-                "relation_types": ["CALLS", "REFERENCES", "INHERITS", "IMPLEMENTS"],
-            }
-            repository.index_metadata_json = json_dumps(metadata)
-            db.commit()
+        if not repository:
+            db.rollback()
+            raise ValueError("Repository was deleted during indexing")
+        metadata = json_loads(repository.index_metadata_json, {})
+        if metadata.get("building_graph_generation_id") == generation_id:
+            metadata.pop("building_graph_generation_id", None)
+        metadata["code_graph"] = {
+            "status": "INDEXED",
+            "generation_id": generation_id,
+            "previous_generation_id": previous_generation,
+            "files_scanned": len(files),
+            "files_skipped_oversized": skipped_oversized,
+            "max_source_file_bytes": MAX_SOURCE_INDEX_BYTES,
+            "symbols": symbol_count,
+            "relations": relation_count,
+            "relation_types": ["CALLS", "REFERENCES", "INHERITS", "IMPLEMENTS"],
+        }
+        repository.index_metadata_json = json_dumps(metadata)
+        db.commit()
+        db.execute(delete(CodeRelation).where(
+            CodeRelation.repository_id == repository_id,
+            CodeRelation.generation_id != generation_id,
+        ))
+        db.execute(delete(CodeSymbol).where(
+            CodeSymbol.repository_id == repository_id,
+            CodeSymbol.generation_id != generation_id,
+        ))
+        db.commit()
 
     ctx.update(88, "Reading Git history and linking commits to code")
     commit_result = index_commit_graph(repository_id, root)
@@ -618,6 +692,7 @@ def _index_repository_impl(ctx: JobContext, repository_id: str) -> dict[str, Any
             db.commit()
     return {
         "repository_id": repository_id,
+        "graph_generation_id": generation_id,
         "files_scanned": len(files),
         "files_skipped_oversized": skipped_oversized,
         "symbols": symbol_count,
@@ -627,15 +702,41 @@ def _index_repository_impl(ctx: JobContext, repository_id: str) -> dict[str, Any
 
 
 def index_repository_job(ctx: JobContext, repository_id: str) -> dict[str, Any]:
+    generation_id = new_id("CGEN")
     try:
-        return _index_repository_impl(ctx, repository_id)
+        return _index_repository_impl(
+            ctx,
+            repository_id,
+            generation_id=generation_id,
+        )
     except Exception:
         with SessionLocal() as db:
             repository = db.get(Repository, repository_id)
             if repository:
+                metadata = json_loads(repository.index_metadata_json, {})
+                if (
+                    metadata.get("building_graph_generation_id")
+                    == generation_id
+                ):
+                    metadata.pop("building_graph_generation_id", None)
+                if generation_id != repository.active_graph_generation_id:
+                    db.execute(delete(CodeRelation).where(
+                        CodeRelation.repository_id == repository_id,
+                        CodeRelation.generation_id == generation_id,
+                    ))
+                    db.execute(delete(CodeSymbol).where(
+                        CodeSymbol.repository_id == repository_id,
+                        CodeSymbol.generation_id == generation_id,
+                    ))
+                metadata["last_index_error_at"] = utcnow().isoformat()
+                repository.index_metadata_json = json_dumps(metadata)
                 repository.status = "INDEX_FAILED"
                 if repository.graph_status == "INDEXING":
-                    repository.graph_status = "INDEX_FAILED"
+                    repository.graph_status = (
+                        "INDEXED"
+                        if repository.active_graph_generation_id
+                        else "INDEX_FAILED"
+                    )
                 if repository.commit_graph_status == "INDEXING":
                     repository.commit_graph_status = "INDEX_FAILED"
                 db.commit()

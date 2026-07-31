@@ -135,10 +135,44 @@ class KnowledgeDocument(Base):
     content: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    review_status: Mapped[str] = mapped_column(String(32), default="ACTIVE", index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1)
+    reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
+    # Governance operations increment lock_version explicitly. SQLAlchemy then
+    # includes the previously loaded value in UPDATE statements, so two writers
+    # cannot both publish edits that were based on the same document version.
+    __mapper_args__ = {
+        "version_id_col": lock_version,
+        "version_id_generator": False,
+    }
+
     chunks: Mapped[list["KnowledgeChunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+
+class KnowledgeRevision(Base):
+    __tablename__ = "knowledge_revisions"
+    __table_args__ = (
+        UniqueConstraint("document_id", "version", name="uq_knowledge_revision_version"),
+        Index("ix_knowledge_revisions_document_created", "document_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    snapshot_json: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    change_summary: Mapped[str] = mapped_column(String(512), default="")
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class KnowledgeChunk(Base):
@@ -207,6 +241,118 @@ class KnowledgeDerivation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class KnowledgeGraphState(Base):
+    __tablename__ = "knowledge_graph_states"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    active_generation_id: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, index=True
+    )
+    building_generation_id: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="NOT_BUILT", index=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class KnowledgeEntity(Base):
+    __tablename__ = "knowledge_entities"
+    __table_args__ = (
+        UniqueConstraint(
+            "generation_id",
+            "entity_type",
+            "normalized_name",
+            name="uq_knowledge_entity_generation_name",
+        ),
+        Index(
+            "ix_knowledge_entities_generation_type",
+            "generation_id",
+            "entity_type",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    logical_id: Mapped[str] = mapped_column(String(40), index=True)
+    generation_id: Mapped[str] = mapped_column(String(40), index=True)
+    entity_type: Mapped[str] = mapped_column(String(32), index=True)
+    canonical_name: Mapped[str] = mapped_column(String(512))
+    normalized_name: Mapped[str] = mapped_column(String(512), index=True)
+    aliases_json: Mapped[str] = mapped_column(Text, default="[]")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KnowledgeEntityMention(Base):
+    __tablename__ = "knowledge_entity_mentions"
+    __table_args__ = (
+        Index(
+            "ix_knowledge_mentions_generation_document",
+            "generation_id",
+            "document_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    generation_id: Mapped[str] = mapped_column(String(40), index=True)
+    entity_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_entities.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True
+    )
+    chunk_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_chunks.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    excerpt: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class KnowledgeRelation(Base):
+    __tablename__ = "knowledge_relations"
+    __table_args__ = (
+        Index(
+            "ix_knowledge_relations_generation_source",
+            "generation_id",
+            "source_entity_id",
+        ),
+        Index(
+            "ix_knowledge_relations_generation_target",
+            "generation_id",
+            "target_entity_id",
+        ),
+        Index(
+            "ix_knowledge_relations_generation_type",
+            "generation_id",
+            "relation_type",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    logical_id: Mapped[str] = mapped_column(String(40), index=True)
+    generation_id: Mapped[str] = mapped_column(String(40), index=True)
+    source_entity_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_entities.id", ondelete="CASCADE"), index=True
+    )
+    target_entity_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_entities.id", ondelete="CASCADE"), index=True
+    )
+    relation_type: Mapped[str] = mapped_column(String(64), index=True)
+    evidence_document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True
+    )
+    evidence_chunk_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_chunks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ModelProfile(Base):
     __tablename__ = "model_profiles"
     __table_args__ = (
@@ -231,13 +377,28 @@ class ModelProfile(Base):
     config_json: Mapped[str] = mapped_column(Text, default="{}")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    active_embedding_generation_id: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class KnowledgeEmbedding(Base):
     __tablename__ = "knowledge_embeddings"
-    __table_args__ = (UniqueConstraint("chunk_id", "profile_id", name="uq_knowledge_embedding_profile"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "chunk_id",
+            "profile_id",
+            "generation_id",
+            name="uq_knowledge_embedding_generation",
+        ),
+        Index(
+            "ix_knowledge_embeddings_profile_generation",
+            "profile_id",
+            "generation_id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     chunk_id: Mapped[str] = mapped_column(
@@ -246,6 +407,7 @@ class KnowledgeEmbedding(Base):
     profile_id: Mapped[str] = mapped_column(
         ForeignKey("model_profiles.id", ondelete="CASCADE"), index=True
     )
+    generation_id: Mapped[str] = mapped_column(String(40), default="legacy", index=True)
     dimension: Mapped[int] = mapped_column(Integer)
     vector_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -263,6 +425,9 @@ class Repository(Base):
     commit_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="UPLOADED")
     graph_status: Mapped[str] = mapped_column(String(32), default="NOT_INDEXED", index=True)
+    active_graph_generation_id: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, index=True
+    )
     commit_graph_status: Mapped[str] = mapped_column(String(32), default="NOT_INDEXED", index=True)
     index_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -271,9 +436,14 @@ class Repository(Base):
 
 class CodeSymbol(Base):
     __tablename__ = "code_symbols"
+    __table_args__ = (
+        Index("ix_code_symbols_repo_generation", "repository_id", "generation_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     repository_id: Mapped[str] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
+    generation_id: Mapped[str] = mapped_column(String(40), default="legacy", index=True)
+    logical_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(32), index=True)
     name: Mapped[str] = mapped_column(String(255), index=True)
     file_path: Mapped[str] = mapped_column(Text, index=True)
@@ -290,6 +460,7 @@ class CodeRelation(Base):
     __tablename__ = "code_relations"
     __table_args__ = (
         Index("ix_code_relations_repo_type", "repository_id", "relation_type"),
+        Index("ix_code_relations_repo_generation", "repository_id", "generation_id"),
         Index("ix_code_relations_source_target", "source_symbol_id", "target_symbol_id"),
     )
 
@@ -297,6 +468,8 @@ class CodeRelation(Base):
     repository_id: Mapped[str] = mapped_column(
         ForeignKey("repositories.id", ondelete="CASCADE"), index=True
     )
+    generation_id: Mapped[str] = mapped_column(String(40), default="legacy", index=True)
+    logical_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     source_symbol_id: Mapped[str] = mapped_column(
         ForeignKey("code_symbols.id", ondelete="CASCADE"), index=True
     )
@@ -398,6 +571,39 @@ class AnalysisRun(Base):
     case: Mapped[Case] = relationship(back_populates="analyses")
 
 
+class DiagnosisFeedback(Base):
+    __tablename__ = "diagnosis_feedback"
+    __table_args__ = (
+        Index("ix_diagnosis_feedback_case_created", "case_id", "created_at"),
+        Index("ix_diagnosis_feedback_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    case_id: Mapped[str] = mapped_column(
+        ForeignKey("cases.id", ondelete="CASCADE"), index=True
+    )
+    analysis_run_id: Mapped[str] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True
+    )
+    verdict: Mapped[str] = mapped_column(String(32), index=True)
+    root_cause_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    evidence_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    corrections_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(32), default="SUBMITTED", index=True)
+    submitted_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    incorporated_document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class Job(Base):
     __tablename__ = "jobs"
 
@@ -409,6 +615,78 @@ class Job(Base):
     input_json: Mapped[str] = mapped_column(Text, default="{}")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RetrievalEvaluationDataset(Base):
+    __tablename__ = "retrieval_evaluation_datasets"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class RetrievalEvaluationCase(Base):
+    __tablename__ = "retrieval_evaluation_cases"
+    __table_args__ = (
+        Index(
+            "ix_retrieval_evaluation_cases_dataset_created",
+            "dataset_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("retrieval_evaluation_datasets.id", ondelete="CASCADE"), index=True
+    )
+    case_id: Mapped[str] = mapped_column(
+        ForeignKey("cases.id", ondelete="CASCADE"), index=True
+    )
+    query: Mapped[str] = mapped_column(Text)
+    expected_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    expected_root_causes_json: Mapped[str] = mapped_column(Text, default="[]")
+    modules_json: Mapped[str] = mapped_column(Text, default="[]")
+    top_k: Mapped[int] = mapped_column(Integer, default=10)
+    max_hops: Mapped[int] = mapped_column(Integer, default=2)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class RetrievalEvaluationRun(Base):
+    __tablename__ = "retrieval_evaluation_runs"
+    __table_args__ = (
+        Index(
+            "ix_retrieval_evaluation_runs_dataset_created",
+            "dataset_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("retrieval_evaluation_datasets.id", ondelete="CASCADE"), index=True
+    )
+    job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="QUEUED", index=True)
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    results_json: Mapped[str] = mapped_column(Text, default="[]")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -427,6 +705,15 @@ class ConversationMessage(Base):
 
 class Report(Base):
     __tablename__ = "reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id",
+            "analysis_run_id",
+            "format",
+            "version",
+            name="uq_report_case_analysis_format_version",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)

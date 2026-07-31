@@ -103,6 +103,7 @@ class KnowledgeUpdate(BaseModel):
     metadata: dict[str, Any] | None = None
     category_id: str | None = None
     active: bool | None = None
+    expected_lock_version: int = Field(ge=1)
 
 
 class KnowledgeOut(ORMModel):
@@ -116,6 +117,13 @@ class KnowledgeOut(ORMModel):
     trust_level: str
     confidentiality: str
     active: bool
+    review_status: str
+    version: int
+    lock_version: int
+    reviewed_by: str | None
+    reviewed_at: datetime | None
+    review_comment: str | None
+    published_at: datetime | None
     category_id: str | None = None
     category_name: str | None = None
     chunk_count: int = 0
@@ -126,6 +134,87 @@ class KnowledgeOut(ORMModel):
 
 class KnowledgeDetailOut(KnowledgeOut):
     content: str
+
+
+class KnowledgeReviewAction(BaseModel):
+    expected_lock_version: int = Field(ge=1)
+    comment: str | None = Field(default=None, max_length=4000)
+
+
+class KnowledgeRollbackRequest(BaseModel):
+    expected_lock_version: int = Field(ge=1)
+    change_summary: str = Field(default="", max_length=512)
+
+
+class KnowledgeRevisionOut(BaseModel):
+    id: str
+    document_id: str
+    version: int
+    content_hash: str
+    change_summary: str
+    created_by: str | None
+    created_at: datetime
+    snapshot: dict[str, Any]
+
+
+class DiagnosisFeedbackCreate(BaseModel):
+    analysis_run_id: str
+    verdict: Literal["CORRECT", "PARTIAL", "INCORRECT"]
+    root_cause_correct: bool | None = None
+    evidence_correct: bool | None = None
+    comment: str = Field(default="", max_length=20000)
+    corrections: dict[str, Any] = Field(default_factory=dict)
+
+
+class DiagnosisFeedbackReview(BaseModel):
+    action: Literal["APPROVE", "REJECT"]
+    comment: str | None = Field(default=None, max_length=4000)
+
+
+class DomainGraphSearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=10000)
+    top_k: int = Field(default=12, ge=1, le=50)
+    max_hops: int = Field(default=2, ge=0, le=3)
+
+
+class EvaluationDatasetCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+    description: str = Field(default="", max_length=20000)
+
+
+class EvaluationDatasetUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    description: str | None = Field(default=None, max_length=20000)
+    active: bool | None = None
+
+
+class EvaluationCaseCreate(BaseModel):
+    case_id: str
+    query: str = Field(min_length=2, max_length=10000)
+    expected_evidence_ids: list[str] = Field(default_factory=list, max_length=200)
+    expected_root_causes: list[str] = Field(default_factory=list, max_length=50)
+    modules: list[
+        Literal["knowledge", "domain_graph", "code", "commit", "memory"]
+    ] = Field(
+        default_factory=lambda: ["knowledge", "domain_graph"],
+        min_length=1,
+    )
+    top_k: int = Field(default=10, ge=1, le=50)
+    max_hops: int = Field(default=2, ge=0, le=3)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvaluationCaseUpdate(BaseModel):
+    case_id: str | None = None
+    query: str | None = Field(default=None, min_length=2, max_length=10000)
+    expected_evidence_ids: list[str] | None = Field(default=None, max_length=200)
+    expected_root_causes: list[str] | None = Field(default=None, max_length=50)
+    modules: list[
+        Literal["knowledge", "domain_graph", "code", "commit", "memory"]
+    ] | None = Field(default=None, min_length=1)
+    top_k: int | None = Field(default=None, ge=1, le=50)
+    max_hops: int | None = Field(default=None, ge=0, le=3)
+    metadata: dict[str, Any] | None = None
 
 
 class KnowledgeCategoryCreate(BaseModel):
@@ -227,6 +316,18 @@ class JobOut(ORMModel):
     completed_at: datetime | None
 
 
+class RepositoryImportOut(BaseModel):
+    repository_id: str
+    artifact_id: str
+    job: JobOut
+
+
+class KnowledgeImportOut(BaseModel):
+    document_id: str
+    artifact_id: str
+    job: JobOut
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=10000)
 
@@ -240,7 +341,9 @@ class AgenticSearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=10000)
     top_k: int = Field(default=12, ge=1, le=50)
     max_hops: int = Field(default=2, ge=0, le=3)
-    modules: list[Literal["knowledge", "code", "commit", "memory"]] | None = None
+    modules: list[
+        Literal["knowledge", "domain_graph", "code", "commit", "memory"]
+    ] | None = None
 
 
 class StaticAnalysisRequest(BaseModel):

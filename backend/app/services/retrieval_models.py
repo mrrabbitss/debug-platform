@@ -12,13 +12,18 @@ from typing import Any
 import httpx
 from openai import OpenAI
 from sklearn.feature_extraction.text import HashingVectorizer
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id
-from app.models import KnowledgeChunk, KnowledgeEmbedding, ModelProfile
+from app.models import (
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeEmbedding,
+    ModelProfile,
+)
 from app.services.audit import record_model_egress
 from app.services.model_profiles import (
     get_active_model_profile,
@@ -66,18 +71,30 @@ def _qdrant_client():
         return None
 
 
-def _qdrant_collection(profile: ModelProfile) -> str:
+def _qdrant_collection(
+    profile: ModelProfile,
+    generation_id: str | None = None,
+) -> str:
     suffix = re.sub(r"[^a-zA-Z0-9_-]+", "_", profile.id).strip("_").lower()
     fingerprint = hashlib.sha256(
         f"{profile.model_name}\n{profile.config_json}".encode("utf-8")
     ).hexdigest()[:10]
-    return f"{get_settings().qdrant_collection}_{suffix}_{fingerprint}"[:200]
+    base = f"{get_settings().qdrant_collection}_{suffix}_{fingerprint}"
+    if not generation_id or generation_id == "legacy":
+        return base[:200]
+    generation_suffix = re.sub(
+        r"[^a-zA-Z0-9_-]+",
+        "_",
+        generation_id,
+    ).strip("_").lower()
+    return f"{base}_{generation_suffix}"[:200]
 
 
 def _mirror_vectors_to_qdrant(
     profile: ModelProfile,
     chunks: Sequence[KnowledgeChunk],
     vectors: Sequence[Sequence[float]],
+    generation_id: str,
 ) -> None:
     client = _qdrant_client()
     if not client or not chunks or not vectors:
@@ -85,7 +102,7 @@ def _mirror_vectors_to_qdrant(
     try:
         from qdrant_client.models import Distance, PointStruct, VectorParams
 
-        collection = _qdrant_collection(profile)
+        collection = _qdrant_collection(profile, generation_id)
         try:
             exists = client.collection_exists(collection)
         except AttributeError:
@@ -97,9 +114,20 @@ def _mirror_vectors_to_qdrant(
             )
         points = [
             PointStruct(
-                id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{profile.id}:{chunk.id}")),
+                id=str(uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    (
+                        f"{profile.id}:{chunk.id}"
+                        if generation_id == "legacy"
+                        else f"{profile.id}:{generation_id}:{chunk.id}"
+                    ),
+                )),
                 vector=list(vector),
-                payload={"chunk_id": chunk.id, "document_id": chunk.document_id},
+                payload={
+                    "chunk_id": chunk.id,
+                    "document_id": chunk.document_id,
+                    "generation_id": generation_id,
+                },
             )
             for chunk, vector in zip(chunks, vectors, strict=True)
         ]
@@ -109,18 +137,53 @@ def _mirror_vectors_to_qdrant(
         return
 
 
-def _qdrant_scores(profile: ModelProfile, query_vector: list[float], limit: int) -> dict[str, float]:
+def _delete_qdrant_generation(
+    profile: ModelProfile,
+    generation_id: str | None,
+) -> None:
+    if not generation_id:
+        return
+    client = _qdrant_client()
+    if not client:
+        return
+    try:
+        collection = _qdrant_collection(profile, generation_id)
+        if client.collection_exists(collection):
+            client.delete_collection(collection)
+    except Exception:
+        return
+
+
+def _qdrant_scores(
+    profile: ModelProfile,
+    query_vector: list[float],
+    limit: int,
+    *,
+    generation_id: str,
+    chunk_ids: set[str] | None = None,
+) -> dict[str, float]:
     client = _qdrant_client()
     if not client:
         return {}
     try:
-        collection = _qdrant_collection(profile)
+        collection = _qdrant_collection(profile, generation_id)
+        query_filter = None
+        if chunk_ids:
+            from qdrant_client.models import FieldCondition, Filter, MatchAny
+
+            query_filter = Filter(must=[
+                FieldCondition(
+                    key="chunk_id",
+                    match=MatchAny(any=sorted(chunk_ids)),
+                )
+            ])
         try:
             response = client.query_points(
                 collection_name=collection,
                 query=query_vector,
                 limit=limit,
                 with_payload=True,
+                query_filter=query_filter,
             )
             points = response.points
         except AttributeError:
@@ -129,6 +192,7 @@ def _qdrant_scores(profile: ModelProfile, query_vector: list[float], limit: int)
                 query_vector=query_vector,
                 limit=limit,
                 with_payload=True,
+                query_filter=query_filter,
             )
         return {
             str((point.payload or {}).get("chunk_id", point.id)): float(point.score)
@@ -259,38 +323,79 @@ def index_embeddings(
     profile: ModelProfile,
     chunks: Sequence[KnowledgeChunk],
     progress: Callable[[int, int], None] | None = None,
+    *,
+    generation_id: str | None = None,
+    activate_if_missing: bool = True,
 ) -> int:
-    chunk_ids = [chunk.id for chunk in chunks]
-    if chunk_ids:
-        db.execute(delete(KnowledgeEmbedding).where(
-            KnowledgeEmbedding.profile_id == profile.id,
-            KnowledgeEmbedding.chunk_id.in_(chunk_ids),
-        ))
-        # Do not hold a SQLite write transaction while a local/API model is
-        # computing vectors. Short per-batch transactions keep job progress,
-        # cancellation and other readers/writers responsive on Win11.
-        db.commit()
+    generation_id = (
+        generation_id
+        or profile.active_embedding_generation_id
+        or new_id("EGEN")
+    )
+    should_activate = (
+        activate_if_missing
+        and profile.active_embedding_generation_id is None
+    )
     config = json_loads(profile.config_json, {})
     batch_size = max(1, min(int(config.get("batch_size") or 16), 100))
     completed = 0
-    for start in range(0, len(chunks), batch_size):
-        batch = list(chunks[start:start + batch_size])
-        vectors = embed_texts(profile, [chunk.content for chunk in batch], purpose="knowledge_index")
-        if len(vectors) != len(batch):
-            raise RetrievalModelError("Embedding model returned an unexpected number of vectors")
-        for chunk, vector in zip(batch, vectors, strict=True):
-            db.add(KnowledgeEmbedding(
-                id=new_id("VEC"),
-                chunk_id=chunk.id,
-                profile_id=profile.id,
-                dimension=len(vector),
-                vector_json=json_dumps(vector),
+    try:
+        for start in range(0, len(chunks), batch_size):
+            batch = list(chunks[start:start + batch_size])
+            vectors = embed_texts(
+                profile,
+                [chunk.content for chunk in batch],
+                purpose="knowledge_index",
+            )
+            if len(vectors) != len(batch):
+                raise RetrievalModelError(
+                    "Embedding model returned an unexpected number of vectors"
+                )
+            chunk_ids = [chunk.id for chunk in batch]
+            db.execute(delete(KnowledgeEmbedding).where(
+                KnowledgeEmbedding.profile_id == profile.id,
+                KnowledgeEmbedding.generation_id == generation_id,
+                KnowledgeEmbedding.chunk_id.in_(chunk_ids),
             ))
-        db.commit()
-        _mirror_vectors_to_qdrant(profile, batch, vectors)
-        completed += len(batch)
-        if progress:
-            progress(completed, len(chunks))
+            for chunk, vector in zip(batch, vectors, strict=True):
+                db.add(KnowledgeEmbedding(
+                    id=new_id("VEC"),
+                    chunk_id=chunk.id,
+                    profile_id=profile.id,
+                    generation_id=generation_id,
+                    dimension=len(vector),
+                    vector_json=json_dumps(vector),
+                ))
+            # The model work happens before this short write transaction, so a
+            # failed batch never deletes its last usable vector.
+            db.commit()
+            _mirror_vectors_to_qdrant(
+                profile,
+                batch,
+                vectors,
+                generation_id,
+            )
+            completed += len(batch)
+            if progress:
+                progress(completed, len(chunks))
+        if should_activate:
+            profile.active_embedding_generation_id = generation_id
+            db.commit()
+            db.execute(delete(KnowledgeEmbedding).where(
+                KnowledgeEmbedding.profile_id == profile.id,
+                KnowledgeEmbedding.generation_id != generation_id,
+            ))
+            db.commit()
+    except Exception:
+        db.rollback()
+        if should_activate:
+            db.execute(delete(KnowledgeEmbedding).where(
+                KnowledgeEmbedding.profile_id == profile.id,
+                KnowledgeEmbedding.generation_id == generation_id,
+            ))
+            db.commit()
+            _delete_qdrant_generation(profile, generation_id)
+        raise
     return completed
 
 
@@ -305,18 +410,74 @@ def reindex_all_embeddings(
     db: Session,
     profile: ModelProfile,
     progress: Callable[[int, int], None] | None = None,
+    on_publish: Callable[[str, int], None] | None = None,
 ) -> int:
     chunks = list(db.scalars(select(KnowledgeChunk).order_by(KnowledgeChunk.document_id, KnowledgeChunk.chunk_index)).all())
-    db.execute(delete(KnowledgeEmbedding).where(KnowledgeEmbedding.profile_id == profile.id))
-    db.commit()
-    return index_embeddings(db, profile, chunks, progress)
+    previous_generation = profile.active_embedding_generation_id
+    generation_id = new_id("EGEN")
+    try:
+        count = index_embeddings(
+            db,
+            profile,
+            chunks,
+            progress,
+            generation_id=generation_id,
+            activate_if_missing=False,
+        )
+        expected_generation = (
+            ModelProfile.active_embedding_generation_id.is_(None)
+            if previous_generation is None
+            else ModelProfile.active_embedding_generation_id
+            == previous_generation
+        )
+        published = db.execute(
+            update(ModelProfile)
+            .where(
+                ModelProfile.id == profile.id,
+                expected_generation,
+            )
+            .values(active_embedding_generation_id=generation_id)
+        )
+        if published.rowcount != 1:
+            raise RetrievalModelError(
+                "Embedding rebuild was superseded by another generation"
+            )
+        if on_publish:
+            on_publish(generation_id, count)
+        db.commit()
+    except Exception:
+        db.rollback()
+        db.execute(delete(KnowledgeEmbedding).where(
+            KnowledgeEmbedding.profile_id == profile.id,
+            KnowledgeEmbedding.generation_id == generation_id,
+        ))
+        db.commit()
+        _delete_qdrant_generation(profile, generation_id)
+        raise
+
+    try:
+        db.execute(delete(KnowledgeEmbedding).where(
+            KnowledgeEmbedding.profile_id == profile.id,
+            KnowledgeEmbedding.generation_id != generation_id,
+        ))
+        db.commit()
+    except Exception:
+        # Publication is already durable. Stale generations are invisible and
+        # can be reclaimed by the next successful rebuild.
+        db.rollback()
+    if previous_generation and previous_generation != generation_id:
+        _delete_qdrant_generation(profile, previous_generation)
+    return count
 
 
 def ensure_builtin_embedding_index(db: Session) -> int:
     profile = get_active_model_profile("embedding", db)
     if not profile or profile.provider != "hashing":
         return 0
-    indexed_chunk_ids = select(KnowledgeEmbedding.chunk_id).where(KnowledgeEmbedding.profile_id == profile.id)
+    indexed_chunk_ids = select(KnowledgeEmbedding.chunk_id).where(
+        KnowledgeEmbedding.profile_id == profile.id,
+        KnowledgeEmbedding.generation_id == profile.active_embedding_generation_id,
+    )
     missing = list(db.scalars(select(KnowledgeChunk).where(KnowledgeChunk.id.not_in(indexed_chunk_ids))).all())
     return index_embeddings(db, profile, missing) if missing else 0
 
@@ -327,12 +488,19 @@ def embedding_index_status(db: Session) -> dict[str, Any]:
     vector_count = 0
     if profile:
         vector_count = int(db.scalar(
-            select(func.count(KnowledgeEmbedding.id)).where(KnowledgeEmbedding.profile_id == profile.id)
+            select(func.count(KnowledgeEmbedding.id)).where(
+                KnowledgeEmbedding.profile_id == profile.id,
+                KnowledgeEmbedding.generation_id
+                == profile.active_embedding_generation_id,
+            )
         ) or 0)
     return {
         "profile_id": profile.id if profile else None,
         "profile_name": profile.name if profile else None,
         "provider": profile.provider if profile else None,
+        "generation_id": (
+            profile.active_embedding_generation_id if profile else None
+        ),
         "chunk_count": chunk_count,
         "vector_count": vector_count,
         "complete": vector_count >= chunk_count,
@@ -350,25 +518,34 @@ def embedding_scores(
     session_context = nullcontext(db) if db is not None else SessionLocal()
     with session_context as active_db:
         profile = get_active_model_profile("embedding", active_db)
-        if not profile:
+        if not profile or not profile.active_embedding_generation_id:
             return {}
+        query_vector = embed_texts(
+            profile,
+            [query],
+            purpose="case_retrieval_query",
+        )[0]
+        qdrant_limit = min(len(chunk_ids), 100)
+        qdrant = _qdrant_scores(
+            profile,
+            query_vector,
+            max(qdrant_limit, 1),
+            generation_id=profile.active_embedding_generation_id,
+            chunk_ids=chunk_ids,
+        )
+        if qdrant:
+            return qdrant
         rows = active_db.execute(
             select(KnowledgeEmbedding.chunk_id, KnowledgeEmbedding.dimension, KnowledgeEmbedding.vector_json)
             .where(
                 KnowledgeEmbedding.profile_id == profile.id,
+                KnowledgeEmbedding.generation_id
+                == profile.active_embedding_generation_id,
                 KnowledgeEmbedding.chunk_id.in_(chunk_ids),
             )
         ).all()
         if not rows:
             return {}
-        query_vector = embed_texts(profile, [query], purpose="case_retrieval_query")[0]
-        qdrant = _qdrant_scores(profile, query_vector, max(len(chunk_ids), 20))
-        if qdrant:
-            filtered_qdrant = {
-                chunk_id: score for chunk_id, score in qdrant.items() if chunk_id in chunk_ids
-            }
-            if filtered_qdrant:
-                return filtered_qdrant
     scores: dict[str, float] = {}
     for chunk_id, dimension, vector_json in rows:
         if dimension != len(query_vector):
@@ -378,6 +555,94 @@ def embedding_scores(
             continue
         scores[chunk_id] = sum(left * float(right) for left, right in zip(query_vector, vector, strict=True))
     return scores
+
+
+def embedding_search(
+    query: str,
+    limit: int,
+    *,
+    db: Session | None = None,
+) -> dict[str, float]:
+    """Return dense top-K without loading every knowledge document body.
+
+    Qdrant performs the bounded nearest-neighbour query when configured. The
+    SQLite fallback scans only compact vector rows and keeps the top results in
+    memory, so retrieval no longer needs to materialize every document first.
+    """
+    if limit <= 0:
+        return {}
+    session_context = nullcontext(db) if db is not None else SessionLocal()
+    with session_context as active_db:
+        profile = get_active_model_profile("embedding", active_db)
+        if not profile or not profile.active_embedding_generation_id:
+            return {}
+        query_vector = embed_texts(
+            profile,
+            [query],
+            purpose="case_retrieval_query",
+        )[0]
+        qdrant = _qdrant_scores(
+            profile,
+            query_vector,
+            min(max(limit * 8, limit), 1000),
+            generation_id=profile.active_embedding_generation_id,
+        )
+        if qdrant:
+            searchable_ids = set(active_db.scalars(
+                select(KnowledgeChunk.id)
+                .join(
+                    KnowledgeDocument,
+                    KnowledgeChunk.document_id == KnowledgeDocument.id,
+                )
+                .where(
+                    KnowledgeChunk.id.in_(set(qdrant)),
+                    KnowledgeDocument.active.is_(True),
+                    KnowledgeDocument.review_status == "ACTIVE",
+                )
+            ).all())
+            filtered_qdrant = {
+                chunk_id: score
+                for chunk_id, score in qdrant.items()
+                if chunk_id in searchable_ids
+            }
+            if filtered_qdrant:
+                return dict(list(filtered_qdrant.items())[:limit])
+        rows = active_db.execute(
+            select(
+                KnowledgeEmbedding.chunk_id,
+                KnowledgeEmbedding.dimension,
+                KnowledgeEmbedding.vector_json,
+            )
+            .join(
+                KnowledgeChunk,
+                KnowledgeEmbedding.chunk_id == KnowledgeChunk.id,
+            )
+            .join(
+                KnowledgeDocument,
+                KnowledgeChunk.document_id == KnowledgeDocument.id,
+            )
+            .where(
+                KnowledgeEmbedding.profile_id == profile.id,
+                KnowledgeEmbedding.generation_id
+                == profile.active_embedding_generation_id,
+                KnowledgeDocument.active.is_(True),
+                KnowledgeDocument.review_status == "ACTIVE",
+            )
+        ).all()
+    ranked: list[tuple[str, float]] = []
+    for chunk_id, dimension, vector_json in rows:
+        if dimension != len(query_vector):
+            continue
+        vector = json_loads(vector_json, [])
+        if len(vector) != len(query_vector):
+            continue
+        score = sum(
+            left * float(right)
+            for left, right in zip(query_vector, vector, strict=True)
+        )
+        ranked.append((chunk_id, score))
+    ranked.sort(key=lambda item: item[1], reverse=True)
+    return dict(ranked[:limit])
 
 
 def rerank_documents(

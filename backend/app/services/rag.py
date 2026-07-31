@@ -5,7 +5,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -16,7 +16,7 @@ from app.services.model_profiles import get_active_model_profile
 from app.services.retrieval_models import (
     RetrievalModelError,
     candidate_count_for_reranker,
-    embedding_scores,
+    embedding_search,
     rerank_documents,
 )
 
@@ -54,25 +54,103 @@ class LocalHybridRetriever:
         module: str | None = None,
         top_k: int | None = None,
         include_code_symbols: bool = True,
+        apply_models: bool = True,
     ) -> list[RetrievalHit]:
         top_k = top_k or get_settings().retrieval_top_k
+        query_tokens = tokenize(query)
+        if not query_tokens:
+            return []
+        unique_query = set(query_tokens)
+        search_terms = sorted(
+            {token for token in query_tokens if len(token) >= 2},
+            key=len,
+            reverse=True,
+        )[:12]
+        candidate_pool = max(top_k * 8, 80)
+        dense_scores: dict[str, float] = {}
         session_context = nullcontext(db) if db is not None else SessionLocal()
         with session_context as active_db:
-            rows = active_db.execute(
+            if apply_models:
+                try:
+                    dense_scores = embedding_search(
+                        query,
+                        candidate_pool,
+                        db=active_db,
+                    )
+                except RetrievalModelError:
+                    dense_scores = {}
+
+            knowledge_query = (
                 select(KnowledgeChunk, KnowledgeDocument)
                 .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
-                .where(KnowledgeDocument.active.is_(True))
-            ).all()
+                .where(
+                    KnowledgeDocument.active.is_(True),
+                    KnowledgeDocument.review_status == "ACTIVE",
+                )
+            )
+            if search_terms:
+                knowledge_conditions = []
+                for term in search_terms:
+                    pattern = f"%{term}%"
+                    knowledge_conditions.extend([
+                        KnowledgeDocument.title.ilike(pattern),
+                        KnowledgeChunk.heading.ilike(pattern),
+                        KnowledgeChunk.content.ilike(pattern),
+                    ])
+                knowledge_query = knowledge_query.where(
+                    or_(*knowledge_conditions)
+                )
+            rows = list(active_db.execute(
+                knowledge_query.limit(min(candidate_pool * 20, 5_000))
+            ).all())
+            row_map = {chunk.id: (chunk, document) for chunk, document in rows}
+            missing_dense_ids = set(dense_scores).difference(row_map)
+            if missing_dense_ids:
+                dense_rows = active_db.execute(
+                    select(KnowledgeChunk, KnowledgeDocument)
+                    .join(
+                        KnowledgeDocument,
+                        KnowledgeChunk.document_id == KnowledgeDocument.id,
+                    )
+                    .where(
+                        KnowledgeDocument.active.is_(True),
+                        KnowledgeDocument.review_status == "ACTIVE",
+                        KnowledgeChunk.id.in_(missing_dense_ids),
+                    )
+                ).all()
+                for chunk, document in dense_rows:
+                    row_map[chunk.id] = (chunk, document)
+            rows = list(row_map.values())
+
             symbol_query = select(CodeSymbol)
             if case_id and include_code_symbols:
                 symbol_query = (
                     symbol_query
                     .join(Repository, CodeSymbol.repository_id == Repository.id)
-                    .where(Repository.case_id == case_id)
+                    .where(
+                        Repository.case_id == case_id,
+                        CodeSymbol.generation_id
+                        == Repository.active_graph_generation_id,
+                    )
                 )
+                if search_terms:
+                    symbol_conditions = []
+                    for term in search_terms:
+                        pattern = f"%{term}%"
+                        symbol_conditions.extend([
+                            CodeSymbol.name.ilike(pattern),
+                            CodeSymbol.file_path.ilike(pattern),
+                            CodeSymbol.signature.ilike(pattern),
+                            CodeSymbol.code.ilike(pattern),
+                        ])
+                    symbol_query = symbol_query.where(
+                        or_(*symbol_conditions)
+                    )
             else:
                 symbol_query = symbol_query.where(False)
-            symbols = active_db.scalars(symbol_query.limit(5000)).all()
+            symbols = active_db.scalars(
+                symbol_query.limit(min(candidate_pool * 10, 2_000))
+            ).all()
 
         docs: list[dict[str, Any]] = []
         for chunk, document in rows:
@@ -97,11 +175,12 @@ class LocalHybridRetriever:
             })
         for symbol in symbols:
             docs.append({
-                "id": symbol.id,
+                "id": symbol.logical_id or symbol.id,
                 "source_type": "code_symbol",
                 "title": f"{symbol.kind} {symbol.name} — {symbol.file_path}:{symbol.line_start}",
                 "content": symbol.code,
                 "metadata": {
+                    "revision_id": symbol.id,
                     "repository_id": symbol.repository_id,
                     "file_path": symbol.file_path,
                     "line_start": symbol.line_start,
@@ -112,9 +191,6 @@ class LocalHybridRetriever:
         if not docs:
             return []
 
-        query_tokens = tokenize(query)
-        if not query_tokens:
-            return []
         doc_tokens = [tokenize(doc["title"] + "\n" + doc["content"]) for doc in docs]
         n_docs = len(docs)
         avg_len = sum(len(tokens) for tokens in doc_tokens) / max(n_docs, 1)
@@ -122,20 +198,6 @@ class LocalHybridRetriever:
         for tokens in doc_tokens:
             df.update(set(tokens))
 
-        exact_terms = set(query_tokens)
-        try:
-            knowledge_ids = {
-                str(doc["id"])
-                for doc in docs
-                if doc["source_type"] != "code_symbol"
-            }
-            vector_scores = (
-                embedding_scores(query, knowledge_ids, db=db)
-                if db is not None
-                else embedding_scores(query, knowledge_ids)
-            )
-        except RetrievalModelError:
-            vector_scores = {}
         results: list[RetrievalHit] = []
         k1, b = 1.5, 0.75
         for doc, tokens in zip(docs, doc_tokens, strict=True):
@@ -148,12 +210,12 @@ class LocalHybridRetriever:
                 idf = math.log(1 + (n_docs - df[term] + 0.5) / (df[term] + 0.5))
                 denominator = freq + k1 * (1 - b + b * len(tokens) / max(avg_len, 1))
                 bm25 += idf * (freq * (k1 + 1) / denominator)
-            overlap = len(exact_terms.intersection(tokens)) / max(len(exact_terms), 1)
+            overlap = len(unique_query.intersection(tokens)) / max(len(unique_query), 1)
             title_tokens = set(tokenize(doc["title"]))
-            title_bonus = len(exact_terms.intersection(title_tokens)) / max(len(exact_terms), 1)
+            title_bonus = len(unique_query.intersection(title_tokens)) / max(len(unique_query), 1)
             trust = str(doc["metadata"].get("trust_level", "MEDIUM")).upper()
             trust_bonus = {"HIGH": 0.25, "MEDIUM": 0.1, "LOW": 0.0}.get(trust, 0.05)
-            vector_bonus = vector_scores.get(doc["id"], 0.0) * 2.0
+            vector_bonus = dense_scores.get(doc["id"], 0.0) * 2.0
             relevance = bm25 + overlap * 2.0 + title_bonus * 1.5 + vector_bonus
             if relevance > 0:
                 score = relevance + trust_bonus
@@ -161,12 +223,23 @@ class LocalHybridRetriever:
                     evidence_id=doc["id"], source_type=doc["source_type"], title=doc["title"],
                     content=doc["content"], score=round(score, 6), metadata=doc["metadata"],
                 ))
-        reranker_profile = get_active_model_profile("reranker", db) if db is not None else None
+        candidates = sorted(
+            results,
+            key=lambda item: item.score,
+            reverse=True,
+        )[:candidate_pool]
+        if not apply_models:
+            return candidates[:top_k]
+        reranker_profile = (
+            get_active_model_profile("reranker", db)
+            if db is not None
+            else None
+        )
         candidate_count = candidate_count_for_reranker(
             max(top_k * 3, 20),
             profile=reranker_profile,
         )
-        candidates = sorted(results, key=lambda item: item.score, reverse=True)[:candidate_count]
+        candidates = candidates[:candidate_count]
         try:
             if db is None:
                 ranking = rerank_documents(
