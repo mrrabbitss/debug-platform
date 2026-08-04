@@ -206,6 +206,78 @@ export interface KnowledgeRevision {
   snapshot: Record<string, any>
 }
 
+export interface KnowledgeCurationSource {
+  id: string
+  source_ref: string
+  relative_path: string
+  extraction_method?: 'plain_text' | 'html_visible_text' | 'docx_paragraphs_tables' | 'pdf_text_layer'
+  extraction_truncated: boolean
+  page_count?: number
+  sha256: string
+  size_bytes: number
+  media_type?: string
+  text_encoding?: string
+  line_count?: number
+  source_role: 'log' | 'error' | 'analysis' | 'solution' | 'context'
+  included: boolean
+  skip_reason?: string
+  created_at: string
+}
+
+export interface KnowledgeCurationMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  citations: string[]
+  draft_version?: number
+  model_profile_id?: string
+  created_by?: string
+  created_at: string
+}
+
+export interface KnowledgeCurationRevision {
+  id: string
+  version: number
+  content_hash: string
+  change_summary: string
+  validation: Record<string, any>
+  source_message_id?: string
+  created_by?: string
+  created_at: string
+}
+
+export interface KnowledgeCurationSession {
+  id: string
+  status: 'QUEUED' | 'EXTRACTING' | 'REVIEWING' | 'FAILED' | 'CANCELLED' | 'CONFIRMING' | 'CONFIRMED'
+  title_hint: string
+  category_id?: string
+  device_type?: string
+  device_model?: string
+  firmware_range?: string
+  module?: string
+  trust_level: string
+  confidentiality: string
+  model_profile_id?: string
+  model_snapshot: Record<string, any>
+  source_manifest: Record<string, any>
+  source_count: number
+  sources?: KnowledgeCurationSource[]
+  draft_title: string
+  draft_markdown?: string
+  draft_version: number
+  validation: Record<string, any>
+  open_questions: string[]
+  messages?: KnowledgeCurationMessage[]
+  revisions?: KnowledgeCurationRevision[]
+  knowledge_document_id?: string
+  job_id?: string
+  error_message?: string
+  created_by?: string
+  created_at: string
+  updated_at: string
+  confirmed_at?: string
+}
+
 export interface DomainGraphStatus {
   status: 'NOT_BUILT' | 'BUILDING' | 'READY' | 'STALE' | 'FAILED'
   active_generation_id?: string

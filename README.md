@@ -36,6 +36,8 @@
 - 可切换的本地 Qwen3 Reranker 和 Qwen Rerank API；
 - 设备类型、模块和可信等级元数据；
 - 结构化 Markdown 故障案例（错误形式、日志分析、错误定位、解决方案和验证）；
+- 上传包含日志、错误现象、分析和解决方案的文件夹，由大模型生成带来源行号的案例草稿；
+- 在独立工作台与模型多轮纠错、人工编辑和恢复历史版本，确认后才创建待审核知识草稿；
 - 错误分析 Skill 管理，以及从案例/Skill 确定性提炼可复用分析方法；
 - 知识草稿、待审核、发布、驳回、归档状态机，不可变版本、回滚和数据库乐观锁；
 - 固定 query、预期证据和预期根因的检索评测集，以及 Recall@K、Precision@K、MRR、NDCG@K；
@@ -247,6 +249,22 @@ scripts\inspect_log_file.bat "D:\logs\your_collectDebuginfo_file"
 
 报告不包含日志正文，但文件路径和文件名也可能属于内部信息，对外发送前仍应人工检查。PowerShell 用户也可以直接运行 `scripts\inspect_log_file.ps1`，并使用 `-SkipLineCount` 跳过完整行数统计。
 
+### 从案例文件夹提炼知识草稿
+
+先在“系统设置 → 诊断大模型”配置并启用公司批准的 OpenAI-Compatible Chat 模型，
+然后打开顶部“AI 案例提炼”。选择一个同时包含日志、错误现象、人工分析和解决方案的
+文件夹，确认脱敏证据可以发送到所选模型 API 后开始提炼。
+
+平台只向模型发送本地脱敏、限长并带来源行号的文本证据，不直接发送原始文件。生成后可
+查看来源、编辑 Markdown、与模型多轮讨论纠错、查看或恢复不可变历史版本。只有章节和
+`[SRC-xxxx:Lx-Ly]` 引用校验通过并经人工确认后，系统才会创建不可检索的知识库
+`DRAFT`；该草稿仍需提交审核并发布，才能参与检索和诊断。
+
+可直接读取文本、无后缀文本、HTML/HTM、Word `.docx` 和带文本层的 PDF；旧式
+`.doc` 需先转换为 `.docx`，扫描 PDF 和图片目前需要先做 OCR。
+完整操作、安全边界、大小限制、状态流转和接口说明见
+[大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。
+
 ## 4. Docker 部署
 
 ```bash
@@ -334,7 +352,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models
 
 如果公司使用其他 Hugging Face 镜像，可通过 `-Mirror` 指定；如果 Python 包已经由管理员统一安装，可增加 `-SkipRuntimeInstall`。检测报告只记录软件版本、端点、离线开关、代理是否存在以及下载错误，不记录代理地址、API Key、日志或数据库内容。本地 Qwen3 Reranker 的“排序指令”和“推理批量”、BGE 的“检索查询指令”和批量大小均可在系统设置中调整。普通 Win11 CPU 建议先保持默认小批量。
 
-详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。故障案例、代码/Commit 图谱、三类记忆和 Agentic Search 见 [认知检索与图谱使用说明](docs/cognitive-retrieval.md)。知识审核、领域 GraphRAG、检索评测和人工反馈见 [知识治理、领域图谱与检索评测](docs/quality-governance-and-evaluation.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
+详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。从案例文件夹生成并多轮校正知识草稿见 [大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。故障案例、代码/Commit 图谱、三类记忆和 Agentic Search 见 [认知检索与图谱使用说明](docs/cognitive-retrieval.md)。知识审核、领域 GraphRAG、检索评测和人工反馈见 [知识治理、领域图谱与检索评测](docs/quality-governance-and-evaluation.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
 
 企业环境中必须确认：
 

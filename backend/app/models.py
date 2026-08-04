@@ -175,6 +175,137 @@ class KnowledgeRevision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class KnowledgeCurationSession(Base):
+    __tablename__ = "knowledge_curation_sessions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), default="QUEUED", index=True)
+    title_hint: Mapped[str] = mapped_column(String(512), default="")
+    category_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_categories.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    device_type: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    device_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    firmware_range: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    module: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    trust_level: Mapped[str] = mapped_column(String(16), default="MEDIUM")
+    confidentiality: Mapped[str] = mapped_column(String(32), default="RESTRICTED")
+    model_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    model_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    source_manifest_json: Mapped[str] = mapped_column(Text, default="{}")
+    draft_title: Mapped[str] = mapped_column(String(512), default="")
+    draft_markdown: Mapped[str] = mapped_column(Text, default="")
+    draft_version: Mapped[int] = mapped_column(Integer, default=0)
+    validation_json: Mapped[str] = mapped_column(Text, default="{}")
+    open_questions_json: Mapped[str] = mapped_column(Text, default="[]")
+    knowledge_document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class KnowledgeCurationSourceFile(Base):
+    __tablename__ = "knowledge_curation_source_files"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "relative_path",
+            name="uq_knowledge_curation_source_path",
+        ),
+        Index(
+            "ix_knowledge_curation_sources_session_created",
+            "session_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_curation_sessions.id", ondelete="CASCADE"), index=True
+    )
+    source_ref: Mapped[str] = mapped_column(String(32))
+    relative_path: Mapped[str] = mapped_column(Text)
+    stored_path: Mapped[str] = mapped_column(Text)
+    extracted_text_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extraction_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extraction_truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    media_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    text_encoding: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    line_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_role: Mapped[str] = mapped_column(String(32), default="context", index=True)
+    included: Mapped[bool] = mapped_column(Boolean, default=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KnowledgeCurationRevision(Base):
+    __tablename__ = "knowledge_curation_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "version",
+            name="uq_knowledge_curation_revision_version",
+        ),
+        Index(
+            "ix_knowledge_curation_revisions_session_created",
+            "session_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_curation_sessions.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    markdown: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    change_summary: Mapped[str] = mapped_column(String(512), default="")
+    validation_json: Mapped[str] = mapped_column(Text, default="{}")
+    source_message_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KnowledgeCurationMessage(Base):
+    __tablename__ = "knowledge_curation_messages"
+    __table_args__ = (
+        Index(
+            "ix_knowledge_curation_messages_session_created",
+            "session_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_curation_sessions.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    citations_json: Mapped[str] = mapped_column(Text, default="[]")
+    draft_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunks"
 

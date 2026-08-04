@@ -73,7 +73,7 @@ flowchart TB
 | ORM 与迁移 | SQLAlchemy 2、Alembic | 数据访问、约束、SQLite/PostgreSQL 迁移 |
 | 数据库 | SQLite / PostgreSQL 17 | 本地默认 SQLite；Docker 部署默认 PostgreSQL |
 | HTTP 与模型 API | OpenAI Python SDK、HTTPX | OpenAI-Compatible Chat/Embedding 与 Qwen Rerank API |
-| 文档生成 | Jinja2、ReportLab、python-docx | HTML 预览、PDF、Word 报告 |
+| 文档生成与提取 | Jinja2、ReportLab、python-docx、pypdf、HTMLParser | HTML/PDF/Word 报告，以及案例材料的 HTML、DOCX、PDF 本地正文提取 |
 | 检索 | 自研 BM25/精确词项、scikit-learn HashingVectorizer | 无外部模型时的本地检索基线 |
 | 本地模型 | Sentence Transformers、Transformers | BGE Embedding、Qwen3 Reranker |
 | 向量服务 | Qdrant Client | 可选的向量镜像和查询加速 |
@@ -100,6 +100,7 @@ flowchart TB
 - `CasesView.vue`：案例列表和创建；
 - `CaseDetailView.vue`：上传、解析、原文浏览、搜索、事件、时间线、诊断、报告和代码关联；
 - `KnowledgeView.vue`：知识分类树、文档新增、上传、修改、审核、版本和回滚；
+- `KnowledgeCurationView.vue`：文件夹上传、模型提炼、来源核对、人机纠错、草稿版本和人工确认；
 - `CognitiveSearchView.vue`：Agentic Search、可解释多跳路径、代码/Commit 图谱和三类记忆；
 - `QualityGovernanceView.vue`：领域 GraphRAG、检索评测集/运行和人工诊断反馈；
 - `SettingsView.vue`：Chat、Embedding、Reranker 模型配置、测试、激活和重建索引；
@@ -312,6 +313,10 @@ Python 使用标准 AST，其余语言主要使用正则和花括号扫描，不
 | `KnowledgeCategory` | 支持父子层级的知识分类 |
 | `KnowledgeDocument` | 诊断规则、历史问题、故障树、方案和参考资料 |
 | `KnowledgeRevision` | 不可变知识版本快照、内容哈希和变更说明 |
+| `KnowledgeCurationSession` | 文件夹提炼状态、模型快照、当前 Markdown 和最终知识关联 |
+| `KnowledgeCurationSourceFile` | 来源相对路径、原文/提取哈希、提取方式、页数、文本行号和纳入状态 |
+| `KnowledgeCurationRevision` | 每次模型/人工修订的不可变 Markdown、哈希和校验快照 |
+| `KnowledgeCurationMessage` | 提炼工作台的人类、模型和系统消息 |
 | `KnowledgeDerivation` | 来源案例/Skill 与派生分析方法的 lineage |
 | `KnowledgeChunk` | 可检索的知识分块 |
 | `KnowledgeEmbedding` | 按 Embedding Profile 隔离的向量 |
@@ -353,6 +358,10 @@ erDiagram
     REPOSITORY ||--o{ CODE_SYMBOL : indexes
     KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_CHUNK : splits
     KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_REVISION : versions
+    KNOWLEDGE_CURATION_SESSION ||--o{ KNOWLEDGE_CURATION_SOURCE_FILE : contains
+    KNOWLEDGE_CURATION_SESSION ||--o{ KNOWLEDGE_CURATION_REVISION : versions
+    KNOWLEDGE_CURATION_SESSION ||--o{ KNOWLEDGE_CURATION_MESSAGE : discusses
+    KNOWLEDGE_CURATION_SESSION o|--o| KNOWLEDGE_DOCUMENT : confirms_to
     KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_ENTITY_MENTION : evidences
     KNOWLEDGE_CATEGORY ||--o{ KNOWLEDGE_CATEGORY : nests
     KNOWLEDGE_CATEGORY ||--o{ KNOWLEDGE_DOCUMENT : classifies
@@ -380,7 +389,8 @@ erDiagram
 6. `0006` RBAC、令牌和案例成员；
 7. `0007` 代码/Commit 图谱、三类记忆和 Agentic Search；
 8. `0008` 代码/向量 generation、报告发布约束和导入状态；
-9. `0009` 知识版本审核、领域图谱、人工反馈和检索评测。
+9. `0009` 知识版本审核、领域图谱、人工反馈和检索评测；
+10. `0010` 大模型案例提炼会话、来源、修订和对话记录。
 
 后端启动时会自动执行迁移。生产升级前仍应先备份，并禁止手工修改 `alembic_version`。
 
@@ -442,6 +452,8 @@ BM25 / 图多跳 / RRF / Embedding / 可选 Reranker
 - 诊断规则、协议规则、产品规则、安全规则；
 - 历史问题、故障树、解决方案；
 - 包含错误形式、日志分析、错误定位、解决方案和验证结果的结构化故障案例；
+- 从日志/现象/分析/方案文件夹生成带 `[SRC-xxxx:Lx-Ly]` 证据的 LLM 案例草稿；
+- 对提炼草稿执行模型多轮纠错、人工修改、不可变版本恢复和来源行号校验；
 - 错误分析 Skill，以及确定性提炼的可复用分析方法；
 - 产品资料和协议资料；
 - 设备、型号、固件、模块、可信度和保密级别元数据；
@@ -451,6 +463,13 @@ BM25 / 图多跳 / RRF / Embedding / 可选 Reranker
 新建、上传、编辑和回滚均进入 `DRAFT`，经过 `IN_REVIEW` 后才能发布为 `ACTIVE`。
 每次内容版本保存不可变快照和 SHA-256；数据库使用 `lock_version` 拒绝并发覆盖。
 编辑已发布文档时先切换为不可检索草稿，再提交新的分块/向量。
+
+文件夹提炼使用独立 staging 状态机。原始来源只写入本地 Storage；HTML 可见正文、DOCX
+段落/表格和 PDF 文本层先转换为带稳定行号的本地 UTF-8 sidecar，再经过长文抽样、敏感
+字段掩码和全局长度限制，才可发送到管理员明确选择的 API 模型。模型生成或
+对话修订只改变提炼会话；章节、来源编号和行号校验通过并经人工确认后，才创建
+`KnowledgeDocument(DRAFT, active=false)`。因此“生成”“人工确认”“知识审核发布”是
+三个独立门禁，模型不能直接污染在线检索。
 
 故障案例和故障树仍以 Markdown 文档为权威内容；来源与提炼分析方法之间保存派生
 lineage。领域图谱只从已发布知识的元数据和结构化章节提取可审计实体/关系，并以
@@ -682,6 +701,7 @@ Docker Compose 包含：
 | 2026-07-28 | 本次提交 | 认知检索与工程图谱 | 结构化故障案例、方法提炼、稳定 ID 的代码/Commit 图谱、三类记忆和 Agentic Search；同步消除 VS Code 扩展高危传递依赖 |
 | 2026-07-29 | 本次提交 | 异步导入与原子索引 | 仓库/知识大文件后台导入、代码图谱与向量 generation 原子切换、有界混合检索、模块均衡、报告原子发布和 ZIP 清理 |
 | 2026-07-30 | 本次提交 | P1/P2 质量与知识治理 | 知识版本审核和数据库乐观锁、已审核知识领域图谱/GraphRAG、可重复检索评测、人工反馈双重审批和独立 API 路由 |
+| 2026-08-03 | 本地在研 | 大模型文件夹案例提炼 | 从多文件故障材料生成可引用 Markdown，支持多轮人机纠错、版本留痕和确认后进入知识草稿 |
 
 这段迭代体现了项目从“功能原型”逐步转向“可在多台 Win11 电脑复现、可诊断、可回滚、可审计”的工程化过程。
 
@@ -765,6 +785,15 @@ CPU 可以加载模型，但 Qwen3 Reranker 首次启动慢、内存占用高。
 ### 13.11 文件存储仅为本地文件系统
 
 单机简单可靠，但多实例需要共享对象存储、生命周期、版本和防病毒扫描。当前未集成 S3/MinIO，也没有上传恶意内容扫描。
+
+### 13.12 案例提炼的文档类型与上下文仍有限
+
+当前支持文本/无后缀文本、HTML/HTM、Word `.docx` 和带文本层的 PDF。旧式 `.doc`、扫描
+PDF、图片、电子表格和抓包文件会保留但不会提取，其中 OCR 尚未实现。HTML 不执行脚本、
+样式或远程资源；DOCX 只读取正文段落和表格；PDF 的复杂多栏布局可能出现阅读顺序偏差。
+长材料使用头部、关键词行和尾部的确定性抽样，能控制 Token 和数据出站量，但可能遗漏
+没有命中关键词的关键上下文。后续应增加 OCR、PCAP 摘要、来源级选择/排除、发送前证据
+预览和面向不同产品的提炼评测集。当前也只有 API Chat 模型，没有本地生成模型运行器。
 
 ## 14. 改进空间与建议路线
 

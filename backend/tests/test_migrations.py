@@ -34,9 +34,11 @@ def test_migrations_create_fresh_database_and_are_idempotent(tmp_path: Path) -> 
         "knowledge_entity_mentions", "knowledge_relations",
         "diagnosis_feedback", "retrieval_evaluation_datasets",
         "retrieval_evaluation_cases", "retrieval_evaluation_runs",
+        "knowledge_curation_sessions", "knowledge_curation_source_files",
+        "knowledge_curation_revisions", "knowledge_curation_messages",
     }.issubset(table_names)
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010"
     analysis_column_info = {item["name"]: item for item in inspect(engine).get_columns("analysis_runs")}
     event_indexes = {item["name"] for item in inspect(engine).get_indexes("log_events")}
     model_indexes = {item["name"] for item in inspect(engine).get_indexes("model_profiles")}
@@ -85,6 +87,16 @@ def test_migrations_create_fresh_database_and_are_idempotent(tmp_path: Path) -> 
         item["name"]
         for item in inspect(engine).get_unique_constraints("reports")
     }
+    assert {
+        "extracted_text_path",
+        "extracted_text_sha256",
+        "extraction_method",
+        "extraction_truncated",
+        "page_count",
+    }.issubset({
+        item["name"]
+        for item in inspect(engine).get_columns("knowledge_curation_source_files")
+    })
     engine.dispose()
 
 
@@ -146,7 +158,7 @@ def test_migrations_adopt_legacy_create_all_database_without_data_loss(tmp_path:
             "SELECT parse_run_id FROM log_events WHERE id = 'EVT-legacy'"
         ))
     assert title == "legacy case"
-    assert version == "0009"
+    assert version == "0010"
     assert active_run_id == "ART-legacy"
     assert event_run_id == "ART-legacy"
     engine.dispose()

@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.knowledge_governance import router as knowledge_governance_router
 from app.api.knowledge_graph import router as knowledge_graph_router
+from app.api.knowledge_curation import router as knowledge_curation_router
 from app.api.retrieval_evaluation import router as retrieval_evaluation_router
 from app.core.config import get_settings
 from app.core.db import get_db
@@ -78,6 +79,7 @@ from app.services.text_files import read_text_range, search_text_lines
 router = APIRouter()
 router.include_router(knowledge_governance_router)
 router.include_router(knowledge_graph_router)
+router.include_router(knowledge_curation_router)
 router.include_router(retrieval_evaluation_router)
 Db = Annotated[Session, Depends(get_db)]
 

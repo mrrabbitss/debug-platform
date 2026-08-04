@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     parser_max_text_bytes: int = 128 * 1024 * 1024
     text_line_index_stride: int = 500
     text_search_max_scan_lines: int = 250000
+    curation_max_files: int = 500
+    curation_max_total_bytes: int = 512 * 1024 * 1024
+    curation_max_file_bytes: int = 128 * 1024 * 1024
+    curation_max_prompt_chars: int = 120_000
+    curation_max_draft_chars: int = 500_000
+    curation_max_extracted_text_chars: int = 4_000_000
+    curation_max_document_uncompressed_bytes: int = 256 * 1024 * 1024
+    curation_pdf_max_pages: int = 500
+    curation_pdf_max_content_stream_bytes: int = 64 * 1024 * 1024
     job_workers: int = 4
     tool_timeout_seconds: int = 300
 
