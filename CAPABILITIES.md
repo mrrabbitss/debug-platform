@@ -100,7 +100,7 @@
 | 审计 | `AVAILABLE` | 身份、管理操作、模型出站元数据，避免记录正文和密钥 |
 | 健康检查 | `AVAILABLE` | liveness、readiness、管理员系统状态 |
 | Docker/Compose | `AVAILABLE` | PostgreSQL、Qdrant 和前后端镜像 |
-| GitHub CI | `AVAILABLE` | Linux/Windows 后端、前端、扩展、依赖审计、外部服务、Docker |
+| GitHub CI | `AVAILABLE` | Linux/Windows 后端、前端、扩展、依赖审计、外部服务、Docker；每个 job 有硬超时 |
 | Golden 质量门禁 | `AVAILABLE` | 日志、提炼、Code/Commit Graph、Memory、RAG、Agentic Search 与有界执行九类固定评测 |
 | 浏览器 E2E | `AVAILABLE` | Playwright + Fake OpenAI 服务固化混合文档上传、预览、生成、纠错、确认 DRAFT 和轨迹查看，控制台错误即失败 |
 | Agent 运行轨迹 | `AVAILABLE` | 记录摘要哈希、模型/Prompt、tokens、耗时、重试、证据、停止和审批；管理员可查看并安全只读重放 |

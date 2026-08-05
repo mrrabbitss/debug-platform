@@ -63,6 +63,7 @@ Golden 套件当前包含九类阻断检查：
 独立 Golden CI 是耗时阈值的权威门禁，并保持严格计时。后端 pytest 覆盖率任务仍执行全部
 功能断言、记录实际耗时与预算，但不重复用 coverage 插桩后的墙钟时间判定成败，避免慢速
 共享 runner 产生假回归；这不会放宽独立 Golden job 的任何阈值。
+所有 CI job 另有 10～30 分钟的墙钟硬超时，超时会直接阻断合并。
 
 ## 3. Fake OpenAI-compatible 服务与浏览器 E2E
 
