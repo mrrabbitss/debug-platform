@@ -31,6 +31,30 @@ def test_ci_workflow_exists() -> None:
     assert "runtime_smoke.ps1" in content
     assert "uv lock --project backend --check" in content
     assert "--constraint backend/constraints.lock" in content
+    assert "branches: [main]" in content
+    assert "github.event.pull_request.number || github.ref" in content
+    assert "python scripts/check_repo_harness.py" in content
+
+
+def test_repository_harness_and_cross_platform_git_files_exist() -> None:
+    required_files = (
+        ".gitattributes",
+        ".github/CODEOWNERS",
+        ".github/dependabot.yml",
+        ".github/pull_request_template.md",
+        "AGENTS.md",
+        "HARNESS_ENGINEERING.md",
+        "scripts/check_repo_harness.py",
+        "scripts/validate_all.bat",
+        "scripts/validate_all.ps1",
+        "workflow/README.md",
+    )
+    assert all((PROJECT_ROOT / path).is_file() for path in required_files)
+    gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+    attributes = (PROJECT_ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "/artifacts/validation/" in gitignore
+    assert "*.bat text eol=crlf" in attributes
+    assert "*.py text eol=lf" in attributes
 
 
 def test_vscode_client_uses_secret_storage_and_accepts_extensionless_logs() -> None:

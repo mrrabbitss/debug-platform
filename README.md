@@ -1,7 +1,10 @@
 # GW/AP Intelligent Debug Platform
 
 项目所有已交付能力、在研需求、依赖关系和冲突约束统一维护在
-[CAPABILITIES.md](CAPABILITIES.md)。新增或调整功能时必须同步更新该总账。
+[CAPABILITIES.md](CAPABILITIES.md)。工程 Harness 的现状和后续顺序见
+[HARNESS_ENGINEERING.md](HARNESS_ENGINEERING.md)，专题文档入口见
+[docs/README.md](docs/README.md)，最近一次可复核验证见
+[VALIDATION.md](VALIDATION.md)。新增或调整功能时必须同步更新相应总账。
 
 面向 GW、AP、全光网关等网络设备的 collectDebuginfo 日志解析、证据关联、RAG 检索、LLM 综合诊断、代码仓库关联和报告生成平台。
 
@@ -89,6 +92,8 @@
 
 ```text
 gw_ap_debug_platform/
+├── AGENTS.md                Agent/开发者项目地图与工程护栏
+├── HARNESS_ENGINEERING.md   可执行验证、评测、轨迹和有界 Agent 路线
 ├── backend/                 FastAPI、数据库、解析器、RAG、LLM、报告
 ├── frontend/                Vue 3 + TypeScript + Element Plus
 ├── vscode-extension/        私有 VS Code 客户端
@@ -126,6 +131,19 @@ scripts\runtime_smoke.bat
 ```
 
 它会在系统临时目录创建隔离数据库，使用 18000/15173 端口启动后端和前端，验证迁移、前端 API 代理以及案例创建/读取闭环，然后自动停止进程。成功时输出一行 `"ok":true` 的 JSON。需要切换测试端口时可直接运行 `runtime_smoke.ps1` 并传入参数。
+
+日常修改、完整交付和带 Docker 的外部验证统一使用：
+
+```bat
+scripts\validate_all.bat Fast
+scripts\validate_all.bat Full
+scripts\validate_all.bat External
+```
+
+`Fast` 复用已安装依赖做静态检查、仓库契约、关键后端回归和前端构建；`Full`
+先按锁文件重新安装依赖，再运行完整后端、三类依赖审计、扩展编译、Doctor 和隔离
+运行冒烟；`External` 继续检查 Compose 并构建前后端镜像。每次结果写入被 Git 忽略的
+`artifacts\validation\<时间>-<模式>\summary.json` 和逐步日志，方便在另一台电脑复现。
 
 ### 启用个人账号和案例权限
 
@@ -519,6 +537,15 @@ registry.register(VendorGwParser())
 - 真实厂商日志解析器与回归数据集。
 
 ## 10. 测试
+
+Windows 11 推荐直接运行统一入口：
+
+```bat
+scripts\validate_all.bat Fast
+scripts\validate_all.bat Full
+```
+
+下面的分项命令用于只调试某一层：
 
 ```bash
 cd backend

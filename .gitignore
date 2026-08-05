@@ -16,4 +16,5 @@ log_check_result*.txt
 local_doctor_result*.txt
 hf_model_access_report*.txt
 .local_dependency_stamp
+/artifacts/validation/
 .DS_Store

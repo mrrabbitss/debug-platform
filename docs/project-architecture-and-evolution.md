@@ -1,6 +1,6 @@
 # GW/AP 智能调试平台：架构、技术栈与迭代说明
 
-> 文档状态：2026-07-23，随仓库版本维护。
+> 文档状态：2026-08-05，随仓库版本维护。
 > 适用范围：当前 `debug-platform` 单体仓库，包括 Web 前端、后端 API、后台任务、VS Code 扩展、部署脚本和本地模型支持。
 
 ## 1. 项目定位
@@ -136,6 +136,8 @@ flowchart TB
 
 ```text
 debugplatform/
+├─ AGENTS.md                  # 项目地图、边界和完成标准
+├─ HARNESS_ENGINEERING.md     # Harness 状态、P1/P2 有序路线
 ├─ backend/
 │  ├─ app/
 │  │  ├─ api/                 # REST 路由
@@ -158,6 +160,7 @@ debugplatform/
 ├─ vscode-extension/          # VS Code 客户端
 ├─ scripts/                   # 启动、体检、冒烟、备份、用户和模型脚本
 ├─ docs/                      # 专题文档
+├─ workflow/                  # Agent allowlist 与配套 OpenAPI 合同
 ├─ models/                    # 本地模型，Git 忽略
 ├─ docker-compose.yml
 ├─ .env.example
@@ -702,6 +705,7 @@ Docker Compose 包含：
 | 2026-07-29 | 本次提交 | 异步导入与原子索引 | 仓库/知识大文件后台导入、代码图谱与向量 generation 原子切换、有界混合检索、模块均衡、报告原子发布和 ZIP 清理 |
 | 2026-07-30 | 本次提交 | P1/P2 质量与知识治理 | 知识版本审核和数据库乐观锁、已审核知识领域图谱/GraphRAG、可重复检索评测、人工反馈双重审批和独立 API 路由 |
 | 2026-08-03 | 本地在研 | 大模型文件夹案例提炼 | 从多文件故障材料生成可引用 Markdown，支持多轮人机纠错、版本留痕和确认后进入知识草稿 |
+| 2026-08-05 | 本次提交 | Harness Engineering P0 | 统一验证入口、仓库契约、CI 去重、依赖治理、Agent 地图和 main 保护规则 |
 
 这段迭代体现了项目从“功能原型”逐步转向“可在多台 Win11 电脑复现、可诊断、可回滚、可审计”的工程化过程。
 
@@ -910,6 +914,12 @@ GitHub Actions 当前验证：
 - PostgreSQL/Qdrant 集成测试；
 - 后端和前端 Docker 构建；
 - Windows 前后端完整启动冒烟。
+
+仓库还提供 `scripts\validate_all.bat Fast|Full|External` 作为 Win11 的统一执行入口，
+把每一步的退出码、耗时和日志写入 `artifacts\validation`。CI 同时执行
+`scripts/check_repo_harness.py`，防止文档断链、能力总账遗漏、触发器重复、Dependabot
+覆盖不足以及 `workflow/skill.yaml` 与 `workflow/openapi.yaml` 漂移。根目录
+`AGENTS.md` 只保存短项目地图和强约束，详细路线由 `HARNESS_ENGINEERING.md` 维护。
 
 仍应补充真实模型加载 CI、前端 E2E 和经过审批的真实日志回归。由于模型权重大、公司日志敏感，这两类测试更适合在企业内网 Runner 执行。
 

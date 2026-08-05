@@ -1,0 +1,12 @@
+# Default owner for this single-maintainer repository.
+* @mrrabbitss
+
+/.github/ @mrrabbitss
+/backend/ @mrrabbitss
+/frontend/ @mrrabbitss
+/scripts/ @mrrabbitss
+/vscode-extension/ @mrrabbitss
+/workflow/ @mrrabbitss
+/AGENTS.md @mrrabbitss
+/CAPABILITIES.md @mrrabbitss
+/HARNESS_ENGINEERING.md @mrrabbitss

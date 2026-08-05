@@ -3,7 +3,11 @@
 > 本文件是项目功能范围的唯一总账（Single Source of Truth）。
 > 新需求、在研能力、已交付能力、约束和冲突处理都必须同步更新本文件，防止跨迭代遗忘或重复建设。
 
-最后更新：2026-08-03
+最后更新：2026-08-05
+
+工程执行、验证、评测和 Agent 护栏的状态与优先级单独维护在
+[Harness Engineering 路线与状态总账](HARNESS_ENGINEERING.md)。本文件只判断业务能力是否
+可用；两份总账在每次相关迭代中必须同步。
 
 ## 1. 状态说明
 
@@ -24,6 +28,8 @@
 | 双击启动前后端 | `AVAILABLE` | `scripts/start_local.bat` | 自动准备 Python/Node 依赖并启动 FastAPI、Vue |
 | 本地环境检测 | `AVAILABLE` | `scripts/doctor_local.bat` | 检测版本、依赖、端口和服务根路径 |
 | 隔离运行冒烟 | `AVAILABLE` | `scripts/runtime_smoke.bat` | 使用临时数据库和独立端口验证前后端 |
+| 统一仓库验证 | `AVAILABLE` | `scripts/validate_all.bat` | Fast/Full/External 三档，保存 JSON 摘要和逐步日志 |
+| 仓库 Harness 契约 | `AVAILABLE` | `scripts/check_repo_harness.py` | 检查文档、CI、依赖治理和 Agent API 合同漂移 |
 | SQLite 备份恢复 | `AVAILABLE` | `scripts/backup_local.bat`、`restore_local.bat` | 带清单、哈希校验和回滚保留 |
 | 本地模型网络检测 | `AVAILABLE` | `scripts/check_hf_model_access.bat` | 检查镜像、CLI 和 curl 回退并生成脱敏报告 |
 | 本地模型安装 | `AVAILABLE` | `scripts/install_local_models.bat` | BGE Embedding、Qwen3 Reranker，支持断点续传和哈希校验 |
@@ -300,3 +306,21 @@
 尚无 OCR；HTML 提取结构化可见文本但不执行浏览器脚本或远程资源。案例生成只支持 API
 Chat 模型，本地 BGE Embedding 和 Qwen3 Reranker 不具备生成能力，本地 Chat 运行器仍是
 后续候选。详见 [大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。
+
+## 8. Harness Engineering P0（2026-08-05）
+
+- [x] 根目录 Agent 项目地图、业务/工程总账和专题文档索引；
+- [x] `Fast`、`Full`、`External` 统一 Win11 验证入口及可移植 JSON/日志产物；
+- [x] 文档链接、总账交叉引用、CI 触发、Dependabot 覆盖和 Workflow API 的自动契约检查；
+- [x] 分支/PR CI 去重，同时保留面向 `main` 的 PR、`main` push 和手工触发；
+- [x] `.gitattributes`、PR 模板、CODEOWNERS 和 Python/npm/Actions/Docker Dependabot；
+- [x] Workflow allowlist 补齐日志上传/解析/报告和 AI 案例提炼 API，并声明证据与人工 DRAFT 门禁；
+- [ ] GitHub `main` ruleset；只有本次 PR 的新 CI 全绿后才启用。
+
+本轮本地 `Full` 验证：15 个步骤全部通过，包含 Harness 11 项契约、`122 passed,
+1 skipped`、前端生产构建、扩展编译、三类依赖审计、Doctor 和隔离运行冒烟。
+本机未安装 Docker，`External` 中的 PostgreSQL/Qdrant 与镜像构建继续由 GitHub CI 验证。
+
+P1 Golden Dataset、Fake Model、Playwright E2E、质量评测和执行轨迹，以及 P2 有界 Agent、
+任务隔离和多实例 lease 的有序路线见
+[HARNESS_ENGINEERING.md](HARNESS_ENGINEERING.md)，未实现项不得描述为已可用。

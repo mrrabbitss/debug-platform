@@ -4,12 +4,16 @@ Last validated: 2026-08-05 on Windows 11.
 
 ## Current regression result
 
+- Unified Win11 `scripts\validate_all.bat Full`: all 15 stages passed with a
+  machine-readable summary and per-step logs;
 - Backend dependency consistency (`pip check`): passed;
 - Cross-platform `uv.lock` and pip constraints synchronization check: passed;
 - Python, frontend and VS Code extension dependency audits: no known vulnerabilities;
 - Ruff static checks across backend, tests and Python utility scripts: passed;
 - Python compileall: passed;
-- Pytest: 119 passed, 1 external-service test skipped locally;
+- Repository Harness: 11 contracts passed across 15 required files, 13 Markdown
+  files, 7 dependency-update targets and 16 allowlisted Workflow operations;
+- Pytest: 122 passed, 1 external-service test skipped locally;
 - Vue TypeScript check and production Vite build: passed;
 - VS Code extension TypeScript compile: passed;
 - Isolated Win11 runtime smoke: passed.
@@ -34,6 +38,12 @@ The test environment includes Starlette's supported `httpx2` test client; the su
 - All isolated backend/frontend test processes were stopped after validation.
 
 The reusable command is `scripts\runtime_smoke.bat`. It uses temporary storage and does not modify the normal project database.
+
+For repository changes, use `scripts\validate_all.bat Fast` during development
+and `scripts\validate_all.bat Full` before publishing. `External` adds Compose
+validation and both Docker image builds. Validation artifacts are stored under
+the Git-ignored `artifacts\validation` directory so they can be attached to a
+review without entering version control.
 
 ## Functional regression coverage
 
@@ -69,7 +79,12 @@ The reusable command is `scripts\runtime_smoke.bat`. It uses temporary storage a
 
 ## Environment-dependent checks
 
-Docker is not installed on this validation computer, so PostgreSQL/Qdrant containers and Docker image builds were not executed locally. `.github/workflows/ci.yml` contains a dedicated service-container test that starts PostgreSQL and Qdrant, runs all migrations, starts the FastAPI application, performs a case API round trip and performs a Qdrant vector write/query/delete round trip. The same workflow builds both Docker images.
+Docker is not installed on this validation computer, so `External`,
+PostgreSQL/Qdrant containers and Docker image builds were not executed locally.
+`.github/workflows/ci.yml` contains a dedicated service-container test that
+starts PostgreSQL and Qdrant, runs all migrations, starts the FastAPI
+application, performs a case API round trip and performs a Qdrant vector
+write/query/delete round trip. The same workflow builds both Docker images.
 
 External Qwen/GLM/BGE endpoints were not called because approved credentials were not supplied. Their adapters and validation paths use mocked responses in the local suite; the browser curation flow used an isolated local OpenAI-compatible test server. Use the model-profile “测试” action with an approved company endpoint before production use.
 

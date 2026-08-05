@@ -60,6 +60,22 @@ def test_runtime_smoke_uses_isolated_database_and_alternate_ports() -> None:
     assert "Stop-Process" in script
 
 
+def test_unified_validation_has_bounded_modes_and_machine_readable_results() -> None:
+    batch = (PROJECT_ROOT / "scripts" / "validate_all.bat").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "scripts" / "validate_all.ps1").read_text(encoding="utf-8")
+
+    assert "-ExecutionPolicy Bypass" in batch
+    assert '[ValidateSet("Fast", "Full", "External")]' in script
+    assert '"artifacts\\validation"' in script
+    assert '"summary.json"' in script
+    assert '"pytest.xml"' in script
+    assert "check_repo_harness.py" in script
+    assert "refresh_python_lock.ps1" in script
+    assert "runtime_smoke.ps1" in script
+    assert "docker.exe" in script
+    assert "MaxAttempts 2" in script
+
+
 def test_local_model_installer_uses_project_layout_and_hf_mirror() -> None:
     batch = (PROJECT_ROOT / "scripts" / "install_local_models.bat").read_text(encoding="utf-8")
     script = (PROJECT_ROOT / "scripts" / "install_local_models.ps1").read_text(encoding="utf-8")

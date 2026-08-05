@@ -1,0 +1,22 @@
+# 项目文档索引
+
+业务能力总账见 [`CAPABILITIES.md`](../CAPABILITIES.md)，Harness Engineering 状态与
+有序路线见 [`HARNESS_ENGINEERING.md`](../HARNESS_ENGINEERING.md)，最近验证证据见
+[`VALIDATION.md`](../VALIDATION.md)。
+
+## 架构与演进
+
+- [项目架构、技术栈、优缺点和迭代历程](project-architecture-and-evolution.md)
+- [模型网关、Embedding/Reranker 与分层知识库](model-and-knowledge-configuration.md)
+
+## 诊断与认知检索
+
+- [故障案例、代码/Commit 图谱、记忆与 Agentic Search](cognitive-retrieval.md)
+- [知识治理、领域图谱、GraphRAG 与检索评测](quality-governance-and-evaluation.md)
+
+## 大模型知识提炼
+
+- [文件夹案例提炼、Word/PDF/HTML 抽取和人工校正](llm-knowledge-curation.md)
+
+新增、移动或删除 `docs/*.md` 时必须同步更新本索引。CI 中的
+`scripts/check_repo_harness.py` 会验证索引完整性和所有本地 Markdown 链接。
