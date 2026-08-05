@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
@@ -19,6 +18,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import aliased, sessionmaker
 
 from app.core.db import Base, configure_sqlite_engine
+from app.harness.timing import run_timed_check
 from app.models import (
     AgentMemory,
     Artifact,
@@ -84,35 +84,6 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _run_check(
-    name: str,
-    evaluator: Callable[[], EvaluationOutcome],
-    *,
-    max_duration_ms: int | None = None,
-) -> dict[str, Any]:
-    started = perf_counter()
-    try:
-        outcome = evaluator()
-        failures = list(outcome.failures)
-        metrics = outcome.metrics
-    except Exception as exc:  # noqa: BLE001 - evaluator must report, not abort the suite
-        failures = [f"{type(exc).__name__}: {exc}"]
-        metrics = {}
-    duration_ms = round((perf_counter() - started) * 1000, 3)
-    if max_duration_ms is not None and duration_ms > max_duration_ms:
-        failures.append(
-            f"duration {duration_ms} ms exceeded budget {max_duration_ms} ms"
-        )
-    return {
-        "name": name,
-        "status": "PASS" if not failures else "FAIL",
-        "duration_ms": duration_ms,
-        "budget_ms": max_duration_ms,
-        "metrics": metrics,
-        "failures": failures,
-    }
 
 
 def _evaluate_fixture_integrity(root: Path, corpus: dict[str, Any]) -> EvaluationOutcome:
@@ -742,25 +713,38 @@ def _evaluate_bounded_executor(corpus: dict[str, Any]) -> EvaluationOutcome:
     )
 
 
-def run_golden_suite(corpus_root: Path | None = None) -> dict[str, Any]:
-    """Run all deterministic gates and return a machine-readable report."""
+def run_golden_suite(
+    corpus_root: Path | None = None,
+    *,
+    enforce_duration_budgets: bool = True,
+) -> dict[str, Any]:
+    """Run deterministic gates and return a machine-readable report.
+
+    The standalone Golden CI job keeps duration enforcement enabled. Coverage
+    suites may disable only the wall-clock verdict because instrumentation and
+    shared runners distort latency; measured durations and budgets remain in
+    the report.
+    """
     root = (corpus_root or DEFAULT_CORPUS_ROOT).resolve()
     corpus = json.loads((root / "corpus.json").read_text(encoding="utf-8"))
     checks = [
-        _run_check(
+        run_timed_check(
             "fixture_integrity",
             lambda: _evaluate_fixture_integrity(root, corpus),
             max_duration_ms=1000,
+            enforce_duration_budget=enforce_duration_budgets,
         ),
-        _run_check(
+        run_timed_check(
             "log_parser",
             lambda: _evaluate_parser(root, corpus),
             max_duration_ms=int(corpus["parser"]["max_duration_ms"]),
+            enforce_duration_budget=enforce_duration_budgets,
         ),
-        _run_check(
+        run_timed_check(
             "knowledge_curation",
             lambda: _evaluate_curation(root, corpus),
             max_duration_ms=int(corpus["curation"]["max_duration_ms"]),
+            enforce_duration_budget=enforce_duration_budgets,
         ),
     ]
     graph_started = perf_counter()
@@ -777,31 +761,50 @@ def run_golden_suite(corpus_root: Path | None = None) -> dict[str, Any]:
         ("commit_graph", commit_outcome),
     ):
         failures = list(outcome.failures)
-        if graph_duration > 5000:
-            failures.append(f"shared graph evaluation exceeded 5000 ms: {graph_duration} ms")
-        checks.append({
-            "name": name,
-            "status": "PASS" if not failures else "FAIL",
-            "duration_ms": graph_duration,
-            "budget_ms": 5000,
-            "metrics": outcome.metrics,
-            "failures": failures,
-        })
+        if enforce_duration_budgets and graph_duration > 5000:
+            failures.append(
+                f"shared graph evaluation exceeded 5000 ms: {graph_duration} ms"
+            )
+        checks.append(
+            {
+                "name": name,
+                "status": "PASS" if not failures else "FAIL",
+                "duration_ms": graph_duration,
+                "budget_ms": 5000,
+                "duration_budget_enforced": enforce_duration_budgets,
+                "metrics": outcome.metrics,
+                "failures": failures,
+            }
+        )
     del graph_exception
-    checks.extend([
-        _run_check("memory", lambda: _evaluate_memory(corpus), max_duration_ms=5000),
-        _run_check("rag", lambda: _evaluate_rag(corpus), max_duration_ms=5000),
-        _run_check(
-            "agentic_search",
-            lambda: _evaluate_agentic_plan(corpus),
-            max_duration_ms=int(corpus["agentic_search"]["max_duration_ms"]),
-        ),
-        _run_check(
-            "bounded_agent_executor",
-            lambda: _evaluate_bounded_executor(corpus),
-            max_duration_ms=1000,
-        ),
-    ])
+    checks.extend(
+        [
+            run_timed_check(
+                "memory",
+                lambda: _evaluate_memory(corpus),
+                max_duration_ms=5000,
+                enforce_duration_budget=enforce_duration_budgets,
+            ),
+            run_timed_check(
+                "rag",
+                lambda: _evaluate_rag(corpus),
+                max_duration_ms=5000,
+                enforce_duration_budget=enforce_duration_budgets,
+            ),
+            run_timed_check(
+                "agentic_search",
+                lambda: _evaluate_agentic_plan(corpus),
+                max_duration_ms=int(corpus["agentic_search"]["max_duration_ms"]),
+                enforce_duration_budget=enforce_duration_budgets,
+            ),
+            run_timed_check(
+                "bounded_agent_executor",
+                lambda: _evaluate_bounded_executor(corpus),
+                max_duration_ms=1000,
+                enforce_duration_budget=enforce_duration_budgets,
+            ),
+        ]
+    )
     failures = [
         f"{check['name']}: {failure}"
         for check in checks
@@ -812,6 +815,7 @@ def run_golden_suite(corpus_root: Path | None = None) -> dict[str, Any]:
         "corpus_id": corpus["corpus_id"],
         "status": "PASS" if not failures else "FAIL",
         "check_count": len(checks),
+        "duration_budgets_enforced": enforce_duration_budgets,
         "checks": checks,
         "failures": failures,
     }

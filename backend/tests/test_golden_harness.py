@@ -11,8 +11,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_golden_dataset_quality_gates_pass() -> None:
-    report = run_golden_suite(REPO_ROOT / "sample_data" / "golden_incident")
+    report = run_golden_suite(
+        REPO_ROOT / "sample_data" / "golden_incident",
+        enforce_duration_budgets=False,
+    )
     assert report["status"] == "PASS", report["failures"]
+    assert report["duration_budgets_enforced"] is False
+    assert all(check["budget_ms"] is not None for check in report["checks"])
+    assert all(
+        check["duration_budget_enforced"] is False for check in report["checks"]
+    )
     assert {item["name"] for item in report["checks"]} == {
         "fixture_integrity",
         "log_parser",
@@ -20,10 +28,10 @@ def test_golden_dataset_quality_gates_pass() -> None:
         "code_graph",
         "commit_graph",
         "memory",
-            "rag",
-            "agentic_search",
-            "bounded_agent_executor",
-        }
+        "rag",
+        "agentic_search",
+        "bounded_agent_executor",
+    }
 
 
 async def _fake_request(path: str, payload: dict, mode: str | None = None):

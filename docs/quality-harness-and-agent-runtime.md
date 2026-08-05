@@ -60,6 +60,10 @@ Golden 套件当前包含九类阻断检查：
 指标阈值存放在 corpus 清单中。任一必需证据缺失、禁止结论出现、耗时超限或停止原因变化，
 `Golden Dataset Quality` CI 都会失败。
 
+独立 Golden CI 是耗时阈值的权威门禁，并保持严格计时。后端 pytest 覆盖率任务仍执行全部
+功能断言、记录实际耗时与预算，但不重复用 coverage 插桩后的墙钟时间判定成败，避免慢速
+共享 runner 产生假回归；这不会放宽独立 Golden job 的任何阈值。
+
 ## 3. Fake OpenAI-compatible 服务与浏览器 E2E
 
 Fake 服务在 [fake_openai_server.py](../backend/tests/fake_openai_server.py)，只读取仓库内合成

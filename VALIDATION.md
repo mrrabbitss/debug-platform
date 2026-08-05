@@ -7,7 +7,7 @@ Last validated: 2026-08-05 on Windows 11.
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 139 passed and 1 external-service test skipped locally.
+- Backend tests: 140 passed and 1 external-service test skipped locally.
 - Backend line coverage: 76.82%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
