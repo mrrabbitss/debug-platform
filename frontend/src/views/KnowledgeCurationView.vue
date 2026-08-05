@@ -2,7 +2,21 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api } from '../api/client'
+import CurationSourcePreviewDialog from '../components/curation/CurationSourcePreviewDialog.vue'
+import { useKnowledgeCurationPresentation } from '../composables/useKnowledgeCurationPresentation'
+import {
+  confirmKnowledgeCuration,
+  createKnowledgeCuration,
+  deleteKnowledgeCuration,
+  getKnowledgeCuration,
+  listKnowledgeCurations,
+  loadCurationOptions,
+  previewKnowledgeCurationSource,
+  refineKnowledgeCuration,
+  restoreKnowledgeCurationRevision,
+  retryKnowledgeCuration,
+  saveKnowledgeCurationDraft
+} from '../api/knowledgeCuration'
 import type {
   KnowledgeCategory,
   KnowledgeCurationRevision,
@@ -14,6 +28,14 @@ import type {
 type FolderFile = File & { webkitRelativePath?: string }
 
 const router = useRouter()
+const {
+  extractionMethodLabel,
+  formatBytes,
+  skipReasonLabel,
+  sourceRoleLabel,
+  statusLabel,
+  statusType
+} = useKnowledgeCurationPresentation()
 const sessions = ref<KnowledgeCurationSession[]>([])
 const current = ref<KnowledgeCurationSession | null>(null)
 const modelProfiles = ref<ModelProfile[]>([])
@@ -69,73 +91,6 @@ function errorText(error: any) {
   return error?.response?.data?.detail || error?.message || '操作失败'
 }
 
-function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`
-  return `${(value / 1024 / 1024).toFixed(2)} MiB`
-}
-
-function statusLabel(status: KnowledgeCurationSession['status']) {
-  return {
-    QUEUED: '等待提炼',
-    EXTRACTING: '模型提炼中',
-    REVIEWING: '人工校正中',
-    FAILED: '提炼失败',
-    CANCELLED: '已取消',
-    CONFIRMING: '正在加入知识库',
-    CONFIRMED: '已生成知识草稿'
-  }[status] || status
-}
-
-function statusType(status: KnowledgeCurationSession['status']) {
-  if (status === 'CONFIRMED') return 'success'
-  if (status === 'FAILED') return 'danger'
-  if (status === 'REVIEWING') return 'warning'
-  return 'info'
-}
-
-function sourceRoleLabel(role: KnowledgeCurationSource['source_role']) {
-  return {
-    log: '日志',
-    error: '错误情况',
-    analysis: '分析',
-    solution: '解决方案',
-    context: '上下文'
-  }[role] || role
-}
-
-function extractionMethodLabel(source: KnowledgeCurationSource) {
-  const labels: Record<string, string> = {
-    plain_text: '纯文本',
-    html_visible_text: 'HTML 正文',
-    docx_paragraphs_tables: 'Word DOCX',
-    pdf_text_layer: 'PDF 文本层'
-  }
-  const label = labels[source.extraction_method || ''] || '待检测'
-  return source.page_count ? `${label} · ${source.page_count} 页` : label
-}
-
-function skipReasonLabel(reason?: string) {
-  const labels: Record<string, string> = {
-    binary_or_unsupported_text_encoding: '二进制或无法识别的文本编码',
-    empty_text_file: '空文本文件',
-    prompt_budget_exhausted: '模型证据总长度已达上限',
-    legacy_doc_requires_conversion: '旧式 .doc 需先转换为 .docx',
-    invalid_docx: '不是有效的 DOCX 文件',
-    encrypted_docx: '不支持加密 DOCX',
-    docx_too_many_parts: 'DOCX 内部文件过多',
-    docx_part_too_large: 'DOCX 内部文件过大',
-    docx_uncompressed_too_large: 'DOCX 解压后超过安全限制',
-    docx_extraction_failed: 'DOCX 正文提取失败',
-    html_not_readable_text: 'HTML 编码无法识别',
-    html_extraction_failed: 'HTML 正文提取失败',
-    encrypted_pdf: '不支持加密 PDF',
-    invalid_pdf: 'PDF 文件无效或损坏',
-    document_has_no_extractable_text: '没有可提取正文；扫描 PDF 需要 OCR'
-  }
-  return labels[reason || ''] || reason || '未纳入模型证据'
-}
-
 function clearPoll() {
   if (pollTimer !== undefined) window.clearTimeout(pollTimer)
   pollTimer = undefined
@@ -156,16 +111,13 @@ function schedulePoll() {
 }
 
 async function loadModelsAndCategories() {
-  const [modelResponse, categoryResponse] = await Promise.all([
-    api.get('/system/models', { params: { task_type: 'chat' } }),
-    api.get('/knowledge/categories')
-  ])
-  modelProfiles.value = modelResponse.data
-  categories.value = categoryResponse.data
+  const options = await loadCurationOptions()
+  modelProfiles.value = options.models
+  categories.value = options.categories
 }
 
 async function loadSessions(preferredId?: string) {
-  sessions.value = (await api.get('/knowledge-curations')).data
+  sessions.value = await listKnowledgeCurations()
   const target = preferredId || current.value?.id || sessions.value[0]?.id
   if (target && (!current.value || current.value.id !== target)) await loadSession(target)
 }
@@ -173,7 +125,7 @@ async function loadSessions(preferredId?: string) {
 async function loadSession(sessionId: string) {
   loading.value = true
   try {
-    const detail: KnowledgeCurationSession = (await api.get(`/knowledge-curations/${sessionId}`)).data
+    const detail = await getKnowledgeCuration(sessionId)
     current.value = detail
     draftEditor.value = detail.draft_markdown || ''
     draftTitle.value = detail.draft_title || detail.title_hint
@@ -230,22 +182,14 @@ async function createSession() {
   uploading.value = true
   uploadProgress.value = 0
   try {
-    const data = new FormData()
-    selectedFiles.value.forEach(file => data.append('files', file, file.name))
-    data.append('relative_paths_json', JSON.stringify(
-      selectedFiles.value.map(file => file.webkitRelativePath || file.name)
-    ))
-    Object.entries(createForm).forEach(([key, value]) => {
-      if (typeof value === 'boolean') data.append(key, String(value))
-      else if (value) data.append(key, value)
-    })
-    const response = await api.post('/knowledge-curations', data, {
-      timeout: 30 * 60 * 1000,
-      onUploadProgress: event => {
+    const response = await createKnowledgeCuration({
+      files: selectedFiles.value,
+      relativePaths: selectedFiles.value.map(file => file.webkitRelativePath || file.name),
+      ...createForm
+    }, event => {
         if (event.total) uploadProgress.value = Math.round(event.loaded * 100 / event.total)
-      }
     })
-    const session: KnowledgeCurationSession = response.data.session
+    const session = response.session
     createDialog.value = false
     current.value = session
     draftEditor.value = ''
@@ -265,15 +209,15 @@ async function saveDraft() {
   if (!draftEditor.value.trim()) return ElMessage.warning('Markdown 草稿不能为空')
   saving.value = true
   try {
-    const response = await api.patch(`/knowledge-curations/${current.value.id}/draft`, {
+    const response = await saveKnowledgeCurationDraft(current.value.id, {
       title: draftTitle.value,
       markdown: draftEditor.value,
       change_summary: '工程师手工校正案例草稿',
       expected_draft_version: current.value.draft_version
     })
-    current.value = response.data
-    draftEditor.value = response.data.draft_markdown
-    draftTitle.value = response.data.draft_title
+    current.value = response
+    draftEditor.value = response.draft_markdown || ''
+    draftTitle.value = response.draft_title
     ElMessage.success('人工修改已保存为新的草稿版本')
     await loadSessions(current.value!.id)
   } catch (error) {
@@ -290,13 +234,14 @@ async function sendCorrection() {
   if (draftDirty.value) return ElMessage.warning('请先保存右侧人工修改，再与模型继续对话')
   saving.value = true
   try {
-    const response = await api.post(`/knowledge-curations/${current.value.id}/chat`, {
+    const response = await refineKnowledgeCuration(
+      current.value.id,
       instruction,
-      expected_draft_version: current.value.draft_version
-    }, { timeout: 5 * 60 * 1000 })
-    current.value = response.data
-    draftEditor.value = response.data.draft_markdown
-    draftTitle.value = response.data.draft_title
+      current.value.draft_version
+    )
+    current.value = response
+    draftEditor.value = response.draft_markdown || ''
+    draftTitle.value = response.draft_title
     chatInstruction.value = ''
     ElMessage.success('模型已根据本轮对话生成新的草稿版本')
     await loadSessions(current.value!.id)
@@ -315,13 +260,14 @@ async function restoreRevision(revision: KnowledgeCurationRevision) {
       '恢复草稿版本',
       { type: 'warning' }
     )
-    const response = await api.post(
-      `/knowledge-curations/${current.value.id}/revisions/${revision.version}/restore`,
-      { expected_draft_version: current.value.draft_version }
+    const response = await restoreKnowledgeCurationRevision(
+      current.value.id,
+      revision,
+      current.value.draft_version
     )
-    current.value = response.data
-    draftEditor.value = response.data.draft_markdown
-    draftTitle.value = response.data.draft_title
+    current.value = response
+    draftEditor.value = response.draft_markdown || ''
+    draftTitle.value = response.draft_title
     ElMessage.success('已从历史内容创建新的草稿版本')
   } catch (error: any) {
     if (error !== 'cancel') ElMessage.error(errorText(error))
@@ -339,10 +285,11 @@ async function confirmSession() {
       { type: 'warning', confirmButtonText: '确认无误并加入', cancelButtonText: '继续检查' }
     )
     saving.value = true
-    const response = await api.post(`/knowledge-curations/${current.value.id}/confirm`, {
-      expected_draft_version: current.value.draft_version
-    })
-    current.value = response.data.session
+    const response = await confirmKnowledgeCuration(
+      current.value.id,
+      current.value.draft_version
+    )
+    current.value = response.session
     ElMessage.success('已创建知识库草稿；请进入分层知识库提交审核并发布')
     await loadSessions(current.value!.id)
   } catch (error: any) {
@@ -356,10 +303,8 @@ async function retrySession() {
   if (!current.value) return
   saving.value = true
   try {
-    const response = await api.post(`/knowledge-curations/${current.value.id}/retry`, {
-      consent_model_egress: true
-    })
-    current.value = response.data.session
+    const response = await retryKnowledgeCuration(current.value.id)
+    current.value = response.session
     ElMessage.success('已重新提交模型提炼任务')
     schedulePoll()
   } catch (error) {
@@ -377,7 +322,7 @@ async function deleteSession() {
       '删除提炼会话',
       { type: 'warning' }
     )
-    await api.delete(`/knowledge-curations/${current.value.id}`)
+    await deleteKnowledgeCuration(current.value.id)
     current.value = null
     draftEditor.value = ''
     await loadSessions()
@@ -392,13 +337,14 @@ async function openSourcePreview(source: KnowledgeCurationSource, startLine = 1)
   previewSourceItem.value = source
   previewStartLine.value = startLine
   try {
-    const response = await api.get(
-      `/knowledge-curations/${current.value.id}/sources/${source.id}/preview`,
-      { params: { start_line: startLine, line_count: 500 } }
+    const response = await previewKnowledgeCurationSource(
+      current.value.id,
+      source.id,
+      startLine
     )
-    sourcePreview.value = response.data.text
+    sourcePreview.value = response.text
     sourcePreviewTitle.value = `${source.source_ref} · ${source.relative_path} · L${startLine}`
-    previewHasMore.value = Boolean(response.data.has_more)
+    previewHasMore.value = Boolean(response.has_more)
     previewDialog.value = true
   } catch (error) {
     ElMessage.error(errorText(error))
@@ -426,7 +372,7 @@ onBeforeUnmount(clearPoll)
     <div class="toolbar">
       <h1 class="page-title" style="margin-right:auto">AI 案例提炼工作台</h1>
       <el-button @click="router.push('/knowledge')">返回分层知识库</el-button>
-      <el-button type="primary" :disabled="!eligibleModels.length" @click="openCreate">选择文件夹并提炼</el-button>
+      <el-button data-testid="curation-open-create" type="primary" :disabled="!eligibleModels.length" @click="openCreate">选择文件夹并提炼</el-button>
       <el-button @click="loadSessions(current?.id)">刷新</el-button>
     </div>
 
@@ -475,7 +421,7 @@ onBeforeUnmount(clearPoll)
                 {{ current.source_count }} 个来源 · 草稿 v{{ current.draft_version }}
               </div>
             </div>
-            <el-tag :type="statusType(current.status)">{{ statusLabel(current.status) }}</el-tag>
+            <el-tag data-testid="curation-status" :data-status="current.status" :type="statusType(current.status)">{{ statusLabel(current.status) }}</el-tag>
           </div>
 
           <el-alert
@@ -543,6 +489,7 @@ onBeforeUnmount(clearPoll)
                     >保存人工修改</el-button>
                   </div>
                   <el-input
+                    data-testid="curation-draft-editor"
                     v-model="draftEditor"
                     type="textarea"
                     :rows="30"
@@ -561,6 +508,7 @@ onBeforeUnmount(clearPoll)
                     </div>
                   </div>
                   <el-input
+                    data-testid="curation-chat-instruction"
                     v-model="chatInstruction"
                     type="textarea"
                     :rows="5"
@@ -569,6 +517,7 @@ onBeforeUnmount(clearPoll)
                     @keyup.ctrl.enter="sendCorrection"
                   />
                   <el-button
+                    data-testid="curation-send-correction"
                     type="primary"
                     style="width:100%;margin-top:8px"
                     :disabled="current.status !== 'REVIEWING' || draftDirty"
@@ -580,6 +529,7 @@ onBeforeUnmount(clearPoll)
 
               <div class="confirm-bar">
                 <el-button
+                  data-testid="curation-confirm"
                   type="success"
                   size="large"
                   :disabled="current.status !== 'REVIEWING' || draftDirty || !current.validation?.confirmable"
@@ -608,7 +558,7 @@ onBeforeUnmount(clearPoll)
                     <el-tag v-else type="success">{{ extractionMethodLabel(scope.row as KnowledgeCurationSource) }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="90"><template #default="scope"><el-button link type="primary" :disabled="!scope.row.line_count" @click="openSourcePreview(scope.row as KnowledgeCurationSource)">查看</el-button></template></el-table-column>
+                <el-table-column label="操作" width="90"><template #default="scope"><el-button :data-testid="`source-preview-${scope.row.source_ref}`" link type="primary" :disabled="!scope.row.line_count" @click="openSourcePreview(scope.row as KnowledgeCurationSource)">查看</el-button></template></el-table-column>
               </el-table>
             </el-tab-pane>
 
@@ -641,7 +591,7 @@ onBeforeUnmount(clearPoll)
       <el-form label-width="120px">
         <el-form-item label="来源文件夹">
           <div>
-            <input type="file" webkitdirectory directory multiple @change="selectFolder" />
+            <input data-testid="curation-folder-input" type="file" webkitdirectory directory multiple @change="selectFolder" />
             <div v-if="selectedFiles.length" class="muted" style="margin-top:6px">
               {{ folderName }}：{{ selectedFiles.length }} 个文件，{{ formatBytes(selectedBytes) }}
             </div>
@@ -667,7 +617,7 @@ onBeforeUnmount(clearPoll)
           <el-form-item label="可见级别"><el-select v-model="createForm.confidentiality"><el-option label="受限" value="RESTRICTED"/><el-option label="内部" value="INTERNAL"/><el-option label="公开" value="PUBLIC"/></el-select></el-form-item>
         </div>
         <el-form-item label="模型数据出站">
-          <el-checkbox v-model="createForm.consent_model_egress">
+          <el-checkbox data-testid="curation-egress-consent" v-model="createForm.consent_model_egress">
             我确认脱敏、限长的来源证据可以发送到所选模型 API；原始文件不会直接发送
           </el-checkbox>
         </el-form-item>
@@ -675,18 +625,19 @@ onBeforeUnmount(clearPoll)
       </el-form>
       <template #footer>
         <el-button @click="createDialog=false">取消</el-button>
-        <el-button type="primary" :loading="uploading" @click="createSession">上传并开始提炼</el-button>
+        <el-button data-testid="curation-submit" type="primary" :loading="uploading" @click="createSession">上传并开始提炼</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="previewDialog" :title="sourcePreviewTitle" width="900px">
-      <pre class="source-preview">{{ sourcePreview }}</pre>
-      <template #footer>
-        <el-button :disabled="previewStartLine <= 1 || !previewSourceItem" @click="openSourcePreview(previewSourceItem!, Math.max(1, previewStartLine - 500))">上一段</el-button>
-        <el-button :disabled="!previewSourceItem || !previewHasMore" @click="openSourcePreview(previewSourceItem!, previewStartLine + 500)">下一段</el-button>
-        <el-button @click="previewDialog=false">关闭</el-button>
-      </template>
-    </el-dialog>
+    <CurationSourcePreviewDialog
+      v-model="previewDialog"
+      :title="sourcePreviewTitle"
+      :text="sourcePreview"
+      :start-line="previewStartLine"
+      :has-more="previewHasMore"
+      :has-source="Boolean(previewSourceItem)"
+      @navigate="line => previewSourceItem && openSourcePreview(previewSourceItem, line)"
+    />
   </div>
 </template>
 
@@ -715,7 +666,6 @@ onBeforeUnmount(clearPoll)
 .message-content { white-space: pre-wrap; word-break: break-word; }
 .confirm-bar { display: flex; align-items: center; gap: 16px; margin-top: 18px; padding-top: 16px; border-top: 1px solid #ebeef5; }
 .danger-zone { margin-top: 24px; padding-top: 16px; border-top: 1px dashed #f56c6c; }
-.source-preview { min-height: 520px; max-height: 65vh; overflow: auto; padding: 14px; background: #111827; color: #d1fae5; white-space: pre-wrap; word-break: break-word; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; }
 @media (max-width: 1200px) { .editor-chat-grid { grid-template-columns: 1fr; } .chat-panel { min-height: 500px; } }
 @media (max-width: 900px) { .curation-layout { grid-template-columns: 1fr; } .session-panel { min-height: auto; } }

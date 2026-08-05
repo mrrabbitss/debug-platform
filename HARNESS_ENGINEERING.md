@@ -43,45 +43,46 @@ Harness 的目标不是让模型自由度无限增大，而是让每一步都有
 
 ### 3.1 可重复的端到端评测
 
-- [ ] 提交脱敏的 TXT/MD/HTML/DOCX/PDF Golden Incident Corpus；
-- [ ] 提交 Fake OpenAI-compatible 服务，覆盖生成、超时、限流、坏 JSON 和中断；
-- [ ] 使用 Playwright 固化上传、预览、提炼、对话纠错、确认 DRAFT 的浏览器 E2E；
-- [ ] 日志解析评测：事件代码、时间、行号和上下文准确率；
-- [ ] 知识提炼评测：章节完整性、证据引用、幻觉、敏感信息泄漏；
-- [ ] RAG 评测：Recall@K、MRR、NDCG、引用准确率和无答案拒答率；
-- [ ] Code Graph 固定调用/引用/继承/实现边；
-- [ ] Commit Graph 固定 query → commit → file → symbol 路径；
-- [ ] Memory 固定应复用、不得复用和污染隔离案例；
-- [ ] Agent trajectory 固定工具选择、最大跳数、停止原因、成本和耗时阈值。
+- [x] 提交脱敏的 TXT/MD/HTML/DOCX/PDF Golden Incident Corpus；
+- [x] 提交 Fake OpenAI-compatible 服务，覆盖生成、超时、限流、坏 JSON 和中断；
+- [x] 使用 Playwright 固化上传、预览、提炼、对话纠错、确认 DRAFT 的浏览器 E2E；
+- [x] 日志解析评测：事件代码、时间、行号和上下文准确率；
+- [x] 知识提炼评测：章节完整性、证据引用、幻觉、敏感信息泄漏；
+- [x] RAG 评测：Recall@K、MRR、NDCG、引用准确率；
+- [x] Code Graph 固定调用/引用/继承/实现边；
+- [x] Commit Graph 固定 query → commit → file → symbol 路径；
+- [x] Memory 固定应复用、不得复用和污染隔离案例；
+- [x] Agent trajectory 固定工具选择、最大跳数、停止原因、成本和耗时阈值；
+- [x] 后端完整回归 75% 行覆盖率门禁；建立门禁时实测为 77%。
 
 ### 3.2 运行轨迹
 
-- [ ] 统一 `run_id`、`case_id`、阶段/工具、模型和 Prompt 版本；
-- [ ] 记录输入输出摘要哈希、tokens、成本、耗时、重试和停止原因；
-- [ ] 只保存证据 ID 和脱敏元数据，不复制公司日志正文；
-- [ ] 前端运行检查器、失败步骤定位和脱敏重放包；
-- [ ] OpenTelemetry/结构化日志接入可选本地观测栈。
+- [x] 统一 `run_id`、`case_id`、阶段/工具、模型和 Prompt 版本；
+- [x] 记录输入输出摘要哈希、tokens、成本、耗时、重试和停止原因；
+- [x] 只保存证据 ID 和脱敏元数据，不复制公司日志正文；
+- [x] 前端运行检查器、失败步骤定位和内容安全的只读重放；
+- [ ] 可选增强：将现有结构化轨迹桥接到 OpenTelemetry 本地观测栈。
 
 ### 3.3 架构护栏
 
-- [ ] 将 `routes.py` 按案例、日志、诊断、系统等领域拆分；
-- [ ] 将知识提炼拆为上传、抽取、证据、生成、修订、确认模块；
-- [ ] 将 Agentic Search 拆为 planner、tools、fusion、executor、trace；
-- [ ] 前端大型 View 拆成 composables、领域组件和类型化 API client；
-- [ ] 增加 API → service → persistence 导入边界检查；
-- [ ] 增加文件大小、圈复杂度、类型检查和覆盖率下降门禁；
-- [ ] 由 FastAPI 生成内部 OpenAPI，并检测前端/Workflow 合同漂移。
+- [x] `routes.py` 拆出 system、knowledge、repositories 和 jobs 领域路由，聚合器从约 1,972 行降至约 622 行；
+- [x] 知识提炼拆出上传、沙箱抽取、证据、序列化和受状态机约束的生成/修订/确认编排；
+- [x] Agentic Search 拆为 planner、tools、fusion、executor、trace；
+- [x] 前端大型 View 拆出 composable、来源预览领域组件和类型化 API client；
+- [x] 增加 API → service → persistence 导入边界检查；
+- [x] 增加文件大小、圈复杂度、Vue/TypeScript 类型检查和后端覆盖率下降门禁；
+- [x] 将 Workflow 白名单同时与手写最小 OpenAPI 和 FastAPI 运行时 OpenAPI 比对。
 
 ## 4. P2：有界 Agent 与多任务运行
 
-- [ ] 类型化 Tool Registry、输入输出 Schema 和只读默认权限；
-- [ ] 每个角色/案例的工具白名单及写操作审批；
-- [ ] 最大步骤、跳数、tokens、成本、墙钟时间和并发预算；
-- [ ] 重试退避、熔断、幂等、取消和显式停止原因；
-- [ ] 失败时回退当前确定性 Planner，而不是无限循环；
-- [ ] 每个任务独立 worktree、端口、数据库、存储和日志目录；
-- [ ] 后台任务 lease、heartbeat、dead-letter 和多实例安全领取；
-- [ ] 不可信 DOCX/PDF/HTML 解析迁移到受 CPU/内存/时间限制的进程或容器；
+- [x] 类型化 Tool Registry、输入输出 Schema 和只读默认权限；
+- [x] 每个角色/案例的工具白名单及写操作审批；
+- [x] 最大步骤、跳数、tokens、成本、墙钟时间和并发预算；
+- [x] 重试退避、熔断、幂等、取消和显式停止原因；
+- [x] 失败时回退当前确定性 Planner，而不是无限循环；
+- [x] 每个任务独立 worktree、端口、数据库、存储和日志目录；
+- [x] 后台任务 lease、heartbeat、dead-letter 和多实例安全领取；
+- [x] 不可信 DOCX/PDF/HTML 解析迁移到受 CPU/内存/时间限制的独立进程；
 - [ ] 任务控制平面维护依赖 DAG、人工审批和停滞检测；
 - [ ] 将人工 Review 反馈沉淀为测试、规则、文档或评测样本。
 

@@ -3,17 +3,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-import os
+import logging
 import re
-import shutil
-import uuid
-from collections import deque
-from pathlib import Path, PurePosixPath
+from time import perf_counter
 from typing import Any
 
 from fastapi import UploadFile
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -34,53 +31,61 @@ from app.models import (
     KnowledgeDocument,
     ModelProfile,
 )
-from app.services.curation_documents import (
-    DocumentExtractionError,
-    prepare_curation_document,
-)
+from app.services.agent_trace import record_agent_run, update_resource_approval
 from app.services.jobs import JobCancelledError, JobContext
 from app.services.knowledge import index_document
 from app.services.knowledge_governance import create_document_revision
-from app.services.knowledge_methods import parse_markdown_sections
+from app.services.knowledge_curation_common import CurationConflict, CurationError
+from app.services.knowledge_curation_evidence import (
+    build_evidence_bundle as _build_evidence_bundle,
+    source_refs as _source_refs,
+    validate_curation_markdown,
+)
+from app.services.knowledge_curation_serialization import (
+    message_to_dict as message_to_dict,
+    revision_to_dict as revision_to_dict,
+    session_to_dict as session_to_dict,
+    source_to_dict as source_to_dict,
+)
+from app.services.knowledge_curation_uploads import (
+    normalize_relative_path as normalize_relative_path,
+    persist_curation_uploads as _persist_curation_uploads,
+)
 from app.services.knowledge_taxonomy import get_default_category_id, set_document_category
 from app.services.llm import LLMError, get_llm_provider
 from app.services.model_profiles import get_active_model_profile
 from app.services.storage import storage
-from app.services.text_files import open_text_lines, read_text_range
+from app.services.text_files import read_text_range
 
 
 PROMPT_VERSION = "knowledge-case-curation-v1"
-EVIDENCE_FILE_NAME = "evidence_for_model.md"
-SOURCE_CITATION_PATTERN = re.compile(
-    r"\[(?P<ref>SRC-\d+)(?::L(?P<start>\d+)(?:-L?(?P<end>\d+))?)?\]"
-)
-KEY_EVIDENCE_PATTERN = re.compile(
-    r"(?i)(error|warn|fail|critical|exception|traceback|root\s*cause|fault|alarm|"
-    r"故障|错误|异常|失败|告警|根因|原因|结论|解决|修复|方案|验证|回退)"
-)
-WINDOWS_RESERVED_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    *(f"COM{index}" for index in range(1, 10)),
-    *(f"LPT{index}" for index in range(1, 10)),
-}
-ROLE_PRIORITY = {
-    "error": 0,
-    "analysis": 1,
-    "solution": 2,
-    "log": 3,
-    "context": 4,
-}
+logger = logging.getLogger(__name__)
 
 
-class CurationError(ValueError):
-    pass
+def build_evidence_bundle(
+    db: Session,
+    session: KnowledgeCurationSession,
+) -> tuple[str, dict[str, Any]]:
+    """Build evidence with the runtime storage dependency used by this service.
+
+    Keeping this small boundary also lets isolated tests and deployments replace
+    the storage service without mutating the evidence module's process global.
+    """
+    return _build_evidence_bundle(db, session, storage_service=storage)
 
 
-class CurationConflict(CurationError):
-    pass
+async def persist_curation_uploads(
+    session_id: str,
+    uploads: list[UploadFile],
+    relative_paths: list[str],
+) -> list[dict[str, Any]]:
+    """Persist uploads through the storage dependency selected by this service."""
+    return await _persist_curation_uploads(
+        session_id,
+        uploads,
+        relative_paths,
+        storage_service=storage,
+    )
 
 
 class GeneratedCaseDraft(BaseModel):
@@ -102,114 +107,6 @@ class RefinedCaseDraft(BaseModel):
     open_questions: list[str] = Field(default_factory=list, max_length=50)
     citations: list[str] = Field(default_factory=list, max_length=500)
 
-
-def normalize_relative_path(value: str) -> str:
-    normalized = value.replace("\\", "/").strip("/")
-    if not normalized or "\x00" in normalized:
-        raise CurationError("Folder contains an empty or invalid file path")
-    path = PurePosixPath(normalized)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise CurationError(f"Unsafe folder path: {value}")
-    if len(path.parts) > get_settings().max_archive_depth:
-        raise CurationError(f"Folder path is too deep: {value}")
-    if len(normalized) > 1000:
-        raise CurationError(f"Folder path is too long: {value[:120]}")
-    for part in path.parts:
-        if any(character in part for character in '<>:"|?*'):
-            raise CurationError(f"Folder path contains unsupported characters: {value}")
-        if part.rstrip(" .") != part:
-            raise CurationError(f"Folder path has a trailing dot or space: {value}")
-        if part.split(".", 1)[0].upper() in WINDOWS_RESERVED_NAMES:
-            raise CurationError(f"Folder path uses a reserved Windows name: {value}")
-    return path.as_posix()
-
-
-def _classify_source_role(relative_path: str) -> str:
-    value = relative_path.casefold()
-    if any(token in value for token in ("solution", "resolve", "fix", "解决", "方案", "修复")):
-        return "solution"
-    if any(token in value for token in ("analysis", "rootcause", "root_cause", "分析", "根因", "定位")):
-        return "analysis"
-    if any(token in value for token in ("error", "failure", "issue", "故障", "错误", "异常")):
-        return "error"
-    if any(token in value for token in ("log", "trace", "debug", "日志")):
-        return "log"
-    return "context"
-
-
-async def persist_curation_uploads(
-    session_id: str,
-    uploads: list[UploadFile],
-    relative_paths: list[str],
-) -> list[dict[str, Any]]:
-    settings = get_settings()
-    if not uploads:
-        raise CurationError("Select at least one source file")
-    if len(uploads) > settings.curation_max_files:
-        raise CurationError(
-            f"Folder contains more than {settings.curation_max_files} files"
-        )
-    if relative_paths and len(relative_paths) != len(uploads):
-        raise CurationError("Folder path list does not match the uploaded files")
-
-    curation_root = storage.root / "curations"
-    curation_root.mkdir(parents=True, exist_ok=True)
-    final_dir = curation_root / session_id
-    staging_dir = curation_root / f".{session_id}.uploading-{uuid.uuid4().hex}"
-    if final_dir.exists():
-        raise CurationConflict("Curation source directory already exists")
-    staging_dir.mkdir(parents=True, exist_ok=False)
-    total_bytes = 0
-    seen_paths: set[str] = set()
-    manifest: list[dict[str, Any]] = []
-    try:
-        for index, upload in enumerate(uploads, start=1):
-            candidate = (
-                relative_paths[index - 1]
-                if relative_paths
-                else upload.filename or f"source-{index}.txt"
-            )
-            relative_path = normalize_relative_path(candidate)
-            folded = relative_path.casefold()
-            if folded in seen_paths:
-                raise CurationError(f"Folder contains a duplicate path: {relative_path}")
-            seen_paths.add(folded)
-            target = staging_dir / "sources" / Path(*PurePosixPath(relative_path).parts)
-            _, size, digest = await storage.save_upload_to_path(
-                upload,
-                target,
-                max_size=settings.curation_max_file_bytes,
-            )
-            total_bytes += size
-            if total_bytes > settings.curation_max_total_bytes:
-                raise CurationError(
-                    "Folder exceeds the configured total upload limit: "
-                    f"{settings.curation_max_total_bytes} bytes"
-                )
-            manifest.append({
-                "id": new_id("KSRC"),
-                "source_ref": f"SRC-{index:04d}",
-                "relative_path": relative_path,
-                "staged_path": target,
-                "sha256": digest,
-                "size_bytes": size,
-                "media_type": upload.content_type,
-                "source_role": _classify_source_role(relative_path),
-            })
-        os.replace(staging_dir, final_dir)
-        for item in manifest:
-            final_path = final_dir / "sources" / Path(
-                *PurePosixPath(item["relative_path"]).parts
-            )
-            item["stored_path"] = storage.storage_key(final_path)
-            item.pop("staged_path", None)
-        return manifest
-    except Exception:
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir)
-        if final_dir.exists():
-            shutil.rmtree(final_dir)
-        raise
 
 
 def resolve_curation_model(
@@ -243,365 +140,6 @@ def resolve_curation_model(
     }
     return profile, snapshot
 
-
-def source_to_dict(source: KnowledgeCurationSourceFile) -> dict[str, Any]:
-    return {
-        "id": source.id,
-        "source_ref": source.source_ref,
-        "relative_path": source.relative_path,
-        "extraction_method": source.extraction_method,
-        "extraction_truncated": source.extraction_truncated,
-        "page_count": source.page_count,
-        "sha256": source.sha256,
-        "size_bytes": source.size_bytes,
-        "media_type": source.media_type,
-        "text_encoding": source.text_encoding,
-        "line_count": source.line_count,
-        "source_role": source.source_role,
-        "included": source.included,
-        "skip_reason": source.skip_reason,
-        "created_at": source.created_at,
-    }
-
-
-def message_to_dict(message: KnowledgeCurationMessage) -> dict[str, Any]:
-    return {
-        "id": message.id,
-        "role": message.role,
-        "content": message.content,
-        "citations": json_loads(message.citations_json, []),
-        "draft_version": message.draft_version,
-        "model_profile_id": message.model_profile_id,
-        "created_by": message.created_by,
-        "created_at": message.created_at,
-    }
-
-
-def revision_to_dict(revision: KnowledgeCurationRevision) -> dict[str, Any]:
-    return {
-        "id": revision.id,
-        "version": revision.version,
-        "content_hash": revision.content_hash,
-        "change_summary": revision.change_summary,
-        "validation": json_loads(revision.validation_json, {}),
-        "source_message_id": revision.source_message_id,
-        "created_by": revision.created_by,
-        "created_at": revision.created_at,
-    }
-
-
-def session_to_dict(
-    db: Session,
-    session: KnowledgeCurationSession,
-    *,
-    detail: bool,
-) -> dict[str, Any]:
-    source_count = db.scalar(
-        select(func.count(KnowledgeCurationSourceFile.id)).where(
-            KnowledgeCurationSourceFile.session_id == session.id
-        )
-    ) or 0
-    result: dict[str, Any] = {
-        "id": session.id,
-        "status": session.status,
-        "title_hint": session.title_hint,
-        "category_id": session.category_id,
-        "device_type": session.device_type,
-        "device_model": session.device_model,
-        "firmware_range": session.firmware_range,
-        "module": session.module,
-        "trust_level": session.trust_level,
-        "confidentiality": session.confidentiality,
-        "model_profile_id": session.model_profile_id,
-        "model_snapshot": json_loads(session.model_snapshot_json, {}),
-        "source_manifest": json_loads(session.source_manifest_json, {}),
-        "source_count": int(source_count),
-        "draft_title": session.draft_title,
-        "draft_version": session.draft_version,
-        "validation": json_loads(session.validation_json, {}),
-        "open_questions": json_loads(session.open_questions_json, []),
-        "knowledge_document_id": session.knowledge_document_id,
-        "job_id": session.job_id,
-        "error_message": session.error_message,
-        "created_by": session.created_by,
-        "created_at": session.created_at,
-        "updated_at": session.updated_at,
-        "confirmed_at": session.confirmed_at,
-    }
-    if not detail:
-        return result
-    result["draft_markdown"] = session.draft_markdown
-    sources = list(db.scalars(
-        select(KnowledgeCurationSourceFile)
-        .where(KnowledgeCurationSourceFile.session_id == session.id)
-        .order_by(KnowledgeCurationSourceFile.source_ref)
-    ).all())
-    messages = list(db.scalars(
-        select(KnowledgeCurationMessage)
-        .where(KnowledgeCurationMessage.session_id == session.id)
-        .order_by(KnowledgeCurationMessage.created_at, KnowledgeCurationMessage.id)
-    ).all())
-    revisions = list(db.scalars(
-        select(KnowledgeCurationRevision)
-        .where(KnowledgeCurationRevision.session_id == session.id)
-        .order_by(KnowledgeCurationRevision.version.desc())
-    ).all())
-    result["sources"] = [source_to_dict(source) for source in sources]
-    result["messages"] = [message_to_dict(message) for message in messages]
-    result["revisions"] = [revision_to_dict(revision) for revision in revisions]
-    return result
-
-
-def validate_curation_markdown(
-    markdown: str,
-    valid_source_refs: dict[str, int | None],
-) -> dict[str, Any]:
-    structure = parse_markdown_sections(markdown)
-    citations = list(SOURCE_CITATION_PATTERN.finditer(markdown))
-    line_citation_count = sum(1 for match in citations if match.group("start"))
-    cited_refs = sorted({match.group("ref") for match in citations})
-    invalid_refs = [source_ref for source_ref in cited_refs if source_ref not in valid_source_refs]
-    valid_refs = [source_ref for source_ref in cited_refs if source_ref in valid_source_refs]
-    invalid_line_citations: list[str] = []
-    for match in citations:
-        source_ref = match.group("ref")
-        if source_ref not in valid_source_refs:
-            continue
-        start = int(match.group("start")) if match.group("start") else None
-        end = int(match.group("end")) if match.group("end") else start
-        line_count = valid_source_refs[source_ref]
-        if start is None:
-            continue
-        if start < 1 or end is None or end < start or (line_count and end > line_count):
-            invalid_line_citations.append(match.group(0))
-    has_source_section = bool(re.search(
-        r"(?im)^#{2,6}\s+.*(?:来源证据|证据来源|source evidence)",
-        markdown,
-    ))
-    warnings: list[str] = []
-    if structure["missing_sections"]:
-        warnings.append(
-            "缺少必需章节：" + "、".join(structure["missing_sections"])
-        )
-    if not has_source_section:
-        warnings.append("缺少“来源证据”章节")
-    if not valid_refs:
-        warnings.append("正文没有引用有效来源，至少需要一个 [SRC-xxxx:Lx-Ly] 引用")
-    elif line_citation_count == 0:
-        warnings.append("来源引用必须包含可核对的行号，例如 [SRC-0001:L10-L20]")
-    if invalid_refs:
-        warnings.append("存在无效来源引用：" + "、".join(invalid_refs))
-    if invalid_line_citations:
-        warnings.append("存在越界或无效行号引用：" + "、".join(invalid_line_citations))
-    confirmable = bool(
-        structure["complete"]
-        and has_source_section
-        and valid_refs
-        and line_citation_count > 0
-        and not invalid_refs
-        and not invalid_line_citations
-    )
-    return {
-        "format": "llm_curated_fault_case_v1",
-        "structure": structure,
-        "cited_source_refs": valid_refs,
-        "invalid_source_refs": invalid_refs,
-        "invalid_line_citations": invalid_line_citations,
-        "citation_count": len(citations),
-        "line_citation_count": line_citation_count,
-        "has_source_section": has_source_section,
-        "warnings": warnings,
-        "confirmable": confirmable,
-    }
-
-
-def _sample_source_text(path: Path, max_chars: int) -> tuple[str, str, int] | None:
-    opened = open_text_lines(path)
-    if opened is None:
-        return None
-    encoding, lines = opened
-    head: list[tuple[int, str]] = []
-    tail: deque[tuple[int, str]] = deque(maxlen=50)
-    matches: list[tuple[int, str]] = []
-    complete: list[tuple[int, str]] = []
-    complete_chars = 0
-    complete_overflow = False
-    line_count = 0
-    for line_count, line in enumerate(lines, start=1):
-        clipped = line[:4000]
-        if line_count <= 80:
-            head.append((line_count, clipped))
-        tail.append((line_count, clipped))
-        if len(matches) < 160 and KEY_EVIDENCE_PATTERN.search(clipped):
-            matches.append((line_count, clipped))
-        if not complete_overflow:
-            complete_chars += len(clipped) + 16
-            if complete_chars <= max_chars:
-                complete.append((line_count, clipped))
-            else:
-                complete_overflow = True
-                complete.clear()
-
-    selected = complete if not complete_overflow else sorted(
-        {line_number: text for line_number, text in [*head, *matches, *tail]}.items()
-    )
-    rendered: list[str] = []
-    rendered_chars = 0
-    previous_line = 0
-    for line_number, text in selected:
-        if previous_line and line_number > previous_line + 1:
-            marker = f"... omitted lines {previous_line + 1}-{line_number - 1} ..."
-            if rendered_chars + len(marker) + 1 > max_chars:
-                break
-            rendered.append(marker)
-            rendered_chars += len(marker) + 1
-        entry = f"L{line_number}: {text}"
-        if rendered_chars + len(entry) + 1 > max_chars:
-            break
-        rendered.append(entry)
-        rendered_chars += len(entry) + 1
-        previous_line = line_number
-    return "\n".join(rendered), encoding, line_count
-
-
-def build_evidence_bundle(
-    db: Session,
-    session: KnowledgeCurationSession,
-) -> tuple[str, dict[str, Any]]:
-    settings = get_settings()
-    sources = list(db.scalars(
-        select(KnowledgeCurationSourceFile)
-        .where(KnowledgeCurationSourceFile.session_id == session.id)
-    ).all())
-    sources.sort(key=lambda source: (
-        ROLE_PRIORITY.get(source.source_role, 99),
-        source.relative_path.casefold(),
-    ))
-    remaining = settings.curation_max_prompt_chars
-    evidence_parts: list[str] = []
-    selected_refs: list[str] = []
-    skipped_refs: list[str] = []
-    extracted_refs: list[str] = []
-    for index, source in enumerate(sources):
-        source_path = storage.resolve_path(source.stored_path)
-        if not source_path.is_file():
-            raise CurationError(
-                f"Source file is missing from local storage: {source.source_ref}"
-            )
-        if not hmac.compare_digest(sha256_file(source_path), source.sha256):
-            raise CurationError(
-                f"Source file failed its integrity check: {source.source_ref}"
-            )
-        extracted_path = (
-            storage.curation_dir(session.id)
-            / "extracted"
-            / f"{source.id}.txt"
-        )
-        source.extracted_text_path = None
-        source.extracted_text_sha256 = None
-        source.extraction_method = None
-        source.extraction_truncated = False
-        source.page_count = None
-        try:
-            prepared = prepare_curation_document(
-                source_path,
-                source.relative_path,
-                extracted_path,
-            )
-        except DocumentExtractionError as exc:
-            source.included = False
-            source.skip_reason = exc.code
-            source.text_encoding = None
-            source.line_count = None
-            skipped_refs.append(source.source_ref)
-            continue
-        if prepared is not None:
-            source_path = prepared.path
-            source.extracted_text_path = storage.storage_key(prepared.path)
-            source.extracted_text_sha256 = prepared.sha256
-            source.extraction_method = prepared.method
-            source.extraction_truncated = prepared.truncated
-            source.page_count = prepared.page_count
-            extracted_refs.append(source.source_ref)
-        else:
-            source.extraction_method = "plain_text"
-        if remaining < 1000:
-            source.included = False
-            source.skip_reason = "prompt_budget_exhausted"
-            if prepared is not None:
-                source.text_encoding = "utf-8"
-                source.line_count = prepared.line_count
-            skipped_refs.append(source.source_ref)
-            continue
-        remaining_sources = max(1, len(sources) - index)
-        per_file_budget = min(24_000, max(1200, remaining // remaining_sources))
-        sampled = _sample_source_text(source_path, per_file_budget)
-        if sampled is None:
-            source.included = False
-            source.skip_reason = "binary_or_unsupported_text_encoding"
-            source.text_encoding = None
-            source.line_count = None
-            skipped_refs.append(source.source_ref)
-            continue
-        excerpt, encoding, line_count = sampled
-        source.included = True
-        source.skip_reason = None
-        source.text_encoding = encoding
-        source.line_count = line_count
-        if not excerpt.strip():
-            source.included = False
-            source.skip_reason = "empty_text_file"
-            skipped_refs.append(source.source_ref)
-            continue
-        header = (
-            f"## {source.source_ref} | {source.relative_path} | "
-            f"role={source.source_role} | extraction={source.extraction_method} | "
-            f"pages={source.page_count or '-'} | truncated={source.extraction_truncated} | "
-            f"raw_sha256={source.sha256}\n"
-        )
-        part = header + mask_sensitive(excerpt)
-        if len(part) > remaining:
-            part = part[:remaining]
-        evidence_parts.append(part)
-        selected_refs.append(source.source_ref)
-        remaining -= len(part) + 2
-
-    bundle = "\n\n".join(evidence_parts)
-    evidence_path = storage.curation_dir(session.id) / EVIDENCE_FILE_NAME
-    temporary_path = evidence_path.with_suffix(".tmp")
-    temporary_path.write_text(bundle, encoding="utf-8")
-    os.replace(temporary_path, evidence_path)
-    manifest = json_loads(session.source_manifest_json, {})
-    manifest.update({
-        "selected_source_refs": selected_refs,
-        "skipped_source_refs": skipped_refs,
-        "document_extracted_source_refs": extracted_refs,
-        "evidence_chars": len(bundle),
-        "evidence_sha256": hashlib.sha256(bundle.encode("utf-8")).hexdigest(),
-        "evidence_storage_key": storage.storage_key(evidence_path),
-        "sensitive_masking": True,
-        "prompt_limit_chars": settings.curation_max_prompt_chars,
-    })
-    session.source_manifest_json = json_dumps(manifest)
-    db.commit()
-    if not selected_refs:
-        raise CurationError("No readable text files were found in the selected folder")
-    return bundle, manifest
-
-
-def _source_refs(db: Session, session_id: str) -> dict[str, int | None]:
-    return {
-        source_ref: line_count
-        for source_ref, line_count in db.execute(
-            select(
-                KnowledgeCurationSourceFile.source_ref,
-                KnowledgeCurationSourceFile.line_count,
-            ).where(
-                KnowledgeCurationSourceFile.session_id == session_id,
-                KnowledgeCurationSourceFile.included.is_(True),
-            )
-        ).all()
-    }
 
 
 def _normalize_markdown(title: str, markdown: str) -> str:
@@ -671,6 +209,13 @@ def _initial_user_prompt(session: KnowledgeCurationSession, evidence: str) -> st
 
 
 def curate_knowledge_folder_job(ctx: JobContext, session_id: str) -> dict[str, Any]:
+    trace_started = perf_counter()
+    extraction_started = trace_started
+    extraction_duration_ms = 0
+    profile: ModelProfile | None = None
+    provider: Any = None
+    snapshot: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
     try:
         with SessionLocal() as db:
             session = db.get(KnowledgeCurationSession, session_id)
@@ -687,6 +232,7 @@ def curate_knowledge_folder_job(ctx: JobContext, session_id: str) -> dict[str, A
             db.commit()
             ctx.update(10, "Inspecting and sampling source files")
             evidence, manifest = build_evidence_bundle(db, session)
+            extraction_duration_ms = int((perf_counter() - extraction_started) * 1000)
             user_prompt = _initial_user_prompt(session, evidence)
             ctx.raise_if_cancelled()
             provider = get_llm_provider(profile)
@@ -775,6 +321,72 @@ def curate_knowledge_folder_job(ctx: JobContext, session_id: str) -> dict[str, A
                 message="Knowledge case draft generated",
             )
             db.commit()
+            trace_events = [
+                {
+                    "stage": "source_extraction",
+                    "tool_name": "curation_document_extractor",
+                    "status": "COMPLETED",
+                    "duration_ms": extraction_duration_ms,
+                    "candidate_count": len(manifest.get("selected_source_refs", [])),
+                    "evidence_ids": validation["cited_source_refs"],
+                },
+                {
+                    "stage": "model_generate",
+                    "tool_name": "openai_compatible_chat",
+                    "status": "COMPLETED",
+                    "duration_ms": int(getattr(provider, "last_duration_ms", 0) or 0),
+                    "input_tokens": int(
+                        (getattr(provider, "last_usage", {}) or {}).get("prompt_tokens") or 0
+                    ),
+                    "output_tokens": int(
+                        (getattr(provider, "last_usage", {}) or {}).get("completion_tokens") or 0
+                    ),
+                    "model_profile_id": profile.id,
+                    "provider": profile.provider,
+                    "model": profile.model_name,
+                },
+                {
+                    "stage": "evidence_validate",
+                    "tool_name": "curation_citation_gate",
+                    "status": "COMPLETED" if validation["confirmable"] else "FAILED",
+                    "duration_ms": 0,
+                    "candidate_count": validation["line_citation_count"],
+                    "evidence_ids": validation["cited_source_refs"],
+                    "reason": "human review required",
+                },
+            ]
+            try:
+                record_agent_run(
+                    db,
+                    resource_type="knowledge_curation",
+                    resource_id=session.id,
+                    operation="knowledge_curation",
+                    execution_mode="model_assisted",
+                    input_summary={
+                        "session_id": session.id,
+                        "evidence_sha256": manifest.get("evidence_sha256"),
+                        "source_refs": manifest.get("selected_source_refs", []),
+                    },
+                    output_summary={
+                        "draft_version": version,
+                        "markdown": markdown,
+                        "confirmable": validation["confirmable"],
+                    },
+                    events=trace_events,
+                    evidence_ids=validation["cited_source_refs"],
+                    stop_reason="HUMAN_REVIEW_REQUIRED",
+                    approval_status="PENDING_HUMAN_REVIEW",
+                    duration_ms=int((perf_counter() - trace_started) * 1000),
+                    model_profile_id=profile.id,
+                    model_name=profile.model_name,
+                    model_config=snapshot,
+                    prompt_version=PROMPT_VERSION,
+                    usage=getattr(provider, "last_usage", {}) or {},
+                    created_by=session.created_by,
+                    budget_ms=get_settings().llm_timeout_seconds * 1000,
+                )
+            except Exception:  # noqa: BLE001 - observability must not invalidate a published draft
+                logger.exception("Unable to persist curation agent trace for %s", session.id)
             return result
     except Exception as exc:
         with SessionLocal() as db:
@@ -785,6 +397,40 @@ def curate_knowledge_folder_job(ctx: JobContext, session_id: str) -> dict[str, A
                 )
                 session.error_message = str(exc)[:4000]
                 db.commit()
+            try:
+                failure_status = "CANCELLED" if isinstance(exc, JobCancelledError) else "FAILED"
+                record_agent_run(
+                    db,
+                    resource_type="knowledge_curation",
+                    resource_id=session_id,
+                    operation="knowledge_curation",
+                    execution_mode="model_assisted",
+                    input_summary={
+                        "session_id": session_id,
+                        "evidence_sha256": manifest.get("evidence_sha256"),
+                    },
+                    output_summary={"error_type": type(exc).__name__},
+                    events=[{
+                        "stage": "knowledge_curation",
+                        "tool_name": "curation_pipeline",
+                        "status": failure_status,
+                        "duration_ms": int((perf_counter() - trace_started) * 1000),
+                        "stop_reason": failure_status,
+                    }],
+                    evidence_ids=list(manifest.get("selected_source_refs", [])),
+                    stop_reason=failure_status,
+                    approval_status="NOT_APPROVED",
+                    duration_ms=int((perf_counter() - trace_started) * 1000),
+                    model_profile_id=profile.id if profile else None,
+                    model_name=profile.model_name if profile else None,
+                    model_config=snapshot,
+                    prompt_version=PROMPT_VERSION,
+                    usage=getattr(provider, "last_usage", {}) if provider else {},
+                    created_by=session.created_by if session else None,
+                    status=failure_status,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Unable to persist failed curation trace for %s", session_id)
         raise
 
 
@@ -841,6 +487,7 @@ async def refine_curation_session(
     expected_draft_version: int,
     actor: str | None,
 ) -> KnowledgeCurationSession:
+    trace_started = perf_counter()
     if session.status != "REVIEWING":
         raise CurationConflict("Only a reviewing session can be refined")
     if session.draft_version != expected_draft_version:
@@ -942,6 +589,63 @@ async def refine_curation_session(
     )
     db.commit()
     db.refresh(session)
+    try:
+        record_agent_run(
+            db,
+            resource_type="knowledge_curation",
+            resource_id=session.id,
+            operation="knowledge_curation_refinement",
+            execution_mode="model_assisted",
+            input_summary={
+                "session_id": session.id,
+                "instruction": instruction,
+                "expected_draft_version": expected_draft_version,
+            },
+            output_summary={
+                "draft_version": new_version,
+                "markdown": markdown,
+                "confirmable": validation["confirmable"],
+            },
+            events=[
+                {
+                    "stage": "model_refine",
+                    "tool_name": "openai_compatible_chat",
+                    "status": "COMPLETED",
+                    "duration_ms": int(getattr(provider, "last_duration_ms", 0) or 0),
+                    "input_tokens": int(
+                        (getattr(provider, "last_usage", {}) or {}).get("prompt_tokens") or 0
+                    ),
+                    "output_tokens": int(
+                        (getattr(provider, "last_usage", {}) or {}).get("completion_tokens") or 0
+                    ),
+                    "model_profile_id": profile.id,
+                    "provider": profile.provider,
+                    "model": profile.model_name,
+                },
+                {
+                    "stage": "evidence_validate",
+                    "tool_name": "curation_citation_gate",
+                    "status": "COMPLETED" if validation["confirmable"] else "FAILED",
+                    "duration_ms": 0,
+                    "candidate_count": validation["line_citation_count"],
+                    "evidence_ids": validation["cited_source_refs"],
+                },
+            ],
+            evidence_ids=validation["cited_source_refs"],
+            stop_reason="HUMAN_REVIEW_REQUIRED",
+            approval_status="PENDING_HUMAN_REVIEW",
+            duration_ms=int((perf_counter() - trace_started) * 1000),
+            model_profile_id=profile.id,
+            model_name=profile.model_name,
+            model_config=snapshot,
+            prompt_version=PROMPT_VERSION,
+            usage=getattr(provider, "last_usage", {}) or {},
+            created_by=actor,
+            budget_ms=get_settings().llm_timeout_seconds * 1000,
+        )
+        db.refresh(session)
+    except Exception:  # noqa: BLE001
+        logger.exception("Unable to persist curation refinement trace for %s", session.id)
     return session
 
 
@@ -1104,6 +808,14 @@ def confirm_curation_session(
         ))
         index_document(db, document)
         db.commit()
+        db.refresh(document)
+        update_resource_approval(
+            db,
+            resource_type="knowledge_curation",
+            resource_id=session.id,
+            approval_status="HUMAN_CONFIRMED_DRAFT",
+            stop_reason="HUMAN_CONFIRMED_DRAFT",
+        )
         db.refresh(document)
         return document
     except Exception as exc:

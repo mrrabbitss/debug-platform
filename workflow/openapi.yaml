@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: GW/AP Debug Platform Workflow API
-  version: 0.3.0
+  version: 0.4.0
 servers:
   - url: http://localhost:8000/api/v1
 paths:
@@ -283,6 +283,53 @@ paths:
       responses:
         '200': { description: Inactive DRAFT knowledge document created }
         '409': { description: Draft version conflict or already confirmed }
+  /agent-runs:
+    get:
+      operationId: listAgentRuns
+      description: Lists redacted execution metadata; raw uploaded content is never returned.
+      parameters:
+        - in: query
+          name: case_id
+          schema: { type: string }
+        - in: query
+          name: resource_id
+          schema: { type: string }
+        - in: query
+          name: operation
+          schema: { type: string, maxLength: 64 }
+        - in: query
+          name: status
+          schema: { type: string, maxLength: 32 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200': { description: Redacted agent run summaries }
+  /agent-runs/{run_id}:
+    get:
+      operationId: getAgentRun
+      parameters:
+        - in: path
+          name: run_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Redacted run metadata and ordered trace events }
+        '404': { description: Run not found }
+  /agent-runs/{run_id}/replay:
+    post:
+      operationId: replayAgentRun
+      description: >-
+        Replays an eligible search from a redacted payload in read-only mode;
+        memory writes and knowledge publication remain disabled.
+      parameters:
+        - in: path
+          name: run_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: New traceable read-only search result }
+        '409': { description: The run has no safe replay payload }
 components:
   securitySchemes:
     ApiKey:

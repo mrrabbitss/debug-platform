@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "initial": {
+    "title": "Synthetic AP authentication timeout case",
+    "markdown": "# Synthetic AP authentication timeout case\n\n## Error Pattern\n\nLab clients report AUTH_TIMEOUT after association begins. [SRC-0001:L1-L3]\n\n## Log Analysis\n\nThe runtime sequence records authentication failure after the 4-way handshake starts. [SRC-0001:L2-L4]\n\n## Root Cause\n\nThe configuration comparison verifies a shared-key mismatch; the fixture explicitly does not establish a firmware defect. [SRC-0002:L1-L3]\n\n## Solution\n\nBack up the configuration, apply the approved matching shared key, and restart only the WLAN authentication service. [SRC-0003:L1-L4]\n\n## Validation\n\nAuthentication succeeds and the observation window has no new AUTH_TIMEOUT event. [SRC-0004:L1-L3]\n\n## Scope and Limitations\n\nThis conclusion applies only to the synthetic GOLDEN-AP-01 fixture. Other devices require independent evidence.\n\n## Source Evidence\n\n- Symptom report: [SRC-0001:L1-L4]\n- Root-cause analysis: [SRC-0002:L1-L3]\n- Recovery procedure: [SRC-0003:L1-L4]\n- Validation record: [SRC-0004:L1-L3]\n",
+    "change_summary": "Generated deterministic source-grounded golden draft",
+    "open_questions": [],
+    "citations": ["SRC-0001", "SRC-0002", "SRC-0003", "SRC-0004"],
+    "device_type": "AP",
+    "device_model": "GOLDEN-AP-01",
+    "firmware_range": "synthetic-only",
+    "module": "WLAN"
+  },
+  "refined": {
+    "assistant_message": "Applied the requested peer-review clarification without adding unsupported facts.",
+    "revised_markdown": "# Synthetic AP authentication timeout case\n\n## Error Pattern\n\nLab clients report AUTH_TIMEOUT after association begins. [SRC-0001:L1-L3]\n\n## Log Analysis\n\nThe runtime sequence records authentication failure after the 4-way handshake starts. [SRC-0001:L2-L4]\n\n## Root Cause\n\nThe configuration comparison verifies a shared-key mismatch; the fixture explicitly does not establish a firmware defect. [SRC-0002:L1-L3]\n\n## Solution\n\nBack up the configuration, apply the approved matching shared key, and restart only the WLAN authentication service. [SRC-0003:L1-L4]\n\n## Validation\n\nAuthentication succeeds and the observation window has no new AUTH_TIMEOUT event. A peer reviewer must confirm the evidence boundary before publication. [SRC-0004:L1-L3]\n\n## Scope and Limitations\n\nThis conclusion applies only to the synthetic GOLDEN-AP-01 fixture. Other devices require independent evidence.\n\n## Source Evidence\n\n- Symptom report: [SRC-0001:L1-L4]\n- Root-cause analysis: [SRC-0002:L1-L3]\n- Recovery procedure: [SRC-0003:L1-L4]\n- Validation record: [SRC-0004:L1-L3]\n",
+    "change_summary": "Added peer-review evidence-boundary clarification",
+    "open_questions": [],
+    "citations": ["SRC-0001", "SRC-0002", "SRC-0003", "SRC-0004"]
+  }
+}

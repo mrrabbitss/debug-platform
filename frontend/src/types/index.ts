@@ -98,6 +98,18 @@ export interface Job {
   message: string
   result_json: string
   error_message?: string
+  idempotency_key?: string
+  attempt: number
+  max_attempts: number
+  available_at: string
+  lease_owner?: string
+  lease_expires_at?: string
+  heartbeat_at?: string
+  deadline_at?: string
+  timeout_seconds: number
+  resource_limits_json: string
+  dead_letter_at?: string
+  dead_letter_reason?: string
 }
 
 export interface LogEvent {
@@ -326,4 +338,58 @@ export interface EvaluationRun {
   created_at: string
   started_at?: string
   completed_at?: string
+}
+
+export interface AgentTraceEvent {
+  id: string
+  sequence: number
+  stage: string
+  tool_name?: string
+  status: string
+  input_summary_hash: string
+  output_summary_hash?: string
+  input_tokens: number
+  output_tokens: number
+  duration_ms: number
+  retry_count: number
+  evidence_ids: string[]
+  stop_reason?: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface AgentRun {
+  run_id: string
+  case_id?: string
+  resource_type: string
+  resource_id?: string
+  operation: string
+  execution_mode: string
+  status: string
+  model_profile_id?: string
+  model_name?: string
+  model_config: Record<string, unknown>
+  prompt_version: string
+  input_summary_hash: string
+  output_summary_hash?: string
+  usage: {
+    input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    estimated_cost: number
+  }
+  duration_ms: number
+  retry_count: number
+  evidence_ids: string[]
+  stop_reason: string
+  approval_status: string
+  replay_of_run_id?: string
+  replay_payload: Record<string, unknown>
+  replay_supported: boolean
+  score: Record<string, number>
+  created_by?: string
+  created_at: string
+  started_at: string
+  completed_at?: string
+  events?: AgentTraceEvent[]
 }

@@ -336,6 +336,18 @@ class JobOut(ORMModel):
     message: str
     result_json: str
     error_message: str | None
+    idempotency_key: str | None
+    attempt: int
+    max_attempts: int
+    available_at: datetime
+    lease_owner: str | None
+    lease_expires_at: datetime | None
+    heartbeat_at: datetime | None
+    deadline_at: datetime | None
+    timeout_seconds: int
+    resource_limits_json: str
+    dead_letter_at: datetime | None
+    dead_letter_reason: str | None
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None

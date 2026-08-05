@@ -28,7 +28,7 @@ def test_embedding_job_polling_uses_backend_terminal_status() -> None:
         encoding="utf-8"
     )
 
-    assert "['COMPLETED', 'FAILED', 'CANCELLED']" in settings_view
+    assert "['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER']" in settings_view
     assert "['SUCCEEDED', 'FAILED']" not in settings_view
 
 

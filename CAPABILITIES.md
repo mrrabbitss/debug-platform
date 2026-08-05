@@ -45,7 +45,7 @@
 | 日志浏览与任意行读取 | `AVAILABLE` | 支持分页、原文搜索、事件跳转源行 |
 | 事件与时间线 | `AVAILABLE` | 事件分页、级别/模块聚合、时间线数据 |
 | 原子解析版本 | `AVAILABLE` | 新解析失败时保留最后一次成功结果 |
-| 持久化任务 | `AVAILABLE` | 支持进度、重启恢复、取消、重试和应用生命周期安全关闭 |
+| 持久化任务 | `AVAILABLE` | 幂等键、原子领取、lease/heartbeat、超时、指数退避、dead-letter、取消、资源预算和多实例安全领取 |
 
 ### 2.3 诊断、RAG 与模型
 
@@ -101,6 +101,10 @@
 | 健康检查 | `AVAILABLE` | liveness、readiness、管理员系统状态 |
 | Docker/Compose | `AVAILABLE` | PostgreSQL、Qdrant 和前后端镜像 |
 | GitHub CI | `AVAILABLE` | Linux/Windows 后端、前端、扩展、依赖审计、外部服务、Docker |
+| Golden 质量门禁 | `AVAILABLE` | 日志、提炼、Code/Commit Graph、Memory、RAG、Agentic Search 与有界执行九类固定评测 |
+| 浏览器 E2E | `AVAILABLE` | Playwright + Fake OpenAI 服务固化混合文档上传、预览、生成、纠错、确认 DRAFT 和轨迹查看，控制台错误即失败 |
+| Agent 运行轨迹 | `AVAILABLE` | 记录摘要哈希、模型/Prompt、tokens、耗时、重试、证据、停止和审批；管理员可查看并安全只读重放 |
+| 覆盖率与架构门禁 | `AVAILABLE` | 后端 75% 行覆盖率、文件行数/圈复杂度 ratchet、导入边界、运行时 OpenAPI 合同漂移检查 |
 
 ## 3. 新一代认知检索能力
 
@@ -176,6 +180,9 @@
   3. 第一跳找候选，后续跳沿代码边或 commit/file/symbol 边扩展；
   4. 使用融合和 Reranker 统一排序；
   5. 返回执行计划、各阶段耗时/候选数、最终证据和可解释路径。
+- 有界执行基础：类型化 Tool Registry、角色白名单、写操作审批、步骤/跳数/tokens/成本/
+  墙钟预算、重试熔断取消和确定性回退已经可用并进入 Golden 门禁；生产检索仍默认使用
+  当前确定性 Planner，不把测试中的循环执行器描述成已默认接管线上查询。
 
 ### 3.5 领域知识图谱与 GraphRAG
 
@@ -274,10 +281,11 @@
 | 增量代码/Commit 索引 | `PLANNED` | 按 commit 增量更新，避免全仓重建 |
 | 图数据库后端 | `PLANNED` | 数据规模达到阈值后评估 Neo4j/AGE；当前关系表保持可迁移 |
 | 记忆衰减与人工审核 | `PLANNED` | 过期、冲突记忆提示和人工批准 |
-| 评测回归门禁 | `PLANNED` | 在内网 CI 固定数据/模型版本、阈值和版本间差异报告 |
 | 知识差异与实体合并 UI | `PLANNED` | 可视化版本 diff、同义实体合并、冲突关系审核 |
-| 分布式任务租约 | `PLANNED` | 多实例部署时引入集中队列、心跳、可见性超时和死信 |
 | 独立知识审核角色 | `PLANNED` | 从 ADMIN 中拆出知识维护者和审核者，支持职责分离 |
+| OpenTelemetry 桥接 | `PLANNED` | 将现有结构化 Agent 轨迹导出到可选本地观测栈 |
+| Agent 任务控制平面 | `PLANNED` | 跨任务依赖 DAG、人工审批队列和通用停滞检测 |
+| Review 反馈沉淀 | `PLANNED` | 把人工 Review 安全分类为规则、测试、文档或评测样本，写入前必须审批 |
 
 ## 7. 大模型文件夹案例提炼迭代（2026-08-03）
 
@@ -322,6 +330,25 @@ Chat 模型，本地 BGE Embedding 和 Qwen3 Reranker 不具备生成能力，�
 1 skipped`、前端生产构建、扩展编译、三类依赖审计、Doctor 和隔离运行冒烟。
 本机未安装 Docker，`External` 中的 PostgreSQL/Qdrant 与镜像构建继续由 GitHub CI 验证。
 
-P1 Golden Dataset、Fake Model、Playwright E2E、质量评测和执行轨迹，以及 P2 有界 Agent、
-任务隔离和多实例 lease 的有序路线见
-[HARNESS_ENGINEERING.md](HARNESS_ENGINEERING.md)，未实现项不得描述为已可用。
+P1 Golden Dataset、Fake Model、Playwright E2E、质量评测、执行轨迹和架构门禁，以及已完成的
+P2 有界 Agent、任务隔离、多实例 lease 和文档进程沙箱见
+[HARNESS_ENGINEERING.md](HARNESS_ENGINEERING.md)。剩余任务 DAG 和 Review 自动沉淀仍明确标记为
+`PLANNED`，不得描述为已可用。
+
+## 9. Harness Engineering P1 与 P2 基础（2026-08-05）
+
+- [x] 合成 TXT/HTML/DOCX/PDF 与无后缀日志 Golden Corpus，固定二进制哈希；
+- [x] Fake OpenAI-compatible Chat/Embedding/Reranker，含超时、429、坏 JSON 和中断注入；
+- [x] Playwright 完整提炼闭环与浏览器控制台零错误门禁；
+- [x] 九类 Golden 评测和耗时/证据/停止原因 CI 阻断；
+- [x] 后端 75% 覆盖率门禁；建立门禁时完整回归实测 77%；
+- [x] `AgentRun + AgentTraceEvent`、前端轨迹查看器和不写记忆的脱敏只读重放；
+- [x] API、知识提炼、Agentic Search 和前端大文件模块化，并用行数/复杂度/导入边界防回退；
+- [x] Workflow 最小契约与 FastAPI 运行时 OpenAPI 双重漂移检查；
+- [x] 类型化有界 Agent、角色/审批、预算、重试/熔断/取消和确定性回退；
+- [x] 独立 task worktree/端口/数据库/Storage/日志；
+- [x] 后台任务 lease/heartbeat/dead-letter/幂等/资源预算；
+- [x] Win11 Job Object 与 Linux rlimit 约束的不可信文档独立进程抽取。
+
+详细命令、阈值和隐私边界见
+[质量评测、Agent 轨迹与有界执行](docs/quality-harness-and-agent-runtime.md)。

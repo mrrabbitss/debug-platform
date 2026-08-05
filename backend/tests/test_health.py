@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.api import routes
+from app.api import routes, system
 from app.core.db import Base, get_db
 from app.models import Artifact, Case, Job, KnowledgeDocument
 from app.services.health import readiness_report, system_status_report
@@ -81,7 +81,7 @@ def test_health_endpoints_return_liveness_readiness_and_admin_status(tmp_path: P
         app_name="test-platform",
         app_env="test",
     )
-    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    monkeypatch.setattr(system, "get_settings", lambda: settings)
 
     def override_db():
         with session_factory() as db:

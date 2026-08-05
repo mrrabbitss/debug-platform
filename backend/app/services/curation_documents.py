@@ -88,18 +88,39 @@ class _VisibleHTMLTextParser(HTMLParser):
         self.lines: list[str] = []
         self._parts: list[str] = []
         self._ignored_stack: list[str] = []
+        self._style_depth = 0
+        self._style_parts: list[str] = []
+        self._hidden_classes: set[str] = set()
+        self._hidden_ids: set[str] = set()
         self.char_count = 0
         self.truncated = False
+
+    def _register_hidden_styles(self) -> None:
+        stylesheet = re.sub(r"/\*.*?\*/", "", " ".join(self._style_parts), flags=re.S)
+        self._style_parts.clear()
+        for selector_group, declarations in re.findall(r"([^{}]+)\{([^{}]*)\}", stylesheet):
+            normalized = re.sub(r"\s+", "", declarations.casefold())
+            if "display:none" not in normalized and "visibility:hidden" not in normalized:
+                continue
+            for selector in selector_group.split(","):
+                cleaned = selector.strip().casefold()
+                if re.fullmatch(r"\.[a-z_][\w-]*", cleaned):
+                    self._hidden_classes.add(cleaned[1:])
+                elif re.fullmatch(r"#[a-z_][\w-]*", cleaned):
+                    self._hidden_ids.add(cleaned[1:])
 
     def _is_hidden(self, tag: str, attrs: list[tuple[str, str | None]]) -> bool:
         attributes = {name.casefold(): (value or "").casefold() for name, value in attrs}
         style = attributes.get("style", "").replace(" ", "")
+        class_names = set(attributes.get("class", "").split())
         return bool(
             tag in _HTML_IGNORED_TAGS
             or "hidden" in attributes
             or attributes.get("aria-hidden") == "true"
             or "display:none" in style
             or "visibility:hidden" in style
+            or class_names.intersection(self._hidden_classes)
+            or attributes.get("id") in self._hidden_ids
         )
 
     def _flush(self) -> None:
@@ -123,6 +144,11 @@ class _VisibleHTMLTextParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.casefold()
+        if tag == "style":
+            self._style_depth += 1
+            return
+        if self._style_depth:
+            return
         if self._is_hidden(tag, attrs):
             self._ignored_stack.append(tag)
             return
@@ -136,6 +162,13 @@ class _VisibleHTMLTextParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.casefold()
+        if tag == "style" and self._style_depth:
+            self._style_depth -= 1
+            if self._style_depth == 0:
+                self._register_hidden_styles()
+            return
+        if self._style_depth:
+            return
         if self._ignored_stack:
             if tag in self._ignored_stack:
                 reverse_index = self._ignored_stack[::-1].index(tag)
@@ -145,6 +178,9 @@ class _VisibleHTMLTextParser(HTMLParser):
             self._flush()
 
     def handle_data(self, data: str) -> None:
+        if self._style_depth:
+            self._style_parts.append(data)
+            return
         if self._ignored_stack or self.truncated:
             return
         value = _normalize_visible_text(data)

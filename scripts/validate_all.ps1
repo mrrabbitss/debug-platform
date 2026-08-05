@@ -20,6 +20,9 @@ $RunDirectory = Join-Path $OutputRoot $RunId
 $LogsDirectory = Join-Path $RunDirectory "logs"
 $SummaryPath = Join-Path $RunDirectory "summary.json"
 $JunitPath = Join-Path $RunDirectory "pytest.xml"
+$GoldenJsonPath = Join-Path $RunDirectory "golden-evaluation.json"
+$GoldenJunitPath = Join-Path $RunDirectory "golden-evaluation.xml"
+$CoverageXmlPath = Join-Path $RunDirectory "coverage.xml"
 $Steps = [System.Collections.Generic.List[object]]::new()
 $OverallStatus = "FAILED"
 $FailureMessage = $null
@@ -205,6 +208,18 @@ try {
         -Name "Repository harness contracts" `
         -FilePath $Python `
         -Arguments @("scripts/check_repo_harness.py")
+    Invoke-ValidationStep `
+        -Name "Architecture boundaries and size ratchets" `
+        -FilePath $Python `
+        -Arguments @("scripts/check_architecture.py")
+    Invoke-ValidationStep `
+        -Name "Golden dataset quality gates" `
+        -FilePath $Python `
+        -Arguments @(
+            "scripts/run_golden_evals.py",
+            "--output", $GoldenJsonPath,
+            "--junit", $GoldenJunitPath
+        )
 
     if ($Mode -eq "Fast") {
         Invoke-ValidationStep `
@@ -222,8 +237,11 @@ try {
         Invoke-ValidationStep `
             -Name "Full backend regression" `
             -FilePath $Python `
-            -WorkingDirectory (Join-Path $RepoRoot "backend") `
-            -Arguments @("-m", "pytest", "-q", "--junitxml", $JunitPath)
+            -Arguments @(
+                "scripts/run_backend_tests.py",
+                "--junit", $JunitPath,
+                "--coverage-xml", $CoverageXmlPath
+            )
     }
 
     Invoke-ValidationStep `
@@ -269,6 +287,13 @@ try {
             -Arguments @(
                 "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
                 "-File", (Join-Path $PSScriptRoot "runtime_smoke.ps1")
+            )
+        Invoke-ValidationStep `
+            -Name "Isolated browser knowledge-curation E2E" `
+            -FilePath $PowerShell `
+            -Arguments @(
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", (Join-Path $PSScriptRoot "run_browser_e2e.ps1")
             )
     }
 

@@ -735,8 +735,81 @@ class DiagnosisFeedback(Base):
     )
 
 
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        Index("ix_agent_runs_case_created", "case_id", "created_at"),
+        Index("ix_agent_runs_resource_created", "resource_type", "resource_id", "created_at"),
+        Index("ix_agent_runs_operation_status", "operation", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    case_id: Mapped[str | None] = mapped_column(
+        ForeignKey("cases.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    resource_type: Mapped[str] = mapped_column(String(64), default="case", index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    operation: Mapped[str] = mapped_column(String(64), index=True)
+    execution_mode: Mapped[str] = mapped_column(String(32), default="deterministic")
+    status: Mapped[str] = mapped_column(String(32), default="RUNNING", index=True)
+    model_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    model_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    model_config_json: Mapped[str] = mapped_column(Text, default="{}")
+    prompt_version: Mapped[str] = mapped_column(String(128), default="")
+    input_summary_hash: Mapped[str] = mapped_column(String(64))
+    output_summary_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    stop_reason: Mapped[str] = mapped_column(String(128), default="UNKNOWN", index=True)
+    approval_status: Mapped[str] = mapped_column(String(64), default="NOT_REQUIRED", index=True)
+    replay_of_run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    replay_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    score_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentTraceEvent(Base):
+    __tablename__ = "agent_trace_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence", name="uq_agent_trace_event_sequence"),
+        Index("ix_agent_trace_events_run_created", "run_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    stage: Mapped[str] = mapped_column(String(128), index=True)
+    tool_name: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="COMPLETED", index=True)
+    input_summary_hash: Mapped[str] = mapped_column(String(64))
+    output_summary_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    stop_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        Index("ix_jobs_idempotency_key", "idempotency_key"),
+        Index("ix_jobs_dispatch", "status", "available_at", "created_at"),
+        Index("ix_jobs_lease", "status", "lease_expires_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     kind: Mapped[str] = mapped_column(String(64), index=True)
@@ -746,6 +819,26 @@ class Job(Base):
     input_json: Mapped[str] = mapped_column(Text, default="{}")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    lease_owner: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deadline_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=1800)
+    resource_limits_json: Mapped[str] = mapped_column(Text, default="{}")
+    dead_letter_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    dead_letter_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

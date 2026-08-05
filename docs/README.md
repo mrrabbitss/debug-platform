@@ -1,13 +1,14 @@
 # 项目文档索引
 
-业务能力总账见 [`CAPABILITIES.md`](../CAPABILITIES.md)，Harness Engineering 状态与
-有序路线见 [`HARNESS_ENGINEERING.md`](../HARNESS_ENGINEERING.md)，最近验证证据见
-[`VALIDATION.md`](../VALIDATION.md)。
+业务能力总账见 [CAPABILITIES.md](../CAPABILITIES.md)，Harness Engineering 状态与有序路线见
+[HARNESS_ENGINEERING.md](../HARNESS_ENGINEERING.md)，最近一次完整验证证据见
+[VALIDATION.md](../VALIDATION.md)。
 
 ## 架构与演进
 
-- [项目架构、技术栈、优缺点和迭代历程](project-architecture-and-evolution.md)
+- [项目结构、技术栈、优缺点和迭代历程](project-architecture-and-evolution.md)
 - [模型网关、Embedding/Reranker 与分层知识库](model-and-knowledge-configuration.md)
+- [质量评测、Agent 轨迹与有界执行](quality-harness-and-agent-runtime.md)
 
 ## 诊断与认知检索
 

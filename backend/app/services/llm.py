@@ -80,6 +80,9 @@ class OpenAICompatibleProvider(LLMProvider):
         self.profile = profile
         self.base_url = base_url
         self.temperature = float(config.get("temperature", settings.llm_temperature))
+        self.last_usage: dict[str, int | None] = {}
+        self.last_duration_ms = 0
+        self.last_outcome = "NOT_CALLED"
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -104,6 +107,10 @@ class OpenAICompatibleProvider(LLMProvider):
             "completion_tokens": getattr(usage_object, "completion_tokens", None),
             "total_tokens": getattr(usage_object, "total_tokens", None),
         }
+        duration_ms = int((perf_counter() - started) * 1000)
+        self.last_usage = usage
+        self.last_duration_ms = duration_ms
+        self.last_outcome = outcome
         record_model_egress(
             getattr(self, "profile", None),
             base_url=getattr(self, "base_url", None),
@@ -112,7 +119,7 @@ class OpenAICompatibleProvider(LLMProvider):
             purpose=purpose,
             request_items=2,
             request_chars=len(system) + len(user),
-            duration_ms=int((perf_counter() - started) * 1000),
+            duration_ms=duration_ms,
             outcome=outcome,
             error_type=error_type,
             usage=usage,

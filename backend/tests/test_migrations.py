@@ -36,9 +36,10 @@ def test_migrations_create_fresh_database_and_are_idempotent(tmp_path: Path) -> 
         "retrieval_evaluation_cases", "retrieval_evaluation_runs",
         "knowledge_curation_sessions", "knowledge_curation_source_files",
         "knowledge_curation_revisions", "knowledge_curation_messages",
+        "agent_runs", "agent_trace_events",
     }.issubset(table_names)
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0012"
     analysis_column_info = {item["name"]: item for item in inspect(engine).get_columns("analysis_runs")}
     event_indexes = {item["name"] for item in inspect(engine).get_indexes("log_events")}
     model_indexes = {item["name"] for item in inspect(engine).get_indexes("model_profiles")}
@@ -47,6 +48,13 @@ def test_migrations_create_fresh_database_and_are_idempotent(tmp_path: Path) -> 
     assert {"model_profile_id", "model_config_json"}.issubset(analysis_column_info)
     assert analysis_column_info["model"]["type"].length == 512
     artifact_columns = {item["name"] for item in inspect(engine).get_columns("artifacts")}
+    job_columns = {item["name"] for item in inspect(engine).get_columns("jobs")}
+    assert {
+        "idempotency_key", "attempt", "max_attempts", "available_at",
+        "lease_owner", "lease_expires_at", "heartbeat_at", "deadline_at",
+        "timeout_seconds", "resource_limits_json", "dead_letter_at",
+        "dead_letter_reason",
+    }.issubset(job_columns)
     case_columns = {item["name"] for item in inspect(engine).get_columns("cases")}
     event_columns = {item["name"] for item in inspect(engine).get_columns("log_events")}
     assert "active_parse_run_id" in artifact_columns
@@ -158,7 +166,7 @@ def test_migrations_adopt_legacy_create_all_database_without_data_loss(tmp_path:
             "SELECT parse_run_id FROM log_events WHERE id = 'EVT-legacy'"
         ))
     assert title == "legacy case"
-    assert version == "0010"
+    assert version == "0012"
     assert active_run_id == "ART-legacy"
     assert event_run_id == "ART-legacy"
     engine.dispose()

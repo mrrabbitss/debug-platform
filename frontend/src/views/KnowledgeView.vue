@@ -97,7 +97,7 @@ function errorText(error: any) {
 
 async function waitForJob(initialJob: Job): Promise<Job> {
   let job = initialJob
-  while (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)) {
+  while (!['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(job.status)) {
     await new Promise(resolve => window.setTimeout(resolve, 1000))
     job = (await api.get(`/jobs/${job.id}`)).data
   }

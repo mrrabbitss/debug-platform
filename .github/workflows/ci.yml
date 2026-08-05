@@ -40,8 +40,17 @@ jobs:
       - run: python -m ruff check backend/app backend/tests scripts
       - run: python -m compileall -q backend/app backend/tests scripts
       - run: python scripts/check_repo_harness.py
-      - run: python -m pytest -q
-        working-directory: backend
+      - run: python scripts/check_architecture.py
+      - name: Run backend regression and coverage gate
+        run: >-
+          python scripts/run_backend_tests.py
+          --coverage-xml backend/coverage.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage-${{ runner.os }}
+          path: backend/coverage.xml
+          if-no-files-found: error
 
   frontend:
     name: Frontend (${{ matrix.os }})
@@ -61,6 +70,81 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
+
+  golden-quality:
+    name: Golden Dataset Quality
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      AUTH_MODE: local
+      LLM_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/constraints.lock
+      - run: python -m pip install --upgrade --constraint backend/constraints.lock pip
+      - run: python -m pip install --constraint backend/constraints.lock -e "./backend[dev]"
+      - name: Run blocking golden quality gates
+        run: >-
+          python scripts/run_golden_evals.py
+          --output artifacts/validation/golden-ci.json
+          --junit artifacts/validation/golden-ci.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: golden-quality-report
+          path: artifacts/validation/golden-ci.*
+          if-no-files-found: error
+
+  browser-e2e:
+    name: Browser E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      E2E_PYTHON: python
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/constraints.lock
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python -m pip install --upgrade --constraint backend/constraints.lock pip
+      - run: python -m pip install --constraint backend/constraints.lock -e "./backend[dev]"
+      - run: npm ci
+        working-directory: frontend
+      - name: Install Chromium and Linux system dependencies
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Install Chromium
+        if: runner.os == 'Windows'
+        run: npx playwright install chromium
+        working-directory: frontend
+      - name: Run isolated browser E2E
+        run: npm run test:e2e
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-${{ runner.os }}
+          path: artifacts/e2e
+          if-no-files-found: error
 
   vscode-extension:
     runs-on: ubuntu-latest

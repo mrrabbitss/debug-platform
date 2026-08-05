@@ -25,10 +25,14 @@ REQUIRED_PATHS = (
     "AGENTS.md",
     "CAPABILITIES.md",
     "HARNESS_ENGINEERING.md",
+    "harness/architecture_limits.json",
+    "harness/quality_gates.json",
     "VALIDATION.md",
     "docs/README.md",
     "scripts/validate_all.bat",
     "scripts/validate_all.ps1",
+    "scripts/check_architecture.py",
+    "scripts/run_backend_tests.py",
     "workflow/README.md",
     "workflow/openapi.yaml",
     "workflow/skill.yaml",
@@ -209,6 +213,13 @@ def check_workflow_contract(checks: HarnessChecks) -> None:
     paths = openapi.get("paths", {})
     entrypoints = skill.get("entrypoints", {})
     missing: list[str] = []
+    runtime_missing: list[str] = []
+    from app.main import app
+
+    runtime_paths = {
+        normalize_api_path(path): item
+        for path, item in app.openapi().get("paths", {}).items()
+    }
     for name, entrypoint in entrypoints.items():
         if not isinstance(entrypoint, dict):
             missing.append(f"{name}: invalid entrypoint")
@@ -218,6 +229,9 @@ def check_workflow_contract(checks: HarnessChecks) -> None:
         path_item = paths.get(path, {}) if isinstance(paths, dict) else {}
         if method not in path_item:
             missing.append(f"{name}: {method.upper()} {path}")
+        runtime_path_item = runtime_paths.get(path, {})
+        if method not in runtime_path_item:
+            runtime_missing.append(f"{name}: {method.upper()} {path}")
     skill_version = str(skill.get("version"))
     info = openapi.get("info", {})
     api_version = str(info.get("version")) if isinstance(info, dict) else ""
@@ -232,18 +246,27 @@ def check_workflow_contract(checks: HarnessChecks) -> None:
         if not missing
         else "; ".join(missing),
     )
+    checks.check(
+        "workflow-runtime-openapi",
+        not runtime_missing,
+        f"matched {len(entrypoints)} allowlisted operations to FastAPI OpenAPI"
+        if not runtime_missing
+        else "; ".join(runtime_missing),
+    )
     constraints = " ".join(str(item) for item in skill.get("constraints", [])).lower()
     safeguards = {
         "untrusted-input": "untrusted" in constraints,
         "evidence-gate": "evidence" in constraints,
         "draft-human-gate": "draft" in constraints
         and ("human" in constraints or "approval" in constraints),
+        "read-only-default": "read-only" in constraints,
+        "write-approval": "write" in constraints and "approval" in constraints,
     }
     absent = [name for name, present in safeguards.items() if not present]
     checks.check(
         "workflow-safety-contract",
         not absent,
-        "untrusted input, evidence and human-reviewed DRAFT gates are declared"
+        "untrusted input, evidence, DRAFT, read-only and write-approval gates are declared"
         if not absent
         else f"missing: {', '.join(absent)}",
     )
@@ -273,6 +296,19 @@ def main() -> int:
     check_ci_contract(checks)
     check_dependabot(checks)
     check_workflow_contract(checks)
+    from check_architecture import check_architecture
+
+    architecture = check_architecture()
+    checks.check(
+        "architecture-boundaries",
+        architecture["status"] == "PASS",
+        (
+            f"checked {architecture['checked_python_files']} Python and "
+            f"{architecture['checked_vue_files']} Vue files"
+            if architecture["status"] == "PASS"
+            else "; ".join(architecture["failures"])
+        ),
+    )
 
     summary = {
         "status": "PASS" if not checks.failures else "FAIL",

@@ -1,5 +1,4 @@
 from collections import defaultdict
-import math
 from time import perf_counter
 from typing import Any
 
@@ -7,6 +6,14 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import CodeSymbol, Repository
+from app.services.agentic.fusion import (
+    _balanced_candidate_pool as _balanced_candidate_pool,
+    apply_dense_scores as _apply_dense_scores,
+    apply_reranker as _apply_reranker,
+    fuse_module_results as _fuse_module_results,
+)
+from app.services.agentic.planner import build_search_plan
+from app.services.agent_trace import record_agent_run
 from app.services.code_graph import search_code_graph
 from app.services.commit_graph import search_commits, symbols_for_commit_paths
 from app.services.knowledge_graph import (
@@ -20,101 +27,7 @@ from app.services.memory import (
     search_memories,
 )
 from app.services.model_profiles import get_active_model_profile
-from app.services.rag import retriever, tokenize
-from app.services.retrieval_models import (
-    RetrievalModelError,
-    candidate_count_for_reranker,
-    embed_texts,
-    rerank_documents,
-)
-
-
-SEARCH_MODULES = {"knowledge", "domain_graph", "code", "commit", "memory"}
-CODE_INTENT_TERMS = {
-    "代码", "函数", "方法", "调用", "引用", "继承", "实现", "接口", "类", "宏",
-    "文件", "源码", "堆栈", "崩溃", "定位", "symbol", "function", "call", "reference",
-    "inherit", "implement", "class", "interface", "source", "stack", "crash",
-}
-MODULE_WEIGHTS = {
-    "knowledge": 1.0,
-    "domain_graph": 0.95,
-    "code": 1.0,
-    "commit": 0.9,
-    "memory": 0.9,
-}
-COMMIT_INTENT_TERMS = {
-    "commit", "提交", "修改", "变更", "引入", "回归", "版本", "历史", "修复记录",
-    "何时", "谁改", "regression", "change", "introduced", "history", "blame", "fix",
-}
-MEMORY_INTENT_TERMS = {
-    "以前", "之前", "类似", "经验", "历史案例", "失败", "复用", "曾经",
-    "previous", "similar", "memory", "experience", "failed",
-}
-
-
-def _query_signals(query: str) -> set[str]:
-    lower = query.lower()
-    signals = set(tokenize(query))
-    for term in CODE_INTENT_TERMS | COMMIT_INTENT_TERMS | MEMORY_INTENT_TERMS:
-        if term in lower:
-            signals.add(term)
-    return signals
-
-
-def build_search_plan(
-    query: str,
-    *,
-    repository_count: int,
-    requested_modules: list[str] | None,
-    max_hops: int,
-    domain_graph_available: bool = False,
-) -> dict[str, Any]:
-    signals = _query_signals(query)
-    if requested_modules is not None:
-        modules = [
-            module for module in requested_modules
-            if module in SEARCH_MODULES
-        ]
-        if modules:
-            rationale = ["使用调用方明确指定的检索模块"]
-        else:
-            modules = ["knowledge", "memory"]
-            rationale = ["未选择有效模块，回退到知识库和记忆检索"]
-    else:
-        modules = ["knowledge", "memory"]
-        rationale = ["知识与经验是诊断检索的默认第一跳"]
-        if domain_graph_available:
-            modules.insert(1, "domain_graph")
-            rationale.append(
-                "Active domain knowledge graph detected; enable GraphRAG expansion"
-            )
-        if repository_count and signals.intersection(CODE_INTENT_TERMS):
-            modules.append("code")
-            rationale.append("检测到代码定位/调用关系意图，启用代码图谱")
-        if repository_count and signals.intersection(COMMIT_INTENT_TERMS):
-            if "code" not in modules:
-                modules.append("code")
-            modules.append("commit")
-            rationale.append("检测到变更、回归或历史意图，启用 Commit → 文件 → 代码路径")
-        if signals.intersection(MEMORY_INTENT_TERMS):
-            rationale.append("检测到历史经验意图，提高记忆模块优先级")
-    modules = list(dict.fromkeys(modules))
-    return {
-        "selected_modules": modules,
-        "intent_signals": sorted(signals.intersection(
-            CODE_INTENT_TERMS | COMMIT_INTENT_TERMS | MEMORY_INTENT_TERMS
-        )),
-        "max_hops": max_hops,
-        "algorithms": [
-            "BM25",
-            "dense_embedding",
-            "reciprocal_rank_fusion",
-            "reranker",
-            "graph_multi_hop",
-            "graphrag",
-        ],
-        "rationale": rationale,
-    }
+from app.services.rag import retriever
 
 
 def _knowledge_candidates(
@@ -310,196 +223,6 @@ def _commit_candidates(
     return candidates, paths
 
 
-def _fuse_module_results(
-    module_results: dict[str, list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
-    fused: dict[tuple[str, str], dict[str, Any]] = {}
-    for module, candidates in module_results.items():
-        module_size = max(len(candidates), 1)
-        module_weight = MODULE_WEIGHTS.get(module, 1.0)
-        for rank, candidate in enumerate(candidates, start=1):
-            key = (str(candidate["source_type"]), str(candidate["evidence_id"]))
-            existing = fused.get(key)
-            if existing is None:
-                existing = {
-                    **candidate,
-                    "modules": [],
-                    "module_ranks": {},
-                    "module_score": 0.0,
-                    "fusion_score": 0.0,
-                }
-                fused[key] = existing
-            existing["modules"].append(module)
-            existing["module_ranks"][module] = rank
-            existing["fusion_score"] += module_weight / (60 + rank)
-            existing["module_score"] = max(
-                float(existing["module_score"]),
-                module_weight * (module_size - rank + 1) / module_size,
-            )
-            existing["source_score"] = max(
-                float(existing.get("source_score", 0.0)),
-                float(candidate.get("source_score", 0.0)),
-            )
-            if candidate.get("paths"):
-                existing["paths"] = [
-                    *existing.get("paths", []),
-                    *candidate["paths"],
-                ]
-    return sorted(
-        fused.values(),
-        key=lambda item: (item["fusion_score"], item["module_score"]),
-        reverse=True,
-    )
-
-
-def _balanced_candidate_pool(
-    candidates: list[dict[str, Any]],
-    limit: int,
-) -> list[dict[str, Any]]:
-    """Keep one module from crowding every dense/rerank candidate slot."""
-    if len(candidates) <= limit:
-        return candidates
-    by_module: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for candidate in candidates:
-        modules = candidate.get("modules") or ["unknown"]
-        by_module[str(modules[0])].append(candidate)
-    ordered_modules = [
-        module for module in MODULE_WEIGHTS if by_module.get(module)
-    ]
-    ordered_modules.extend(
-        module
-        for module in by_module
-        if module not in ordered_modules
-    )
-    selected: list[dict[str, Any]] = []
-    offset = 0
-    while len(selected) < limit:
-        added = False
-        for module in ordered_modules:
-            module_candidates = by_module[module]
-            if offset < len(module_candidates):
-                selected.append(module_candidates[offset])
-                added = True
-                if len(selected) >= limit:
-                    break
-        if not added:
-            break
-        offset += 1
-    return selected
-
-
-def _apply_dense_scores(
-    db: Session,
-    query: str,
-    candidates: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    profile = get_active_model_profile("embedding", db)
-    if not profile or not candidates:
-        return candidates, {"status": "SKIPPED", "reason": "No active embedding profile"}
-    selected = _balanced_candidate_pool(candidates, 80)
-    for item in candidates:
-        item["dense_score"] = None
-        item["combined_score"] = item["fusion_score"] * 20
-    try:
-        query_vectors = embed_texts(
-            profile,
-            [query],
-            purpose="agentic_search_query",
-        )
-        if len(query_vectors) != 1 or not query_vectors[0]:
-            raise ValueError("Embedding model returned no query vector")
-        query_vector = query_vectors[0]
-        document_vectors = embed_texts(
-            profile,
-            [
-                f"{item['title']}\n{item['content'][:8000]}"
-                for item in selected
-            ],
-            purpose="agentic_search_candidates",
-        )
-        if len(document_vectors) != len(selected):
-            raise ValueError("Embedding model returned an unexpected number of vectors")
-        query_norm = math.sqrt(sum(float(value) ** 2 for value in query_vector))
-        if query_norm == 0:
-            raise ValueError("Embedding model returned a zero query vector")
-        for item, vector in zip(selected, document_vectors, strict=True):
-            if len(vector) != len(query_vector):
-                continue
-            vector_norm = math.sqrt(sum(float(value) ** 2 for value in vector))
-            if vector_norm == 0:
-                continue
-            dot_product = sum(
-                float(left) * float(right)
-                for left, right in zip(query_vector, vector, strict=True)
-            )
-            dense_score = dot_product / (query_norm * vector_norm)
-            item["dense_score"] = round(dense_score, 6)
-            item["combined_score"] = item["fusion_score"] * 20 + dense_score * 2
-        return sorted(
-            candidates,
-            key=lambda item: item["combined_score"],
-            reverse=True,
-        ), {
-            "status": "COMPLETED",
-            "profile_id": profile.id,
-            "provider": profile.provider,
-            "candidate_count": len(selected),
-        }
-    except (RetrievalModelError, ValueError, TypeError, IndexError) as exc:
-        return candidates, {"status": "FAILED", "error": str(exc)}
-
-
-def _apply_reranker(
-    db: Session,
-    query: str,
-    candidates: list[dict[str, Any]],
-    top_k: int,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    if not candidates:
-        return [], {"status": "SKIPPED", "reason": "No candidates"}
-    profile = get_active_model_profile("reranker", db)
-    if not profile or profile.provider == "disabled":
-        return candidates[:top_k], {
-            "status": "SKIPPED",
-            "reason": "Reranker is disabled",
-        }
-    candidate_count = min(
-        len(candidates),
-        candidate_count_for_reranker(max(top_k * 3, 20), profile=profile),
-    )
-    selected = candidates[:candidate_count]
-    try:
-        ranking = rerank_documents(
-            query,
-            [f"{item['title']}\n{item['content'][:10000]}" for item in selected],
-            top_k,
-            profile=profile,
-            purpose="agentic_search_candidates",
-        )
-    except (RetrievalModelError, ValueError, TypeError, IndexError) as exc:
-        ranking = None
-        status = {"status": "FAILED", "error": str(exc)}
-    else:
-        status = {
-            "status": "COMPLETED" if ranking is not None else "SKIPPED",
-            "candidate_count": candidate_count,
-            "reason": "Reranker is disabled" if ranking is None else None,
-        }
-    if ranking is None:
-        return selected[:top_k], status
-    reranked: list[dict[str, Any]] = []
-    for index, score in ranking:
-        if 0 <= index < len(selected):
-            selected[index]["reranker_score"] = round(float(score), 6)
-            reranked.append(selected[index])
-    if not reranked:
-        return selected[:top_k], {
-            "status": "FAILED",
-            "error": "Reranker returned no valid candidate indexes",
-        }
-    return reranked[:top_k], status
-
-
 def agentic_search(
     db: Session,
     *,
@@ -509,9 +232,13 @@ def agentic_search(
     max_hops: int = 2,
     requested_modules: list[str] | None = None,
     record_memory: bool = True,
+    execution_mode: str = "deterministic",
+    replay_of_run_id: str | None = None,
+    created_by: str | None = None,
 ) -> dict[str, Any]:
     from app.models import Case
 
+    overall_started = perf_counter()
     case = db.get(Case, case_id)
     if not case:
         raise ValueError("Case not found")
@@ -678,7 +405,14 @@ def agentic_search(
             path_count=len(all_paths),
         )
         db.commit()
-    return {
+    stop_reason = (
+        "NO_RESULTS"
+        if not final_results
+        else "COMPLETED_WITH_FALLBACK"
+        if any(item.get("status") == "FAILED" for item in traces)
+        else "COMPLETED"
+    )
+    result = {
         "case_id": case_id,
         "query": query,
         "plan": plan,
@@ -694,3 +428,68 @@ def agentic_search(
             "returned": len(final_results),
         },
     }
+    active_profiles = [
+        profile
+        for task_type in ("embedding", "reranker")
+        if (profile := get_active_model_profile(task_type, db)) is not None
+    ]
+    evidence_ids = [str(item["evidence_id"]) for item in final_results]
+    duration_ms = int((perf_counter() - overall_started) * 1000)
+    run = record_agent_run(
+        db,
+        case_id=case_id,
+        operation="agentic_search",
+        execution_mode=execution_mode,
+        input_summary={
+            "case_id": case_id,
+            "query": query,
+            "top_k": top_k,
+            "max_hops": max_hops,
+            "modules": requested_modules,
+        },
+        output_summary={
+            "evidence_ids": evidence_ids,
+            "returned": len(final_results),
+            "path_count": len(all_paths),
+            "stop_reason": stop_reason,
+        },
+        events=traces,
+        evidence_ids=evidence_ids,
+        stop_reason=stop_reason,
+        approval_status="READ_ONLY_AUTO",
+        duration_ms=duration_ms,
+        resource_type="case",
+        resource_id=case_id,
+        model_name=", ".join(
+            f"{profile.task_type}:{profile.model_name}" for profile in active_profiles
+        ) or "deterministic-retrieval",
+        model_config={
+            "profiles": [
+                {
+                    "profile_id": profile.id,
+                    "task_type": profile.task_type,
+                    "mode": profile.mode,
+                    "provider": profile.provider,
+                    "model_name": profile.model_name,
+                }
+                for profile in active_profiles
+            ],
+            "top_k": top_k,
+            "max_hops": max_hops,
+        },
+        prompt_version="agentic-search-v2",
+        replay_of_run_id=replay_of_run_id,
+        replay_payload={
+            "case_id": case_id,
+            "query": query,
+            "top_k": top_k,
+            "max_hops": max_hops,
+            "modules": requested_modules,
+            "execution_mode": execution_mode,
+        },
+        created_by=created_by,
+        budget_ms=30_000,
+    )
+    result["run_id"] = run.id
+    result["stop_reason"] = stop_reason
+    return result

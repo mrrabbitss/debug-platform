@@ -8,6 +8,7 @@ from app.services.curation_documents import (
     DocumentExtractionError,
     prepare_curation_document,
 )
+from app.services.curation_document_sandbox import prepare_curation_document_sandboxed
 
 
 def test_html_extracts_visible_text_and_ignores_active_or_hidden_content(
@@ -21,6 +22,7 @@ def test_html_extracts_visible_text_and_ignores_active_or_hidden_content(
   <h1>Authentication timeout</h1>
   <script>IGNORE_INJECTION()</script>
   <p hidden>hidden secret</p>
+  <p class="x">hidden stylesheet injection</p>
   <table><tr><th>Cause</th><th>Solution</th></tr>
   <tr><td>Key mismatch</td><td>Replace key</td></tr></table>
 </body></html>
@@ -37,6 +39,7 @@ def test_html_extracts_visible_text_and_ignores_active_or_hidden_content(
     assert "Replace key" in extracted
     assert "IGNORE_INJECTION" not in extracted
     assert "hidden secret" not in extracted
+    assert "hidden stylesheet injection" not in extracted
 
 
 def test_docx_extracts_paragraphs_and_tables(tmp_path: Path) -> None:
@@ -103,3 +106,17 @@ def test_pdf_without_a_text_layer_is_rejected_as_non_extractable(tmp_path: Path)
         prepare_curation_document(source, "scan.pdf", tmp_path / "scan.txt")
 
     assert captured.value.code == "document_has_no_extractable_text"
+
+
+def test_document_extraction_runs_in_a_limited_subprocess(tmp_path: Path) -> None:
+    source = tmp_path / "sandbox.html"
+    source.write_text("<h1>Sandboxed extraction</h1>", encoding="utf-8")
+    result = prepare_curation_document_sandboxed(
+        source,
+        "sandbox.html",
+        tmp_path / "sandbox.txt",
+    )
+
+    assert result is not None
+    assert result.method == "html_visible_text"
+    assert result.path.read_text(encoding="utf-8").strip() == "Sandboxed extraction"

@@ -1,0 +1,12 @@
+Wait collectDebuginfo task ready
+============================================================
+Start run collect command:WAP:get wlan basic laninst 1 wlaninst6
+get wlan basic laninst 1 wlaninst6
+get WLANConfiguration!
+Name     :ath5
+Enable   :0
+NOTICE 2026-03-02 03:29:17.483[90][DC]DC wlan0 state down after radio reset
+  retry counter=1
+ERROR 2026-03-02 03:29:18.100[91][AUTH]authentication failed during 4-way handshake
+WARN 2026-03-02 03:29:19.200[92][DHCP]DHCP discover timeout on wlan0
+NOTICE 2026-03-02 03:29:20.300[93][AUTH]authentication succeeds after shared key update
