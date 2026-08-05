@@ -74,6 +74,7 @@ def test_local_model_installer_uses_project_layout_and_hf_mirror() -> None:
         encoding="utf-8"
     )
     pyproject = (PROJECT_ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
+    constraints = (PROJECT_ROOT / "backend" / "constraints.lock").read_text(encoding="utf-8")
     gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
 
     assert "-ExecutionPolicy Bypass" in batch
@@ -111,5 +112,7 @@ def test_local_model_installer_uses_project_layout_and_hf_mirror() -> None:
     assert "Qwen/Qwen3-Reranker-0.6B" in validator
     assert '"huggingface-hub==0.36.2"' in pyproject
     assert '"transformers>=4.51,<5.0"' in pyproject
+    assert "cryptography==50.0.0" in constraints
+    assert '"backend\\constraints.lock"' in script
     assert "/models/" in gitignore
     assert "hf_model_access_report*.txt" in gitignore

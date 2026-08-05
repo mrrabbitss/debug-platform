@@ -248,6 +248,18 @@
 外部 PostgreSQL/Qdrant 和 Linux/Windows 矩阵由每次 push 的 GitHub Actions
 继续验证；本机未安装 Docker，因此不把未执行的外部服务项伪装成本地通过。
 
+本轮依赖可复现修复（2026-08-05）：
+
+- [x] 将存在已知漏洞的 `cryptography 49.0.0` 升级并锁定为 `50.0.0`；
+- [x] 增加跨 Python/Windows/Linux 的 `backend/uv.lock`，并导出兼容现有 pip
+  启动链的 `backend/constraints.lock`；
+- [x] Win11 bootstrap/start/doctor、Linux 启动、本地模型安装、CI 和 Docker
+  统一服从锁定约束；
+- [x] 增加 `scripts\refresh_python_lock.bat` 的更新与只读检查模式；
+- [x] 修复新进入审计库的前端 PostCSS 和扩展 brace-expansion 告警；
+- [x] Python 3.14 安装、锁文件一致性、Ruff、compileall、`119 passed, 1 skipped`、
+  前端构建、扩展编译、三类依赖审计、Win11 bootstrap/doctor/runtime smoke 均通过。
+
 ## 6. 后续候选
 
 | 能力 | 状态 | 说明 |

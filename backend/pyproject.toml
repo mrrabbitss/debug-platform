@@ -27,7 +27,7 @@ dependencies = [
   "python-dateutil>=2.9,<3.0",
   "pyyaml>=6.0.2,<7.0",
   "psycopg[binary]>=3.2,<4.0",
-  "cryptography>=48.0.1,<50",
+  "cryptography>=50.0.0,<51",
 ]
 
 [project.optional-dependencies]

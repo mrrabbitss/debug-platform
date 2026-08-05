@@ -1,10 +1,12 @@
 # Validation Record
 
-Last validated: 2026-08-03 on Windows 11.
+Last validated: 2026-08-05 on Windows 11.
 
 ## Current regression result
 
 - Backend dependency consistency (`pip check`): passed;
+- Cross-platform `uv.lock` and pip constraints synchronization check: passed;
+- Python, frontend and VS Code extension dependency audits: no known vulnerabilities;
 - Ruff static checks across backend, tests and Python utility scripts: passed;
 - Python compileall: passed;
 - Pytest: 119 passed, 1 external-service test skipped locally;

@@ -81,7 +81,7 @@ flowchart TB
 | 密钥保护 | cryptography / Fernet | 模型 API Key 加密保存 |
 | PostgreSQL 驱动 | psycopg 3 | PostgreSQL 连接 |
 
-后端依赖采用版本区间约束，锁定策略由 CI 和部署环境负责。大型本地模型依赖放在 `backend[local-models]` 可选依赖组中，避免基础安装强制下载 PyTorch 等大包。
+`backend/pyproject.toml` 保留可维护的兼容范围，`backend/uv.lock` 记录 Python 3.11+ 的跨平台精确解析，`backend/constraints.lock` 为现有 pip、Win11 启动脚本和 Docker 提供同一份固定版本约束。CI 会检查两份锁定结果没有漂移。大型本地模型依赖仍放在 `backend[local-models]` 可选依赖组中，基础安装不会下载 PyTorch 等大包，但安装模型运行时也会复用同一约束文件。
 
 ### 3.2 前端
 
@@ -508,7 +508,7 @@ models/
 1. 创建 `inference`、`embedding`、`reranker`；
 2. 确认项目 `.venv`；
 3. 设置 `$env:HF_ENDPOINT = "https://hf-mirror.com"`，并关闭误继承的离线模式；
-4. 安装固定兼容范围的 `backend[local-models]`，使 `.venv\Scripts\hf.exe` 可用；
+4. 按 `backend/constraints.lock` 安装锁定版本的 `backend[local-models]`，使 `.venv\Scripts\hf.exe` 可用；
 5. 锁定 BGE 和 Qwen3 的模型 revision；
 6. 先使用官方 CLI 下载 `config.json` 做轻量预检，成功后使用 CLI 下载：
 

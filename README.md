@@ -109,7 +109,7 @@ gw_ap_debug_platform/
 scripts\start_local.bat
 ```
 
-首次运行会自动调用 `scripts\bootstrap_local.bat` 创建 `.venv`、执行可复现的 `npm ci` 并安装后端依赖；以后仅当 `backend\pyproject.toml` 或 `frontend\package-lock.json` 改变时才重新安装。脚本会等待后端健康检查通过后再启动前端，并拒绝把占用 8000 端口的其他服务误当成本项目后端。
+首次运行会自动调用 `scripts\bootstrap_local.bat` 创建 `.venv`、按 `backend\uv.lock`/`backend\constraints.lock` 安装锁定的 Python 依赖，并执行可复现的 `npm ci`；以后仅当 Python 配置/锁文件或 `frontend\package-lock.json` 改变时才重新安装。脚本会等待后端健康检查通过后再启动前端，并拒绝把占用 8000 端口的其他服务误当成本项目后端。
 
 换电脑、更新代码或启动失败时，可先双击：
 
@@ -179,10 +179,13 @@ cp .env.example .env
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # Linux: source .venv/bin/activate
-pip install -e "./backend[dev]"
+pip install --upgrade --constraint backend/constraints.lock pip
+pip install --constraint backend/constraints.lock -e "./backend[dev]"
 cd backend
 uvicorn app.main:app --reload --port 8000
 ```
+
+维护者修改 `backend/pyproject.toml` 后，应运行 `scripts\refresh_python_lock.bat` 更新跨平台锁文件；`scripts\refresh_python_lock.bat -Check` 只检查、不修改。
 
 新终端：
 

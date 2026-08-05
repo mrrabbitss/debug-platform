@@ -17,7 +17,8 @@ def test_compose_declares_postgresql_qdrant_and_loopback_ports() -> None:
 
 def test_backend_image_contains_migration_configuration() -> None:
     dockerfile = (PROJECT_ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
-    assert "COPY pyproject.toml alembic.ini ./" in dockerfile
+    assert "COPY pyproject.toml uv.lock constraints.lock alembic.ini ./" in dockerfile
+    assert "--constraint constraints.lock" in dockerfile
     assert "/api/v1/health/ready" in dockerfile
 
 
@@ -28,6 +29,8 @@ def test_ci_workflow_exists() -> None:
     assert "windows-latest" in content
     assert "RUN_EXTERNAL_SERVICE_TESTS" in content
     assert "runtime_smoke.ps1" in content
+    assert "uv lock --project backend --check" in content
+    assert "--constraint backend/constraints.lock" in content
 
 
 def test_vscode_client_uses_secret_storage_and_accepts_extensionless_logs() -> None:
