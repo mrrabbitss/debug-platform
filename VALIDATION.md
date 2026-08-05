@@ -17,6 +17,11 @@ Last validated: 2026-08-05 on Windows 11.
 - Vue TypeScript check and production Vite build: passed;
 - VS Code extension TypeScript compile: passed;
 - Isolated Win11 runtime smoke: passed.
+- GitHub PR CI: one deduplicated run, all 9 jobs passed across Ubuntu, Windows,
+  PostgreSQL/Qdrant, Docker, dependency audit and runtime smoke;
+- GitHub `Protect main` ruleset `20426708`: active and evaluated for `main`;
+  pull requests and the latest 9 CI contexts are required, while deletion and
+  non-fast-forward updates are blocked.
 - Hugging Face access probe: mirror API and verified curl fallback passed; the
   local `hf` CLI reproduced `LocalEntryNotFoundError` as expected.
 

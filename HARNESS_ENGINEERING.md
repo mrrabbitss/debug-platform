@@ -36,8 +36,8 @@ Harness 的目标不是让模型自由度无限增大，而是让每一步都有
 - [x] CI 只在 `main` push 或面向 `main` 的 PR 运行，消除开发分支重复任务；
 - [x] `.gitattributes` 固定 Win11/Linux 行尾，降低跨电脑无意义冲突；
 - [x] PR 模板、CODEOWNERS 和 Dependabot 配置；
-- [ ] GitHub `main` ruleset：必须 PR、必须最新 CI、禁止删除和 force push；
-  该项只在本轮代码 CI 全绿后通过仓库 API 启用。
+- [x] GitHub `main` ruleset：必须 PR、必须最新 CI、禁止删除和 force push；
+  `Protect main`（Ruleset `20426708`）在本轮 9 项远端 CI 全绿后启用，无绕过角色。
 
 ## 3. P1：质量、可观测性和架构约束
 

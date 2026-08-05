@@ -315,7 +315,8 @@ Chat 模型，本地 BGE Embedding 和 Qwen3 Reranker 不具备生成能力，�
 - [x] 分支/PR CI 去重，同时保留面向 `main` 的 PR、`main` push 和手工触发；
 - [x] `.gitattributes`、PR 模板、CODEOWNERS 和 Python/npm/Actions/Docker Dependabot；
 - [x] Workflow allowlist 补齐日志上传/解析/报告和 AI 案例提炼 API，并声明证据与人工 DRAFT 门禁；
-- [ ] GitHub `main` ruleset；只有本次 PR 的新 CI 全绿后才启用。
+- [x] GitHub `main` ruleset；本次 PR 的 9 项新 CI 全绿后启用，必须 PR、最新 CI，
+  并禁止删除和 force push；单维护者场景不强制他人批准。
 
 本轮本地 `Full` 验证：15 个步骤全部通过，包含 Harness 11 项契约、`122 passed,
 1 skipped`、前端生产构建、扩展编译、三类依赖审计、Doctor 和隔离运行冒烟。
