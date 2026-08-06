@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "corpus_id": "golden-ap-auth-001",
+  "description": "Synthetic, content-safe incident corpus for deterministic parser, curation, graph, memory, RAG and agent trajectory gates.",
+  "privacy": {
+    "synthetic_only": true,
+    "contains_company_data": false,
+    "allowed_identifiers": ["GOLDEN-AP-01", "192.0.2.10", "AUTH_TIMEOUT"]
+  },
+  "documents": [
+    "case/error.txt",
+    "case/analysis.html",
+    "case/solution.docx",
+    "case/validation.pdf"
+  ],
+  "fixture_sha256": {
+    "case/solution.docx": "ed72d9af7e74a3f7350dc035b95090fb037070f556f12ecf50f09066414fb219",
+    "case/validation.pdf": "20d57a81366bf9b0a0ee6431d31338e706f73541b04f6ad755a46b0b9b27d734"
+  },
+  "parser": {
+    "path": "logs/collectDebuginfo_golden",
+    "parser_id": "huawei-collectdebuginfo",
+    "max_duration_ms": 1000,
+    "expected_events": [
+      {"event_code": "COLLECT_COMMAND", "line_start": 3, "line_end": 3, "timestamp_raw": null},
+      {"event_code": "WLAN_DISCONNECTED", "line_start": 8, "line_end": 9, "timestamp_raw": "2026-03-02 03:29:17.483"},
+      {"event_code": "AUTH_FAILED", "line_start": 10, "line_end": 10, "timestamp_raw": "2026-03-02 03:29:18.100"},
+      {"event_code": "DHCP_FAILED", "line_start": 11, "line_end": 11, "timestamp_raw": "2026-03-02 03:29:19.200"},
+      {"event_code": "HUAWEI_RUNTIME_LOG", "line_start": 12, "line_end": 12, "timestamp_raw": "2026-03-02 03:29:20.300"}
+    ]
+  },
+  "curation": {
+    "required_sections": [
+      "错误形式",
+      "日志分析",
+      "错误定位",
+      "解决方案",
+      "验证结果",
+      "适用范围与限制",
+      "来源证据"
+    ],
+    "required_facts": [
+      "AUTH_TIMEOUT",
+      "shared-key mismatch",
+      "Back up the configuration",
+      "authentication succeeds"
+    ],
+    "forbidden_claims": [
+      "firmware defect confirmed",
+      "replace the AP hardware",
+      "customer outage",
+      "INVISIBLE_PROMPT_INJECTION"
+    ],
+    "min_line_citations": 4,
+    "max_duration_ms": 3000
+  },
+  "code_graph": {
+    "expected_edges": [
+      ["AuthSession.authenticate", "verify_shared_key", "CALLS"],
+      ["WifiAuthenticator", "Authenticator", "IMPLEMENTS"],
+      ["RecoveryWorker", "BaseWorker", "INHERITS"],
+      ["RecoveryWorker", "BaseWorker", "REFERENCES"]
+    ]
+  },
+  "commit_graph": {
+    "query": "fix authentication timeout shared key",
+    "expected_path": ["query", "commit", "auth.py", "verify_shared_key"]
+  },
+  "memory": {
+    "query": "similar AUTH_TIMEOUT shared key incident",
+    "must_reuse": ["MEM-procedural-auth"],
+    "must_not_reuse": ["MEM-failure-other-case", "MEM-secret-cross-case"]
+  },
+  "rag": {
+    "query": "AUTH_TIMEOUT shared-key mismatch recovery",
+    "top_k": 3,
+    "expected_evidence_ids": ["GOLD-KB-AUTH"],
+    "minimums": {
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "ndcg_at_k": 1.0,
+      "citation_accuracy": 1.0
+    }
+  },
+  "agentic_search": {
+    "query": "Which commit fixed the AUTH_TIMEOUT shared-key call path?",
+    "expected_modules": ["knowledge", "memory", "code", "commit"],
+    "max_hops": 2,
+    "max_steps": 8,
+    "expected_stop_reason": "COMPLETED",
+    "max_duration_ms": 3000
+  }
+}

@@ -146,6 +146,31 @@ class KnowledgeRollbackRequest(BaseModel):
     change_summary: str = Field(default="", max_length=512)
 
 
+class KnowledgeCurationChatRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=20_000)
+    expected_draft_version: int = Field(ge=1)
+
+
+class KnowledgeCurationDraftUpdate(BaseModel):
+    markdown: str = Field(min_length=20, max_length=500_000)
+    title: str | None = Field(default=None, max_length=512)
+    change_summary: str = Field(default="手工修订案例草稿", max_length=512)
+    expected_draft_version: int = Field(ge=1)
+
+
+class KnowledgeCurationConfirmRequest(BaseModel):
+    expected_draft_version: int = Field(ge=1)
+
+
+class KnowledgeCurationRetryRequest(BaseModel):
+    model_profile_id: str | None = Field(default=None, max_length=40)
+    consent_model_egress: bool = False
+
+
+class KnowledgeCurationRestoreRequest(BaseModel):
+    expected_draft_version: int = Field(ge=1)
+
+
 class KnowledgeRevisionOut(BaseModel):
     id: str
     document_id: str
@@ -311,6 +336,18 @@ class JobOut(ORMModel):
     message: str
     result_json: str
     error_message: str | None
+    idempotency_key: str | None
+    attempt: int
+    max_attempts: int
+    available_at: datetime
+    lease_owner: str | None
+    lease_expires_at: datetime | None
+    heartbeat_at: datetime | None
+    deadline_at: datetime | None
+    timeout_seconds: int
+    resource_limits_json: str
+    dead_letter_at: datetime | None
+    dead_letter_reason: str | None
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None

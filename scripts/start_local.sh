@@ -7,7 +7,8 @@ if [ ! -x .venv/bin/python ]; then
   python -m venv .venv
 fi
 source .venv/bin/activate
-python -m pip install -e './backend[dev]'
+python -m pip install --upgrade --constraint backend/constraints.lock pip
+python -m pip install --constraint backend/constraints.lock -e './backend[dev]'
 ( cd frontend && npm ci )
 ( cd backend && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 ) &
 BACKEND_PID=$!

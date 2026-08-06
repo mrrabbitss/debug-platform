@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
 import type {
@@ -8,6 +9,8 @@ import type {
   KnowledgeDocument,
   KnowledgeRevision
 } from '../types'
+
+const router = useRouter()
 
 const documents = ref<KnowledgeDocument[]>([])
 const categories = ref<KnowledgeCategory[]>([])
@@ -94,7 +97,7 @@ function errorText(error: any) {
 
 async function waitForJob(initialJob: Job): Promise<Job> {
   let job = initialJob
-  while (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)) {
+  while (!['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(job.status)) {
     await new Promise(resolve => window.setTimeout(resolve, 1000))
     job = (await api.get(`/jobs/${job.id}`)).data
   }
@@ -463,6 +466,7 @@ onMounted(load)
       <h1 class="page-title" style="margin-right:auto">分层知识库</h1>
       <el-button type="primary" @click="openCreateDocument">新增知识</el-button>
       <el-button type="success" plain @click="openFaultCaseTemplate">故障案例模板</el-button>
+      <el-button type="warning" plain @click="router.push('/knowledge/curation')">AI 文件夹提炼</el-button>
       <el-button @click="openUpload">上传文件</el-button>
       <el-button @click="load">刷新</el-button>
     </div>

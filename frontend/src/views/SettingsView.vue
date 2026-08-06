@@ -238,7 +238,7 @@ async function testProfile(profile: ModelProfile) {
 
 async function pollJob(job: Job) {
   let current = job
-  while (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(current.status)) {
+  while (!['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(current.status)) {
     await new Promise(resolve => setTimeout(resolve, 1000))
     current = (await api.get(`/jobs/${job.id}`)).data
   }

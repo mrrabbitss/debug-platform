@@ -256,7 +256,7 @@ function watchJob(job: Job) {
     try {
       const { data } = await api.get(`/jobs/${job.id}`)
       currentJob.value = data
-      if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(data.status)) {
+      if (['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(data.status)) {
         jobTimer.value = null
         if (data.status === 'COMPLETED') ElMessage.success('任务执行完成')
         else if (data.status === 'CANCELLED') ElMessage.warning('任务已取消')
@@ -465,13 +465,13 @@ onBeforeUnmount(() => {
 
     <el-alert v-if="caseAccess && !canEditCase" type="info" :closable="false" title="当前账号对这个案例只有只读权限。" style="margin-bottom:14px" />
 
-    <el-alert v-if="currentJob" :closable="false" :type="currentJob.status === 'FAILED' ? 'error' : currentJob.status === 'CANCELLED' ? 'warning' : 'info'" style="margin-bottom:14px">
+    <el-alert v-if="currentJob" :closable="false" :type="['FAILED', 'DEAD_LETTER'].includes(currentJob.status) ? 'error' : currentJob.status === 'CANCELLED' ? 'warning' : 'info'" style="margin-bottom:14px">
       <template #title>{{ currentJob.kind }}：{{ currentJob.message || currentJob.status }}</template>
-      <el-progress :percentage="currentJob.progress" :status="currentJob.status === 'FAILED' ? 'exception' : undefined" />
+      <el-progress :percentage="currentJob.progress" :status="['FAILED', 'DEAD_LETTER'].includes(currentJob.status) ? 'exception' : undefined" />
       <pre v-if="currentJob.error_message" class="mono">{{ currentJob.error_message }}</pre>
       <div class="toolbar" style="margin-top:8px">
         <el-button v-if="canEditCase && ['QUEUED', 'RUNNING'].includes(currentJob.status)" size="small" type="warning" @click="cancelCurrentJob">安全取消</el-button>
-        <el-button v-if="canEditCase && ['FAILED', 'CANCELLED'].includes(currentJob.status)" size="small" type="primary" @click="retryCurrentJob">重试</el-button>
+        <el-button v-if="canEditCase && ['FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(currentJob.status)" size="small" type="primary" @click="retryCurrentJob">重试</el-button>
       </div>
     </el-alert>
 

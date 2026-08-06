@@ -30,6 +30,11 @@ class StorageService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def curation_dir(self, session_id: str) -> Path:
+        path = self.root / "curations" / session_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def report_dir(self, case_id: str) -> Path:
         path = self.root / "reports" / case_id
         path.mkdir(parents=True, exist_ok=True)
@@ -72,6 +77,9 @@ class StorageService:
     def remove_repository(self, repository_id: str) -> bool:
         return self._remove_managed_tree(self.root / "repositories" / repository_id)
 
+    def remove_curation(self, session_id: str) -> bool:
+        return self._remove_managed_tree(self.root / "curations" / session_id)
+
     def remove_case_reports(self, case_id: str) -> bool:
         return self._remove_managed_tree(self.root / "reports" / case_id)
 
@@ -109,6 +117,24 @@ class StorageService:
             upload.file,
             target,
             max_size,
+        )
+
+    async def save_upload_to_path(
+        self,
+        upload: UploadFile,
+        target: Path,
+        *,
+        max_size: int | None = None,
+    ) -> tuple[Path, int, str]:
+        resolved = target.resolve()
+        if resolved == self.root or self.root not in resolved.parents:
+            raise ValueError("Upload target escapes the configured storage root")
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return await run_in_threadpool(
+            self._copy_upload_stream_limited,
+            upload.file,
+            resolved,
+            max_size or get_settings().max_upload_bytes,
         )
 
     @staticmethod

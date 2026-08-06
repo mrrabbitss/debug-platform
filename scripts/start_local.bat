@@ -98,7 +98,7 @@ popd
 exit /b 0
 
 :dependency_stamp
-for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths=@('backend\pyproject.toml','frontend\package-lock.json'); $hashes=$paths | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }; [Console]::Write([string]::Join('-', $hashes))"`) do set "EXPECTED_STAMP=%%H"
+for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths=@('backend\pyproject.toml','backend\uv.lock','backend\constraints.lock','frontend\package-lock.json'); $hashes=$paths | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }; [Console]::Write([string]::Join('-', $hashes))"`) do set "EXPECTED_STAMP=%%H"
 if not defined EXPECTED_STAMP exit /b 1
 exit /b 0
 

@@ -175,6 +175,137 @@ class KnowledgeRevision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class KnowledgeCurationSession(Base):
+    __tablename__ = "knowledge_curation_sessions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), default="QUEUED", index=True)
+    title_hint: Mapped[str] = mapped_column(String(512), default="")
+    category_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_categories.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    device_type: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    device_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    firmware_range: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    module: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    trust_level: Mapped[str] = mapped_column(String(16), default="MEDIUM")
+    confidentiality: Mapped[str] = mapped_column(String(32), default="RESTRICTED")
+    model_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    model_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    source_manifest_json: Mapped[str] = mapped_column(Text, default="{}")
+    draft_title: Mapped[str] = mapped_column(String(512), default="")
+    draft_markdown: Mapped[str] = mapped_column(Text, default="")
+    draft_version: Mapped[int] = mapped_column(Integer, default=0)
+    validation_json: Mapped[str] = mapped_column(Text, default="{}")
+    open_questions_json: Mapped[str] = mapped_column(Text, default="[]")
+    knowledge_document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class KnowledgeCurationSourceFile(Base):
+    __tablename__ = "knowledge_curation_source_files"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "relative_path",
+            name="uq_knowledge_curation_source_path",
+        ),
+        Index(
+            "ix_knowledge_curation_sources_session_created",
+            "session_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_curation_sessions.id", ondelete="CASCADE"), index=True
+    )
+    source_ref: Mapped[str] = mapped_column(String(32))
+    relative_path: Mapped[str] = mapped_column(Text)
+    stored_path: Mapped[str] = mapped_column(Text)
+    extracted_text_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extraction_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extraction_truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    media_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    text_encoding: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    line_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_role: Mapped[str] = mapped_column(String(32), default="context", index=True)
+    included: Mapped[bool] = mapped_column(Boolean, default=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KnowledgeCurationRevision(Base):
+    __tablename__ = "knowledge_curation_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "version",
+            name="uq_knowledge_curation_revision_version",
+        ),
+        Index(
+            "ix_knowledge_curation_revisions_session_created",
+            "session_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_curation_sessions.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    markdown: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    change_summary: Mapped[str] = mapped_column(String(512), default="")
+    validation_json: Mapped[str] = mapped_column(Text, default="{}")
+    source_message_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KnowledgeCurationMessage(Base):
+    __tablename__ = "knowledge_curation_messages"
+    __table_args__ = (
+        Index(
+            "ix_knowledge_curation_messages_session_created",
+            "session_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_curation_sessions.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    citations_json: Mapped[str] = mapped_column(Text, default="[]")
+    draft_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunks"
 
@@ -604,8 +735,81 @@ class DiagnosisFeedback(Base):
     )
 
 
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        Index("ix_agent_runs_case_created", "case_id", "created_at"),
+        Index("ix_agent_runs_resource_created", "resource_type", "resource_id", "created_at"),
+        Index("ix_agent_runs_operation_status", "operation", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    case_id: Mapped[str | None] = mapped_column(
+        ForeignKey("cases.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    resource_type: Mapped[str] = mapped_column(String(64), default="case", index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    operation: Mapped[str] = mapped_column(String(64), index=True)
+    execution_mode: Mapped[str] = mapped_column(String(32), default="deterministic")
+    status: Mapped[str] = mapped_column(String(32), default="RUNNING", index=True)
+    model_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    model_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    model_config_json: Mapped[str] = mapped_column(Text, default="{}")
+    prompt_version: Mapped[str] = mapped_column(String(128), default="")
+    input_summary_hash: Mapped[str] = mapped_column(String(64))
+    output_summary_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    stop_reason: Mapped[str] = mapped_column(String(128), default="UNKNOWN", index=True)
+    approval_status: Mapped[str] = mapped_column(String(64), default="NOT_REQUIRED", index=True)
+    replay_of_run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    replay_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    score_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentTraceEvent(Base):
+    __tablename__ = "agent_trace_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence", name="uq_agent_trace_event_sequence"),
+        Index("ix_agent_trace_events_run_created", "run_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    stage: Mapped[str] = mapped_column(String(128), index=True)
+    tool_name: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="COMPLETED", index=True)
+    input_summary_hash: Mapped[str] = mapped_column(String(64))
+    output_summary_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    stop_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        Index("ix_jobs_idempotency_key", "idempotency_key"),
+        Index("ix_jobs_dispatch", "status", "available_at", "created_at"),
+        Index("ix_jobs_lease", "status", "lease_expires_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     kind: Mapped[str] = mapped_column(String(64), index=True)
@@ -615,6 +819,26 @@ class Job(Base):
     input_json: Mapped[str] = mapped_column(Text, default="{}")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    lease_owner: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deadline_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=1800)
+    resource_limits_json: Mapped[str] = mapped_column(Text, default="{}")
+    dead_letter_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    dead_letter_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

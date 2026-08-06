@@ -67,12 +67,12 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo [INFO] Installing backend dependencies...
-".venv\Scripts\python.exe" -m pip install --upgrade pip
+".venv\Scripts\python.exe" -m pip install --upgrade --constraint "backend\constraints.lock" pip
 if errorlevel 1 (
   set "FAIL_STEP=Python package installer upgrade failed."
   goto :fail
 )
-".venv\Scripts\python.exe" -m pip install -e "backend[dev]"
+".venv\Scripts\python.exe" -m pip install --constraint "backend\constraints.lock" -e "backend[dev]"
 if errorlevel 1 (
   set "FAIL_STEP=Backend dependency installation failed."
   goto :fail
@@ -88,7 +88,7 @@ if errorlevel 1 (
 )
 popd
 
-for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths=@('backend\pyproject.toml','frontend\package-lock.json'); $hashes=$paths | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }; [Console]::Write([string]::Join('-', $hashes))"`) do set "DEPENDENCY_STAMP=%%H"
+for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths=@('backend\pyproject.toml','backend\uv.lock','backend\constraints.lock','frontend\package-lock.json'); $hashes=$paths | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }; [Console]::Write([string]::Join('-', $hashes))"`) do set "DEPENDENCY_STAMP=%%H"
 if not defined DEPENDENCY_STAMP (
   set "FAIL_STEP=Could not calculate the installed dependency fingerprint."
   goto :fail

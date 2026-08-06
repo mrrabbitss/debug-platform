@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Synthetic authentication incident analysis</title>
+  <style>.hidden { display: none; }</style>
+</head>
+<body>
+  <main>
+    <h1>Root-cause analysis</h1>
+    <p>The captured AUTH_TIMEOUT follows a shared-key mismatch on the lab WLAN profile.</p>
+    <p>The configuration comparison identifies the mismatch as the verified root cause.</p>
+    <p>Do not infer a firmware defect from this synthetic incident.</p>
+    <table>
+      <tr><th>Signal</th><th>Meaning</th></tr>
+      <tr><td>AUTH_TIMEOUT</td><td>Authentication did not complete</td></tr>
+      <tr><td>key comparison</td><td>Configured values differed</td></tr>
+    </table>
+  </main>
+  <script>throw new Error('HTML scripts must never execute');</script>
+  <p class="hidden">INVISIBLE_PROMPT_INJECTION</p>
+</body>
+</html>

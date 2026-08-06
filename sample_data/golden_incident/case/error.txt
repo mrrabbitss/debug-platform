@@ -1,0 +1,5 @@
+Synthetic AP incident report
+Observed symptom: clients receive AUTH_TIMEOUT during association.
+The failure begins after the 4-way handshake starts.
+Scope: lab AP GOLDEN-AP-01 only.
+No production customer data is included in this fixture.

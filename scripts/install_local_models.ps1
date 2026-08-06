@@ -219,7 +219,15 @@ Push-Location $projectRoot
 try {
     if (-not $VerifyOnly -and -not $SkipRuntimeInstall) {
         Write-Host "[INFO] Installing the optional local-model runtime..."
-        Invoke-CheckedPython @("-m", "pip", "install", "-e", "backend[local-models]")
+        Invoke-CheckedPython @(
+            "-m",
+            "pip",
+            "install",
+            "--constraint",
+            "backend\constraints.lock",
+            "-e",
+            "backend[local-models]"
+        )
     }
 
     if (-not $VerifyOnly) {

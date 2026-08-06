@@ -1,6 +1,6 @@
 # GW/AP 智能调试平台：架构、技术栈与迭代说明
 
-> 文档状态：2026-07-23，随仓库版本维护。
+> 文档状态：2026-08-05，随仓库版本维护。
 > 适用范围：当前 `debug-platform` 单体仓库，包括 Web 前端、后端 API、后台任务、VS Code 扩展、部署脚本和本地模型支持。
 
 ## 1. 项目定位
@@ -15,7 +15,7 @@
 - 本地单机优先，同时为 PostgreSQL、Qdrant 和 OpenAI-Compatible 模型网关保留扩展路径；
 - 上传、解析、诊断、模型外发和权限操作均设置明确的安全边界。
 
-项目当前属于“可运行的工程化内部诊断平台”，不是已经完成所有厂商格式适配的商业成品。最重要的后续工作仍然是真实日志样本回归、生产级身份体系、可观测性和分布式任务能力。
+项目当前属于“可运行的工程化内部诊断平台”，不是已经完成所有厂商格式适配的商业成品。仓库已具备合成 Golden/浏览器 E2E、Agent 轨迹、数据库任务租约和有界执行基础；最重要的后续工作仍然是真实日志私有回归、生产级身份体系、集中可观测和弹性 Worker。
 
 ## 2. 总体架构
 
@@ -73,7 +73,7 @@ flowchart TB
 | ORM 与迁移 | SQLAlchemy 2、Alembic | 数据访问、约束、SQLite/PostgreSQL 迁移 |
 | 数据库 | SQLite / PostgreSQL 17 | 本地默认 SQLite；Docker 部署默认 PostgreSQL |
 | HTTP 与模型 API | OpenAI Python SDK、HTTPX | OpenAI-Compatible Chat/Embedding 与 Qwen Rerank API |
-| 文档生成 | Jinja2、ReportLab、python-docx | HTML 预览、PDF、Word 报告 |
+| 文档生成与提取 | Jinja2、ReportLab、python-docx、pypdf、HTMLParser | HTML/PDF/Word 报告，以及案例材料的 HTML、DOCX、PDF 本地正文提取 |
 | 检索 | 自研 BM25/精确词项、scikit-learn HashingVectorizer | 无外部模型时的本地检索基线 |
 | 本地模型 | Sentence Transformers、Transformers | BGE Embedding、Qwen3 Reranker |
 | 向量服务 | Qdrant Client | 可选的向量镜像和查询加速 |
@@ -81,7 +81,7 @@ flowchart TB
 | 密钥保护 | cryptography / Fernet | 模型 API Key 加密保存 |
 | PostgreSQL 驱动 | psycopg 3 | PostgreSQL 连接 |
 
-后端依赖采用版本区间约束，锁定策略由 CI 和部署环境负责。大型本地模型依赖放在 `backend[local-models]` 可选依赖组中，避免基础安装强制下载 PyTorch 等大包。
+`backend/pyproject.toml` 保留可维护的兼容范围，`backend/uv.lock` 记录 Python 3.11+ 的跨平台精确解析，`backend/constraints.lock` 为现有 pip、Win11 启动脚本和 Docker 提供同一份固定版本约束。CI 会检查两份锁定结果没有漂移。大型本地模型依赖仍放在 `backend[local-models]` 可选依赖组中，基础安装不会下载 PyTorch 等大包，但安装模型运行时也会复用同一约束文件。
 
 ### 3.2 前端
 
@@ -100,6 +100,7 @@ flowchart TB
 - `CasesView.vue`：案例列表和创建；
 - `CaseDetailView.vue`：上传、解析、原文浏览、搜索、事件、时间线、诊断、报告和代码关联；
 - `KnowledgeView.vue`：知识分类树、文档新增、上传、修改、审核、版本和回滚；
+- `KnowledgeCurationView.vue`：文件夹上传、模型提炼、来源核对、人机纠错、草稿版本和人工确认；
 - `CognitiveSearchView.vue`：Agentic Search、可解释多跳路径、代码/Commit 图谱和三类记忆；
 - `QualityGovernanceView.vue`：领域 GraphRAG、检索评测集/运行和人工诊断反馈；
 - `SettingsView.vue`：Chat、Embedding、Reranker 模型配置、测试、激活和重建索引；
@@ -135,6 +136,8 @@ flowchart TB
 
 ```text
 debugplatform/
+├─ AGENTS.md                  # 项目地图、边界和完成标准
+├─ HARNESS_ENGINEERING.md     # Harness 状态、P1/P2 有序路线
 ├─ backend/
 │  ├─ app/
 │  │  ├─ api/                 # REST 路由
@@ -157,6 +160,7 @@ debugplatform/
 ├─ vscode-extension/          # VS Code 客户端
 ├─ scripts/                   # 启动、体检、冒烟、备份、用户和模型脚本
 ├─ docs/                      # 专题文档
+├─ workflow/                  # Agent allowlist 与配套 OpenAPI 合同
 ├─ models/                    # 本地模型，Git 忽略
 ├─ docker-compose.yml
 ├─ .env.example
@@ -167,10 +171,10 @@ debugplatform/
 
 ### 5.1 API 与访问控制
 
-`backend/app/api/routes.py` 仍承载基础系统、案例、附件、事件、诊断、知识、代码仓库、
-任务、模型和安全管理接口。新一轮已把知识治理、领域图谱和检索评测分别拆到
-`knowledge_governance.py`、`knowledge_graph.py` 和 `retrieval_evaluation.py`，
-由总路由统一挂载；旧路由仍需继续按领域拆分。
+`backend/app/api/routes.py` 现在只聚合案例、附件、事件、诊断、报告等核心接口；系统、
+知识库、代码仓、后台任务、知识提炼、知识治理、领域图谱、检索评测和 Agent 轨迹均由
+独立 `APIRouter` 挂载。聚合器从历史约 1,972 行降到约 622 行，并由架构 ratchet 阻止重新
+膨胀。
 
 鉴权支持三种模式：
 
@@ -239,15 +243,18 @@ RBAC 之外还有案例级成员关系。案例所有者或管理员可以授予
 
 任务元数据和状态持久化到 `jobs` 表，执行器使用进程内 `ThreadPoolExecutor`。它支持：
 
-- 活动任务去重；
+- 幂等键和活动任务去重；
+- 原子 lease 领取、heartbeat 和租约过期恢复；
 - 进度和消息；
 - 取消请求；
-- 失败信息；
-- 重试；
+- 超时、失败信息、指数退避重试和 dead-letter；
+- 输入、CPU、内存和墙钟资源预算；
 - 后端重启后恢复未完成任务；
 - 业务结果和任务完成状态在关键路径上协调提交。
 
-限制是：执行器只适合单后端进程。多个后端实例会缺少真正的分布式租约和队列语义。
+多个后端实例可安全竞争数据库租约；限制是执行线程仍位于 FastAPI 实例内，尚未形成可独立
+扩缩容的 Worker 控制平面。DOCX/PDF/HTML 等不可信文档已在带 Win11 Job Object 或 Linux
+rlimit 的独立进程抽取。
 
 ### 5.6 诊断、RAG 与证据校验
 
@@ -312,6 +319,10 @@ Python 使用标准 AST，其余语言主要使用正则和花括号扫描，不
 | `KnowledgeCategory` | 支持父子层级的知识分类 |
 | `KnowledgeDocument` | 诊断规则、历史问题、故障树、方案和参考资料 |
 | `KnowledgeRevision` | 不可变知识版本快照、内容哈希和变更说明 |
+| `KnowledgeCurationSession` | 文件夹提炼状态、模型快照、当前 Markdown 和最终知识关联 |
+| `KnowledgeCurationSourceFile` | 来源相对路径、原文/提取哈希、提取方式、页数、文本行号和纳入状态 |
+| `KnowledgeCurationRevision` | 每次模型/人工修订的不可变 Markdown、哈希和校验快照 |
+| `KnowledgeCurationMessage` | 提炼工作台的人类、模型和系统消息 |
 | `KnowledgeDerivation` | 来源案例/Skill 与派生分析方法的 lineage |
 | `KnowledgeChunk` | 可检索的知识分块 |
 | `KnowledgeEmbedding` | 按 Embedding Profile 隔离的向量 |
@@ -353,6 +364,10 @@ erDiagram
     REPOSITORY ||--o{ CODE_SYMBOL : indexes
     KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_CHUNK : splits
     KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_REVISION : versions
+    KNOWLEDGE_CURATION_SESSION ||--o{ KNOWLEDGE_CURATION_SOURCE_FILE : contains
+    KNOWLEDGE_CURATION_SESSION ||--o{ KNOWLEDGE_CURATION_REVISION : versions
+    KNOWLEDGE_CURATION_SESSION ||--o{ KNOWLEDGE_CURATION_MESSAGE : discusses
+    KNOWLEDGE_CURATION_SESSION o|--o| KNOWLEDGE_DOCUMENT : confirms_to
     KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_ENTITY_MENTION : evidences
     KNOWLEDGE_CATEGORY ||--o{ KNOWLEDGE_CATEGORY : nests
     KNOWLEDGE_CATEGORY ||--o{ KNOWLEDGE_DOCUMENT : classifies
@@ -380,7 +395,10 @@ erDiagram
 6. `0006` RBAC、令牌和案例成员；
 7. `0007` 代码/Commit 图谱、三类记忆和 Agentic Search；
 8. `0008` 代码/向量 generation、报告发布约束和导入状态；
-9. `0009` 知识版本审核、领域图谱、人工反馈和检索评测。
+9. `0009` 知识版本审核、领域图谱、人工反馈和检索评测；
+10. `0010` 大模型案例提炼会话、来源、修订和对话记录；
+11. `0011` Agent 运行与阶段轨迹；
+12. `0012` 后台任务幂等、租约、心跳、超时、资源和 dead-letter 字段。
 
 后端启动时会自动执行迁移。生产升级前仍应先备份，并禁止手工修改 `alembic_version`。
 
@@ -442,6 +460,8 @@ BM25 / 图多跳 / RRF / Embedding / 可选 Reranker
 - 诊断规则、协议规则、产品规则、安全规则；
 - 历史问题、故障树、解决方案；
 - 包含错误形式、日志分析、错误定位、解决方案和验证结果的结构化故障案例；
+- 从日志/现象/分析/方案文件夹生成带 `[SRC-xxxx:Lx-Ly]` 证据的 LLM 案例草稿；
+- 对提炼草稿执行模型多轮纠错、人工修改、不可变版本恢复和来源行号校验；
 - 错误分析 Skill，以及确定性提炼的可复用分析方法；
 - 产品资料和协议资料；
 - 设备、型号、固件、模块、可信度和保密级别元数据；
@@ -451,6 +471,13 @@ BM25 / 图多跳 / RRF / Embedding / 可选 Reranker
 新建、上传、编辑和回滚均进入 `DRAFT`，经过 `IN_REVIEW` 后才能发布为 `ACTIVE`。
 每次内容版本保存不可变快照和 SHA-256；数据库使用 `lock_version` 拒绝并发覆盖。
 编辑已发布文档时先切换为不可检索草稿，再提交新的分块/向量。
+
+文件夹提炼使用独立 staging 状态机。原始来源只写入本地 Storage；HTML 可见正文、DOCX
+段落/表格和 PDF 文本层先转换为带稳定行号的本地 UTF-8 sidecar，再经过长文抽样、敏感
+字段掩码和全局长度限制，才可发送到管理员明确选择的 API 模型。模型生成或
+对话修订只改变提炼会话；章节、来源编号和行号校验通过并经人工确认后，才创建
+`KnowledgeDocument(DRAFT, active=false)`。因此“生成”“人工确认”“知识审核发布”是
+三个独立门禁，模型不能直接污染在线检索。
 
 故障案例和故障树仍以 Markdown 文档为权威内容；来源与提炼分析方法之间保存派生
 lineage。领域图谱只从已发布知识的元数据和结构化章节提取可审计实体/关系，并以
@@ -489,7 +516,7 @@ models/
 1. 创建 `inference`、`embedding`、`reranker`；
 2. 确认项目 `.venv`；
 3. 设置 `$env:HF_ENDPOINT = "https://hf-mirror.com"`，并关闭误继承的离线模式；
-4. 安装固定兼容范围的 `backend[local-models]`，使 `.venv\Scripts\hf.exe` 可用；
+4. 按 `backend/constraints.lock` 安装锁定版本的 `backend[local-models]`，使 `.venv\Scripts\hf.exe` 可用；
 5. 锁定 BGE 和 Qwen3 的模型 revision；
 6. 先使用官方 CLI 下载 `config.json` 做轻量预检，成功后使用 CLI 下载：
 
@@ -682,6 +709,9 @@ Docker Compose 包含：
 | 2026-07-28 | 本次提交 | 认知检索与工程图谱 | 结构化故障案例、方法提炼、稳定 ID 的代码/Commit 图谱、三类记忆和 Agentic Search；同步消除 VS Code 扩展高危传递依赖 |
 | 2026-07-29 | 本次提交 | 异步导入与原子索引 | 仓库/知识大文件后台导入、代码图谱与向量 generation 原子切换、有界混合检索、模块均衡、报告原子发布和 ZIP 清理 |
 | 2026-07-30 | 本次提交 | P1/P2 质量与知识治理 | 知识版本审核和数据库乐观锁、已审核知识领域图谱/GraphRAG、可重复检索评测、人工反馈双重审批和独立 API 路由 |
+| 2026-08-03 | 本地在研 | 大模型文件夹案例提炼 | 从多文件故障材料生成可引用 Markdown，支持多轮人机纠错、版本留痕和确认后进入知识草稿 |
+| 2026-08-05 | 本次提交 | Harness Engineering P0 | 统一验证入口、仓库契约、CI 去重、依赖治理、Agent 地图和 main 保护规则 |
+| 2026-08-05 | 本次提交 | Harness P1 与有界 Agent 基础 | 合成 Golden、Fake Model、Playwright、统一轨迹、覆盖率/架构门禁、模块拆分、任务租约、文档进程沙箱和类型化执行器 |
 
 这段迭代体现了项目从“功能原型”逐步转向“可在多台 Win11 电脑复现、可诊断、可回滚、可审计”的工程化过程。
 
@@ -713,15 +743,17 @@ Parser、模型 Profile、知识分类、任务类型、报告格式和静态工
 
 ## 13. 当前缺点与技术债
 
-### 13.1 API 路由文件过大
+### 13.1 剩余核心案例路由仍可继续细分
 
-多数旧接口仍集中在 `routes.py`，领域边界虽在 Service 层存在，但路由层继续增长会增加
-合并冲突和权限遗漏风险。本轮已把知识治理、领域图谱和检索评测拆成独立 APIRouter；
-后续仍应继续拆分 `cases`、`artifacts`、基础 `knowledge`、`models` 和 `security`。
+系统、知识、代码仓和任务等领域已从 `routes.py` 拆出，当前聚合器低于默认单文件上限。
+案例、附件、事件、诊断和报告之间仍有较强协作，未来可在保持案例权限依赖一致的前提下继续
+拆分；当前行数、复杂度和反向导入已由 CI ratchet 约束。
 
-### 13.2 后台任务不适合多实例
+### 13.2 后台任务仍缺少独立弹性 Worker
 
-任务状态在数据库，执行线程却仍在单进程。本轮已补应用生命周期安全关闭和大文件后台任务，但多副本部署仍缺少分布式租约、可见性超时、死信和集中调度。应引入 Redis/Celery、Dramatiq、RQ，或实现 PostgreSQL `SKIP LOCKED` 的数据库队列。
+数据库任务已具备 lease、heartbeat、幂等、退避和 dead-letter，多 FastAPI 实例不会正常领取
+同一任务；执行线程仍随 API 进程部署。高并发生产环境可把同一领取协议迁移到独立 Worker，
+或接入 Redis/Celery、Dramatiq、RQ 等专用队列。
 
 ### 13.3 SQLite 中保存 JSON 向量的规模有限
 
@@ -736,7 +768,9 @@ SQLite 回退可靠，但向量仍以 JSON 文本保存，文档数量大时存�
 
 ### 13.5 Parser 的真实产品覆盖仍有限
 
-内置华为 Parser 基于目前掌握的文本特征。不同产品线、版本和内部模块可能存在字段变化。缺少来自真实设备、经过脱敏的 Golden Corpus，是当前诊断准确率最大的风险。
+内置华为 Parser 基于目前掌握的文本特征。仓库合成 Golden 可以阻断代码回归，但不能代表
+不同产品线、版本和内部模块的全部字段变化；缺少来自真实设备、经过审批脱敏的私有 Golden
+Corpus，仍是当前诊断准确率最大的风险。
 
 ### 13.6 代码图谱仍是启发式语义模型
 
@@ -744,11 +778,11 @@ Python 使用 AST，其余语言当前主要使用安全语法启发式。对常
 继承和实现关系有效，但复杂 C++ 宏展开、条件编译、模板、重载以及动态语言调用仍会
 缺边或产生歧义边。后续应接入 Clang/Tree-sitter/Language Server 和编译数据库。
 
-### 13.7 前端自动化不足
+### 13.7 前端组件级覆盖仍有限
 
-前端有 TypeScript 构建检查、Windows 运行时冒烟和人工控制的真实浏览器流程验证，
-但仓库内没有可在 CI 自动重复的 Playwright/Cypress 页面级回归，也没有组件测试。
-页面逻辑较多集中在大型 View 中，Pinia 尚未承担统一任务、权限和模型状态。
+Playwright 已在 Windows/Ubuntu CI 固化知识提炼和轨迹完整流程，并把控制台错误设为失败；
+提炼 View 也拆出类型化 API Client、Composable 和领域组件。当前仍缺少更细粒度的组件测试，
+其他页面的浏览器关键路径可继续扩展。
 
 ### 13.8 本地模型资源要求和供应链仍需治理
 
@@ -765,6 +799,15 @@ CPU 可以加载模型，但 Qwen3 Reranker 首次启动慢、内存占用高。
 ### 13.11 文件存储仅为本地文件系统
 
 单机简单可靠，但多实例需要共享对象存储、生命周期、版本和防病毒扫描。当前未集成 S3/MinIO，也没有上传恶意内容扫描。
+
+### 13.12 案例提炼的文档类型与上下文仍有限
+
+当前支持文本/无后缀文本、HTML/HTM、Word `.docx` 和带文本层的 PDF。旧式 `.doc`、扫描
+PDF、图片、电子表格和抓包文件会保留但不会提取，其中 OCR 尚未实现。HTML 不执行脚本、
+样式或远程资源；DOCX 只读取正文段落和表格；PDF 的复杂多栏布局可能出现阅读顺序偏差。
+长材料使用头部、关键词行和尾部的确定性抽样，能控制 Token 和数据出站量，但可能遗漏
+没有命中关键词的关键上下文。后续应增加 OCR、PCAP 摘要、来源级选择/排除、发送前证据
+预览和面向不同产品的提炼评测集。当前也只有 API Chat 模型，没有本地生成模型运行器。
 
 ## 14. 改进空间与建议路线
 
@@ -803,13 +846,13 @@ CPU 可以加载模型，但 Qwen3 Reranker 首次启动慢、内存占用高。
 
 | 能力 | 状态 | 当前结果与下一步 |
 | --- | --- | --- |
-| 拆分大型 API 路由和前端 View | `IN_PROGRESS` | 已拆知识治理、领域图谱、检索评测路由；基础 `routes.py` 和大型 View 仍需继续拆分 |
-| 分布式任务队列和独立 Worker | `PLANNED` | 当前仍是数据库状态加单进程线程池 |
+| 拆分大型 API 路由和前端 View | `AVAILABLE` | system/knowledge/repository/jobs、知识提炼子模块和前端 API/composable/component 已拆分，并有行数 ratchet |
+| 多实例任务领取 | `AVAILABLE` | 数据库 lease/heartbeat/dead-letter 已完成；独立弹性 Worker 仍是后续增强 |
 | 生产统一 PostgreSQL | `PLANNED` | Compose 和 CI 已验证 PostgreSQL；尚未禁止生产 SQLite 或固化容量参数 |
 | S3/MinIO 对象存储 | `PLANNED` | 当前仍是单机文件目录 |
 | Qdrant 正式服务与可重放索引 | `IN_PROGRESS` | 已有 generation、失败回滚和有界查询；仍需任务租约、对账和自动修复 |
-| Playwright 端到端测试 | `PLANNED` | 本轮完成人工真实浏览器冒烟，尚未形成仓库内 CI 用例 |
-| Parser 版本化插件与样本契约 | `PLANNED` | 现有注册表可扩展，但包边界和 Golden Contract 未完成 |
+| Playwright 端到端测试 | `AVAILABLE` | Windows/Ubuntu CI 执行混合文档上传、预览、提炼、纠错、确认 DRAFT、轨迹及控制台零错误 |
+| Parser 版本化插件与样本契约 | `LIMITED` | 现有注册表和合成 Golden Contract 可扩展；真实厂商私有样本仍需内网治理 |
 | Tree-sitter / Clang AST | `PLANNED` | 当前 Python AST，其余语言主要为启发式解析 |
 | 检索与诊断评测 | `AVAILABLE` | 已有可重复检索评测和五项指标；仍需最终诊断语义评分与内网回归门禁 |
 | GPU、量化和模型懒加载 | `PLANNED` | 当前由 Profile 手工设置设备和批量 |
@@ -857,7 +900,7 @@ flowchart LR
 - 上传、解压、路径和大小安全；
 - 无后缀、少量 NUL、华为日志和大日志；
 - Parser 注册和解析原子性；
-- Job 去重、取消、恢复和失败状态；
+- Job 幂等、lease/heartbeat、取消、退避重试、dead-letter、恢复和资源预算；
 - RAG、模型 Profile、模型快照和 LLM 输出校验；
 - 故障案例结构检查、方法派生及删除一致性；
 - 知识审核状态机、不可变版本、并发乐观锁和历史恢复；
@@ -865,6 +908,9 @@ flowchart LR
 - 多语言代码四类关系、Commit/Unicode 路径和 Git Bundle；
 - 三类记忆的去重、脱敏、案例隔离和复用；
 - Agentic Search 规划、融合、Dense/Reranker 回退和多跳路径；
+- 类型化 Tool Registry、角色/写审批、执行预算、重试熔断取消和显式停止原因；
+- Agent 轨迹摘要哈希、证据、审批状态、前端查看和脱敏只读重放；
+- 不可信 DOCX/PDF/HTML 的 Win11/Linux 受限独立进程抽取；
 - 检索评测指标、配置快照及评测期间零记忆写入；
 - 人工反馈审核和生成待二次审核知识草稿；
 - 迁移、外键和数据库完整性；
@@ -875,14 +921,23 @@ flowchart LR
 GitHub Actions 当前验证：
 
 - Windows/Ubuntu 后端测试、Ruff 和 compileall；
+- Windows/Ubuntu 75% 后端行覆盖率门禁和 coverage.xml；
 - Windows/Ubuntu 前端构建；
+- Windows/Ubuntu Playwright 混合文档与轨迹 E2E；
+- 九类 Golden Dataset 质量、耗时、引用和停止原因门禁；
 - VS Code 扩展编译；
 - Python 与 npm 依赖审计；
 - PostgreSQL/Qdrant 集成测试；
 - 后端和前端 Docker 构建；
 - Windows 前后端完整启动冒烟。
 
-仍应补充真实模型加载 CI、前端 E2E 和经过审批的真实日志回归。由于模型权重大、公司日志敏感，这两类测试更适合在企业内网 Runner 执行。
+仓库还提供 `scripts\validate_all.bat Fast|Full|External` 作为 Win11 的统一执行入口，
+把每一步的退出码、耗时和日志写入 `artifacts\validation`。CI 同时执行
+`scripts/check_repo_harness.py`，防止文档断链、能力总账遗漏、触发器重复、Dependabot
+覆盖不足以及 `workflow/skill.yaml` 与 `workflow/openapi.yaml` 漂移。根目录
+`AGENTS.md` 只保存短项目地图和强约束，详细路线由 `HARNESS_ENGINEERING.md` 维护。
+
+仍应补充真实模型加载 CI、更多页面/组件 E2E 和经过审批的真实日志回归。由于模型权重大、公司日志敏感，这两类测试更适合在企业内网 Runner 执行。
 
 ## 17. 架构结论
 
@@ -892,10 +947,10 @@ GitHub Actions 当前验证：
 
 当前最大的风险不是“功能数量不够”，而是三个工程化问题：
 
-1. 缺少足够多的真实设备 Golden Corpus；
-2. 单进程任务、本地文件和 SQLite 回退不适合大规模多实例；
+1. 公开仓库只有合成 Golden Corpus，仍缺少足够多的真实设备私有回归样本；
+2. 执行线程、本地文件和 SQLite 回退不适合大规模弹性部署；
 3. 生产级 SSO、可观测、模型制品治理和安全扫描仍需接入公司基础设施。
 
-后续迭代应优先把真实日志 Golden Corpus、自动 E2E、评测回归门禁和分布式执行补齐，
+后续迭代应优先扩展企业内网真实日志回归、独立 Worker、集中观测和任务控制 DAG，
 再扩展复杂图谱推理和多租户能力。这样可以避免功能不断增加，但准确率、可复现性和
 生产安全无法证明。

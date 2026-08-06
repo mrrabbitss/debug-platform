@@ -96,7 +96,11 @@ def test_job_runner_deduplicates_active_inputs(tmp_path: Path, monkeypatch) -> N
 def test_job_error_is_sanitized_for_api(tmp_path: Path, monkeypatch) -> None:
     engine, session_factory = make_session_factory(tmp_path)
     monkeypatch.setattr(jobs, "SessionLocal", session_factory)
-    runner = jobs.JobRunner(max_workers=1)
+    runner = jobs.JobRunner(
+        max_workers=1,
+        dispatch_seconds=0.01,
+        retry_base_seconds=0.01,
+    )
 
     def failing_job(ctx):
         raise RuntimeError("safe failure message")
@@ -106,10 +110,124 @@ def test_job_error_is_sanitized_for_api(tmp_path: Path, monkeypatch) -> None:
         job = runner.submit(db, "failure", failing_job, input_data={})
 
     failed = wait_for_terminal(session_factory, job.id)
-    assert failed.status == "FAILED"
+    assert failed.status == "DEAD_LETTER"
+    assert failed.attempt == failed.max_attempts == 3
     assert failed.error_message == "safe failure message"
+    assert failed.dead_letter_reason == "safe failure message"
     assert "Traceback" not in failed.error_message
 
+    runner.shutdown()
+    engine.dispose()
+
+
+def test_job_runner_retries_with_backoff_and_then_succeeds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_factory = make_session_factory(tmp_path)
+    monkeypatch.setattr(jobs, "SessionLocal", session_factory)
+    runner = jobs.JobRunner(
+        max_workers=1,
+        dispatch_seconds=0.01,
+        retry_base_seconds=0.01,
+    )
+    attempts = 0
+
+    def transient_job(ctx):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise RuntimeError("transient")
+        return {"attempts": attempts}
+
+    runner.register("transient", transient_job, (), max_attempts=3)
+    with session_factory() as db:
+        job = runner.submit(db, "transient", transient_job, input_data={})
+
+    completed = wait_for_terminal(session_factory, job.id)
+    assert completed.status == "COMPLETED"
+    assert completed.attempt == 3
+    assert completed.result_json == '{"attempts": 3}'
+    runner.shutdown()
+    engine.dispose()
+
+
+def test_job_lease_heartbeat_and_idempotency_key(tmp_path: Path, monkeypatch) -> None:
+    engine, session_factory = make_session_factory(tmp_path)
+    monkeypatch.setattr(jobs, "SessionLocal", session_factory)
+    runner = jobs.JobRunner(
+        max_workers=1,
+        lease_seconds=10,
+        heartbeat_seconds=1,
+        dispatch_seconds=0.01,
+    )
+    release = threading.Event()
+    started = threading.Event()
+
+    def leased_job(ctx, value):
+        started.set()
+        release.wait(timeout=3)
+        return {"value": value}
+
+    runner.register("leased", leased_job, ("value",))
+    with session_factory() as db:
+        first = runner.submit(
+            db,
+            "leased",
+            leased_job,
+            11,
+            input_data={"value": 11},
+            idempotency_key="same-request",
+        )
+    assert started.wait(timeout=2)
+    with session_factory() as db:
+        duplicate = runner.submit(
+            db,
+            "leased",
+            leased_job,
+            11,
+            input_data={"value": 11},
+            idempotency_key="same-request",
+        )
+        running = db.get(Job, first.id)
+        assert duplicate.id == first.id
+        assert running.lease_owner == runner.worker_id
+        assert running.lease_expires_at is not None
+        assert running.heartbeat_at is not None
+
+    release.set()
+    assert wait_for_terminal(session_factory, first.id).status == "COMPLETED"
+    runner.shutdown()
+    engine.dispose()
+
+
+def test_job_input_quota_is_enforced_before_persistence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_factory = make_session_factory(tmp_path)
+    monkeypatch.setattr(jobs, "SessionLocal", session_factory)
+    runner = jobs.JobRunner(
+        max_workers=1,
+        dispatch_seconds=0.01,
+        retry_base_seconds=0.01,
+    )
+    runner.register("quota", lambda ctx, value: value, ("value",))
+    with session_factory() as db:
+        try:
+            runner.submit(
+                db,
+                "quota",
+                lambda ctx, value: value,
+                "too long",
+                input_data={"value": "too long"},
+                resource_limits={"max_input_bytes": 5},
+            )
+        except ValueError as exc:
+            assert "resource quota" in str(exc)
+        else:
+            raise AssertionError("Oversized job input should be rejected")
+        assert db.query(Job).count() == 0
     runner.shutdown()
     engine.dispose()
 

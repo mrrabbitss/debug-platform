@@ -3,7 +3,11 @@
 > 本文件是项目功能范围的唯一总账（Single Source of Truth）。
 > 新需求、在研能力、已交付能力、约束和冲突处理都必须同步更新本文件，防止跨迭代遗忘或重复建设。
 
-最后更新：2026-07-30
+最后更新：2026-08-05
+
+工程执行、验证、评测和 Agent 护栏的状态与优先级单独维护在
+[Harness Engineering 路线与状态总账](HARNESS_ENGINEERING.md)。本文件只判断业务能力是否
+可用；两份总账在每次相关迭代中必须同步。
 
 ## 1. 状态说明
 
@@ -24,6 +28,8 @@
 | 双击启动前后端 | `AVAILABLE` | `scripts/start_local.bat` | 自动准备 Python/Node 依赖并启动 FastAPI、Vue |
 | 本地环境检测 | `AVAILABLE` | `scripts/doctor_local.bat` | 检测版本、依赖、端口和服务根路径 |
 | 隔离运行冒烟 | `AVAILABLE` | `scripts/runtime_smoke.bat` | 使用临时数据库和独立端口验证前后端 |
+| 统一仓库验证 | `AVAILABLE` | `scripts/validate_all.bat` | Fast/Full/External 三档，保存 JSON 摘要和逐步日志 |
+| 仓库 Harness 契约 | `AVAILABLE` | `scripts/check_repo_harness.py` | 检查文档、CI、依赖治理和 Agent API 合同漂移 |
 | SQLite 备份恢复 | `AVAILABLE` | `scripts/backup_local.bat`、`restore_local.bat` | 带清单、哈希校验和回滚保留 |
 | 本地模型网络检测 | `AVAILABLE` | `scripts/check_hf_model_access.bat` | 检查镜像、CLI 和 curl 回退并生成脱敏报告 |
 | 本地模型安装 | `AVAILABLE` | `scripts/install_local_models.bat` | BGE Embedding、Qwen3 Reranker，支持断点续传和哈希校验 |
@@ -39,7 +45,7 @@
 | 日志浏览与任意行读取 | `AVAILABLE` | 支持分页、原文搜索、事件跳转源行 |
 | 事件与时间线 | `AVAILABLE` | 事件分页、级别/模块聚合、时间线数据 |
 | 原子解析版本 | `AVAILABLE` | 新解析失败时保留最后一次成功结果 |
-| 持久化任务 | `AVAILABLE` | 支持进度、重启恢复、取消、重试和应用生命周期安全关闭 |
+| 持久化任务 | `AVAILABLE` | 幂等键、原子领取、lease/heartbeat、超时、指数退避、dead-letter、取消、资源预算和多实例安全领取 |
 
 ### 2.3 诊断、RAG 与模型
 
@@ -64,6 +70,7 @@
 | Markdown 分块 | `AVAILABLE` | 按标题和段落切分，超长单段继续分片并限制 chunk 大小 |
 | 自动向量索引 | `AVAILABLE` | 文档变更后更新活动 generation；全量重建失败保留上一版 |
 | 故障案例结构化 Markdown | `AVAILABLE` | 错误形式、日志分析、错误定位、解决方案、验证结果 |
+| 大模型文件夹案例提炼 | `AVAILABLE` | 文本、HTML、DOCX 和文本层 PDF 在本地提取；脱敏限长后生成带行号引用的 Markdown，支持多轮对话、人工编辑、版本恢复和确认后入草稿 |
 | 错误分析 Skill | `AVAILABLE` | 以 Markdown 保存可复用的错误分析技能 |
 | 分析方法提炼 | `AVAILABLE` | 从故障案例或错误分析 Skill 提取输入信号、步骤、决策点和验证方法 |
 | 知识版本与审核 | `AVAILABLE` | DRAFT/IN_REVIEW/ACTIVE/REJECTED/ARCHIVED、不可变快照、回滚和数据库乐观锁 |
@@ -93,7 +100,11 @@
 | 审计 | `AVAILABLE` | 身份、管理操作、模型出站元数据，避免记录正文和密钥 |
 | 健康检查 | `AVAILABLE` | liveness、readiness、管理员系统状态 |
 | Docker/Compose | `AVAILABLE` | PostgreSQL、Qdrant 和前后端镜像 |
-| GitHub CI | `AVAILABLE` | Linux/Windows 后端、前端、扩展、依赖审计、外部服务、Docker |
+| GitHub CI | `AVAILABLE` | Linux/Windows 后端、前端、扩展、依赖审计、外部服务、Docker；每个 job 有硬超时 |
+| Golden 质量门禁 | `AVAILABLE` | 日志、提炼、Code/Commit Graph、Memory、RAG、Agentic Search 与有界执行九类固定评测 |
+| 浏览器 E2E | `AVAILABLE` | Playwright + Fake OpenAI 服务固化混合文档上传、预览、生成、纠错、确认 DRAFT 和轨迹查看，控制台错误即失败 |
+| Agent 运行轨迹 | `AVAILABLE` | 记录摘要哈希、模型/Prompt、tokens、耗时、重试、证据、停止和审批；管理员可查看并安全只读重放 |
+| 覆盖率与架构门禁 | `AVAILABLE` | 后端 75% 行覆盖率、文件行数/圈复杂度 ratchet、导入边界、运行时 OpenAPI 合同漂移检查 |
 
 ## 3. 新一代认知检索能力
 
@@ -169,6 +180,9 @@
   3. 第一跳找候选，后续跳沿代码边或 commit/file/symbol 边扩展；
   4. 使用融合和 Reranker 统一排序；
   5. 返回执行计划、各阶段耗时/候选数、最终证据和可解释路径。
+- 有界执行基础：类型化 Tool Registry、角色白名单、写操作审批、步骤/跳数/tokens/成本/
+  墙钟预算、重试熔断取消和确定性回退已经可用并进入 Golden 门禁；生产检索仍默认使用
+  当前确定性 Planner，不把测试中的循环执行器描述成已默认接管线上查询。
 
 ### 3.5 领域知识图谱与 GraphRAG
 
@@ -201,6 +215,9 @@
 | 图谱构建期间知识变化 | 发布前重算输入签名并校验构建标记；变化时丢弃新 generation，保留旧版 |
 | 评测污染在线记忆 | 评测固定 `record_memory=false`，不新增、不强化、不增加复用次数 |
 | 人工反馈自动学习敏感内容 | 反馈审核通过后也只能生成知识草稿，仍需第二次审核发布 |
+| 模型生成案例污染知识库 | 提炼会话与知识文档隔离；章节和来源行号校验通过并人工确认后才创建 `DRAFT`，仍需原有审核发布 |
+| 文件夹原文直接外发 | 原始文件只进本地 Storage；DOCX/PDF/HTML 也先在本地提取，管理员明确授权后仅发送脱敏、限长、带行号的文本证据 |
+| 多窗口同时纠错覆盖内容 | 每轮携带 `expected_draft_version`，条件更新失败返回冲突；所有人工/模型修改保存不可变版本 |
 | 不同案例之间的数据隔离 | 代码仓、Commit 和情景记忆继承案例访问控制；全局程序记忆只保存脱敏方法 |
 | 外部模型数据出站 | 沿用模型网关、端点校验和内容无关审计；无 API 时必须有本地确定性回退 |
 | SQLite 与 PostgreSQL 差异 | 所有新表通过 Alembic 建立，查询不依赖数据库专有 JSON 运算 |
@@ -244,6 +261,18 @@
 外部 PostgreSQL/Qdrant 和 Linux/Windows 矩阵由每次 push 的 GitHub Actions
 继续验证；本机未安装 Docker，因此不把未执行的外部服务项伪装成本地通过。
 
+本轮依赖可复现修复（2026-08-05）：
+
+- [x] 将存在已知漏洞的 `cryptography 49.0.0` 升级并锁定为 `50.0.0`；
+- [x] 增加跨 Python/Windows/Linux 的 `backend/uv.lock`，并导出兼容现有 pip
+  启动链的 `backend/constraints.lock`；
+- [x] Win11 bootstrap/start/doctor、Linux 启动、本地模型安装、CI 和 Docker
+  统一服从锁定约束；
+- [x] 增加 `scripts\refresh_python_lock.bat` 的更新与只读检查模式；
+- [x] 修复新进入审计库的前端 PostCSS 和扩展 brace-expansion 告警；
+- [x] Python 3.14 安装、锁文件一致性、Ruff、compileall、`119 passed, 1 skipped`、
+  前端构建、扩展编译、三类依赖审计、Win11 bootstrap/doctor/runtime smoke 均通过。
+
 ## 6. 后续候选
 
 | 能力 | 状态 | 说明 |
@@ -252,7 +281,74 @@
 | 增量代码/Commit 索引 | `PLANNED` | 按 commit 增量更新，避免全仓重建 |
 | 图数据库后端 | `PLANNED` | 数据规模达到阈值后评估 Neo4j/AGE；当前关系表保持可迁移 |
 | 记忆衰减与人工审核 | `PLANNED` | 过期、冲突记忆提示和人工批准 |
-| 评测回归门禁 | `PLANNED` | 在内网 CI 固定数据/模型版本、阈值和版本间差异报告 |
 | 知识差异与实体合并 UI | `PLANNED` | 可视化版本 diff、同义实体合并、冲突关系审核 |
-| 分布式任务租约 | `PLANNED` | 多实例部署时引入集中队列、心跳、可见性超时和死信 |
 | 独立知识审核角色 | `PLANNED` | 从 ADMIN 中拆出知识维护者和审核者，支持职责分离 |
+| OpenTelemetry 桥接 | `PLANNED` | 将现有结构化 Agent 轨迹导出到可选本地观测栈 |
+| Agent 任务控制平面 | `PLANNED` | 跨任务依赖 DAG、人工审批队列和通用停滞检测 |
+| Review 反馈沉淀 | `PLANNED` | 把人工 Review 安全分类为规则、测试、文档或评测样本，写入前必须审批 |
+
+## 7. 大模型文件夹案例提炼迭代（2026-08-03）
+
+定位：把已有故障材料转换成“可复核、可纠错、可追溯、不会自动发布”的知识案例，
+不是让大模型直接向线上知识库写入自由文本。
+
+- [x] 浏览器选择整个文件夹，保留相对路径并流式保存到本地 Storage；
+- [x] 文件数、单文件/总大小、路径穿越、Windows 保留名和目录深度限制；
+- [x] 文本及无后缀文本探测，HTML 可见正文、DOCX 段落/表格和 PDF 文本层本地提取；
+- [x] 旧式 DOC、扫描 PDF、空文件和其他二进制保留并明确标记原因；
+- [x] 长文件头部、关键词行和尾部抽样，全局提示长度限制与敏感信息掩码；
+- [x] OpenAI-Compatible Chat 模型选择、模型快照和显式数据出站授权；
+- [x] 强制结构化案例章节与 `[SRC-xxxx:Lx-Ly]` 来源/行号校验；
+- [x] 模型对话纠错、人工 Markdown 修改、乐观并发冲突和不可变版本恢复；
+- [x] 人工确认后只创建 `DRAFT + active=false` 知识文档，继续复用审核发布流程；
+- [x] `0010` 会话/来源/版本/消息迁移，来源文件随备份保存；
+- [x] 管理员 API、前端“AI 案例提炼”工作台和完整使用文档；
+- [x] 完整后端回归、前端构建、Win11 运行冒烟和真实浏览器流程验证。
+
+本功能本地验证基线（2026-08-03）：Ruff、compileall、`pip check`、`119 passed,
+1 skipped`、Vue TypeScript/Vite production build、VS Code 扩展编译和隔离 Win11
+运行冒烟均通过；真实浏览器已完成 TXT、MD、HTML、DOCX、PDF 混合文件夹上传、三种文档
+正文预览、模型初稿、对话修订及“确认后只创建知识草稿”的完整流程，控制台无错误。
+
+当前边界：Word 支持 `.docx`，旧式 `.doc` 需转换；PDF 只支持已有文本层，扫描件和图片
+尚无 OCR；HTML 提取结构化可见文本但不执行浏览器脚本或远程资源。案例生成只支持 API
+Chat 模型，本地 BGE Embedding 和 Qwen3 Reranker 不具备生成能力，本地 Chat 运行器仍是
+后续候选。详见 [大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。
+
+## 8. Harness Engineering P0（2026-08-05）
+
+- [x] 根目录 Agent 项目地图、业务/工程总账和专题文档索引；
+- [x] `Fast`、`Full`、`External` 统一 Win11 验证入口及可移植 JSON/日志产物；
+- [x] 文档链接、总账交叉引用、CI 触发、Dependabot 覆盖和 Workflow API 的自动契约检查；
+- [x] 分支/PR CI 去重，同时保留面向 `main` 的 PR、`main` push 和手工触发；
+- [x] `.gitattributes`、PR 模板、CODEOWNERS 和 Python/npm/Actions/Docker Dependabot；
+- [x] Workflow allowlist 补齐日志上传/解析/报告和 AI 案例提炼 API，并声明证据与人工 DRAFT 门禁；
+- [x] GitHub `main` ruleset；本次 PR 的 9 项新 CI 全绿后启用，必须 PR、最新 CI，
+  并禁止删除和 force push；单维护者场景不强制他人批准。
+
+本轮本地 `Full` 验证：15 个步骤全部通过，包含 Harness 11 项契约、`122 passed,
+1 skipped`、前端生产构建、扩展编译、三类依赖审计、Doctor 和隔离运行冒烟。
+本机未安装 Docker，`External` 中的 PostgreSQL/Qdrant 与镜像构建继续由 GitHub CI 验证。
+
+P1 Golden Dataset、Fake Model、Playwright E2E、质量评测、执行轨迹和架构门禁，以及已完成的
+P2 有界 Agent、任务隔离、多实例 lease 和文档进程沙箱见
+[HARNESS_ENGINEERING.md](HARNESS_ENGINEERING.md)。剩余任务 DAG 和 Review 自动沉淀仍明确标记为
+`PLANNED`，不得描述为已可用。
+
+## 9. Harness Engineering P1 与 P2 基础（2026-08-05）
+
+- [x] 合成 TXT/HTML/DOCX/PDF 与无后缀日志 Golden Corpus，固定二进制哈希；
+- [x] Fake OpenAI-compatible Chat/Embedding/Reranker，含超时、429、坏 JSON 和中断注入；
+- [x] Playwright 完整提炼闭环与浏览器控制台零错误门禁；
+- [x] 九类 Golden 评测和耗时/证据/停止原因 CI 阻断；
+- [x] 后端 75% 覆盖率门禁；建立门禁时完整回归实测 77%；
+- [x] `AgentRun + AgentTraceEvent`、前端轨迹查看器和不写记忆的脱敏只读重放；
+- [x] API、知识提炼、Agentic Search 和前端大文件模块化，并用行数/复杂度/导入边界防回退；
+- [x] Workflow 最小契约与 FastAPI 运行时 OpenAPI 双重漂移检查；
+- [x] 类型化有界 Agent、角色/审批、预算、重试/熔断/取消和确定性回退；
+- [x] 独立 task worktree/端口/数据库/Storage/日志；
+- [x] 后台任务 lease/heartbeat/dead-letter/幂等/资源预算；
+- [x] Win11 Job Object 与 Linux rlimit 约束的不可信文档独立进程抽取。
+
+详细命令、阈值和隐私边界见
+[质量评测、Agent 轨迹与有界执行](docs/quality-harness-and-agent-runtime.md)。

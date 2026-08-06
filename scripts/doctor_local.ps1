@@ -61,6 +61,8 @@ Add-Check "OK" "Windows" $windowsDetail
 
 $requiredFiles = @(
     "backend\pyproject.toml",
+    "backend\uv.lock",
+    "backend\constraints.lock",
     "backend\alembic.ini",
     "frontend\package.json",
     "frontend\package-lock.json",
@@ -157,6 +159,8 @@ if ($venvReady -and $frontendReady) {
 
 $dependencyFiles = @(
     (Join-Path $RepoRoot "backend\pyproject.toml"),
+    (Join-Path $RepoRoot "backend\uv.lock"),
+    (Join-Path $RepoRoot "backend\constraints.lock"),
     (Join-Path $RepoRoot "frontend\package-lock.json")
 )
 if (($dependencyFiles | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -eq 0) {

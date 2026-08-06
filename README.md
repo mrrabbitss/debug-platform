@@ -1,7 +1,10 @@
 # GW/AP Intelligent Debug Platform
 
 项目所有已交付能力、在研需求、依赖关系和冲突约束统一维护在
-[CAPABILITIES.md](CAPABILITIES.md)。新增或调整功能时必须同步更新该总账。
+[CAPABILITIES.md](CAPABILITIES.md)。工程 Harness 的现状和后续顺序见
+[HARNESS_ENGINEERING.md](HARNESS_ENGINEERING.md)，专题文档入口见
+[docs/README.md](docs/README.md)，最近一次可复核验证见
+[VALIDATION.md](VALIDATION.md)。新增或调整功能时必须同步更新相应总账。
 
 面向 GW、AP、全光网关等网络设备的 collectDebuginfo 日志解析、证据关联、RAG 检索、LLM 综合诊断、代码仓库关联和报告生成平台。
 
@@ -21,7 +24,7 @@
 - hostapd、WLAN、DHCP、PPPoE、PON、OMCI、TR-069、内核和进程异常规则；
 - 关键事件提取与时间线；
 - 解析结果按代次原子发布，失败重解析不会覆盖上一次可用结果；
-- 可持久恢复的后台任务，以及安全取消、失败/取消后重试；
+- 可持久恢复的后台任务，以及幂等键、lease/heartbeat、安全取消、退避重试、dead-letter 和资源预算；
 - 确定性规则诊断；
 - HTML、PDF、Word 报告。
 
@@ -36,6 +39,8 @@
 - 可切换的本地 Qwen3 Reranker 和 Qwen Rerank API；
 - 设备类型、模块和可信等级元数据；
 - 结构化 Markdown 故障案例（错误形式、日志分析、错误定位、解决方案和验证）；
+- 上传包含日志、错误现象、分析和解决方案的文件夹，由大模型生成带来源行号的案例草稿；
+- 在独立工作台与模型多轮纠错、人工编辑和恢复历史版本，确认后才创建待审核知识草稿；
 - 错误分析 Skill 管理，以及从案例/Skill 确定性提炼可复用分析方法；
 - 知识草稿、待审核、发布、驳回、归档状态机，不可变版本、回滚和数据库乐观锁；
 - 固定 query、预期证据和预期根因的检索评测集，以及 Recall@K、Precision@K、MRR、NDCG@K；
@@ -72,6 +77,9 @@
 - 候选补丁默认不自动应用；
 - 私有 VS Code 扩展：创建案例、上传日志、关联工作区、选中代码问答、打开报告；
 - 内部 AI Workflow 的 Skill 和 OpenAPI 定义。
+- 类型化 Tool Registry、角色白名单、写操作审批、步骤/跳数/tokens/成本/时间预算；
+- Agent 失败重试、熔断、取消、显式停止原因和确定性检索回退；
+- 每个 Agent 任务可创建独立 worktree、端口、数据库、Storage 和日志目录。
 
 ### 运维、安全与协作
 
@@ -82,16 +90,21 @@
 - `/health/live` 进程存活探针、`/health/ready` 数据库/存储就绪探针；
 - SQLite、文件存储和模型密钥的带清单/哈希备份，以及保留旧数据的回滚式恢复；
 - Windows/Ubuntu 后端与前端 CI、Win11 启动冒烟、Docker 构建和 PostgreSQL/Qdrant 集成测试。
+- 合成 Golden Dataset、Fake OpenAI 服务、Playwright 浏览器 E2E、75% 后端覆盖率和架构 ratchet；
+- 脱敏 Agent 运行轨迹、前端轨迹查看器和不写记忆的只读安全重放。
 
 ## 2. 工程结构
 
 ```text
 gw_ap_debug_platform/
+├── AGENTS.md                Agent/开发者项目地图与工程护栏
+├── HARNESS_ENGINEERING.md   可执行验证、评测、轨迹和有界 Agent 路线
 ├── backend/                 FastAPI、数据库、解析器、RAG、LLM、报告
 ├── frontend/                Vue 3 + TypeScript + Element Plus
 ├── vscode-extension/        私有 VS Code 客户端
 ├── workflow/                内部 Skill / Workflow 接口定义
-├── sample_data/             可直接演示的日志、知识和 C 代码
+├── harness/                 Golden、覆盖率、架构和性能阈值
+├── sample_data/             可直接演示和回归的纯合成数据
 ├── scripts/                 Windows/Linux 启动及 Demo 初始化
 ├── docker-compose.yml
 └── .env.example
@@ -107,7 +120,7 @@ gw_ap_debug_platform/
 scripts\start_local.bat
 ```
 
-首次运行会自动调用 `scripts\bootstrap_local.bat` 创建 `.venv`、执行可复现的 `npm ci` 并安装后端依赖；以后仅当 `backend\pyproject.toml` 或 `frontend\package-lock.json` 改变时才重新安装。脚本会等待后端健康检查通过后再启动前端，并拒绝把占用 8000 端口的其他服务误当成本项目后端。
+首次运行会自动调用 `scripts\bootstrap_local.bat` 创建 `.venv`、按 `backend\uv.lock`/`backend\constraints.lock` 安装锁定的 Python 依赖，并执行可复现的 `npm ci`；以后仅当 Python 配置/锁文件或 `frontend\package-lock.json` 改变时才重新安装。脚本会等待后端健康检查通过后再启动前端，并拒绝把占用 8000 端口的其他服务误当成本项目后端。
 
 换电脑、更新代码或启动失败时，可先双击：
 
@@ -124,6 +137,19 @@ scripts\runtime_smoke.bat
 ```
 
 它会在系统临时目录创建隔离数据库，使用 18000/15173 端口启动后端和前端，验证迁移、前端 API 代理以及案例创建/读取闭环，然后自动停止进程。成功时输出一行 `"ok":true` 的 JSON。需要切换测试端口时可直接运行 `runtime_smoke.ps1` 并传入参数。
+
+日常修改、完整交付和带 Docker 的外部验证统一使用：
+
+```bat
+scripts\validate_all.bat Fast
+scripts\validate_all.bat Full
+scripts\validate_all.bat External
+```
+
+`Fast` 复用已安装依赖做静态检查、仓库契约、关键后端回归和前端构建；`Full`
+先按锁文件重新安装依赖，再运行完整后端、三类依赖审计、扩展编译、Doctor 和隔离
+运行冒烟；`External` 继续检查 Compose 并构建前后端镜像。每次结果写入被 Git 忽略的
+`artifacts\validation\<时间>-<模式>\summary.json` 和逐步日志，方便在另一台电脑复现。
 
 ### 启用个人账号和案例权限
 
@@ -177,10 +203,13 @@ cp .env.example .env
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # Linux: source .venv/bin/activate
-pip install -e "./backend[dev]"
+pip install --upgrade --constraint backend/constraints.lock pip
+pip install --constraint backend/constraints.lock -e "./backend[dev]"
 cd backend
 uvicorn app.main:app --reload --port 8000
 ```
+
+维护者修改 `backend/pyproject.toml` 后，应运行 `scripts\refresh_python_lock.bat` 更新跨平台锁文件；`scripts\refresh_python_lock.bat -Check` 只检查、不修改。
 
 新终端：
 
@@ -246,6 +275,22 @@ scripts\inspect_log_file.bat "D:\logs\your_collectDebuginfo_file"
 - 根据检查结果生成的简短处理建议。
 
 报告不包含日志正文，但文件路径和文件名也可能属于内部信息，对外发送前仍应人工检查。PowerShell 用户也可以直接运行 `scripts\inspect_log_file.ps1`，并使用 `-SkipLineCount` 跳过完整行数统计。
+
+### 从案例文件夹提炼知识草稿
+
+先在“系统设置 → 诊断大模型”配置并启用公司批准的 OpenAI-Compatible Chat 模型，
+然后打开顶部“AI 案例提炼”。选择一个同时包含日志、错误现象、人工分析和解决方案的
+文件夹，确认脱敏证据可以发送到所选模型 API 后开始提炼。
+
+平台只向模型发送本地脱敏、限长并带来源行号的文本证据，不直接发送原始文件。生成后可
+查看来源、编辑 Markdown、与模型多轮讨论纠错、查看或恢复不可变历史版本。只有章节和
+`[SRC-xxxx:Lx-Ly]` 引用校验通过并经人工确认后，系统才会创建不可检索的知识库
+`DRAFT`；该草稿仍需提交审核并发布，才能参与检索和诊断。
+
+可直接读取文本、无后缀文本、HTML/HTM、Word `.docx` 和带文本层的 PDF；旧式
+`.doc` 需先转换为 `.docx`，扫描 PDF 和图片目前需要先做 OCR。
+完整操作、安全边界、大小限制、状态流转和接口说明见
+[大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。
 
 ## 4. Docker 部署
 
@@ -334,7 +379,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models
 
 如果公司使用其他 Hugging Face 镜像，可通过 `-Mirror` 指定；如果 Python 包已经由管理员统一安装，可增加 `-SkipRuntimeInstall`。检测报告只记录软件版本、端点、离线开关、代理是否存在以及下载错误，不记录代理地址、API Key、日志或数据库内容。本地 Qwen3 Reranker 的“排序指令”和“推理批量”、BGE 的“检索查询指令”和批量大小均可在系统设置中调整。普通 Win11 CPU 建议先保持默认小批量。
 
-详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。故障案例、代码/Commit 图谱、三类记忆和 Agentic Search 见 [认知检索与图谱使用说明](docs/cognitive-retrieval.md)。知识审核、领域 GraphRAG、检索评测和人工反馈见 [知识治理、领域图谱与检索评测](docs/quality-governance-and-evaluation.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
+详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。从案例文件夹生成并多轮校正知识草稿见 [大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。故障案例、代码/Commit 图谱、三类记忆和 Agentic Search 见 [认知检索与图谱使用说明](docs/cognitive-retrieval.md)。知识审核、领域 GraphRAG、检索评测和人工反馈见 [知识治理、领域图谱与检索评测](docs/quality-governance-and-evaluation.md)。Golden、Playwright、轨迹和有界 Agent 见 [质量评测、Agent 轨迹与有界执行](docs/quality-harness-and-agent-runtime.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
 
 企业环境中必须确认：
 
@@ -370,7 +415,7 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 
 原始日志、结构化事实、知识库证据和 LLM 推测在数据库中分开保存。LLM 不能直接修改原始日志或代码；模型返回的结构、置信度和证据编号会由后端校验，引用不存在证据时自动保留确定性规则结果。每次诊断会保存模型配置快照（不含 API Key），后续切换模型不会改变历史诊断的审计信息。
 
-后台解析、索引和诊断任务的状态保存在数据库中。后端重启后会恢复未完成任务；同一种输入的活动任务会去重，失败任务会恢复案例/制品状态并保留可读错误信息。
+后台解析、索引和诊断任务的状态保存在数据库中。原子 lease 领取和 heartbeat 允许多个后端实例避免重复执行；幂等键、超时、指数退避、dead-letter 和资源预算约束失败路径。后端重启后会恢复可重试任务，失败任务会恢复案例/制品状态并保留可读错误信息。
 
 知识文件和代码仓上传采用两阶段协议：HTTP 请求只流式保存原文件并返回
 `202 Accepted` 及 `job`；Markdown 读取/切块/Embedding、归档解压和 Git Bundle
@@ -499,9 +544,18 @@ registry.register(VendorGwParser())
 
 ## 10. 测试
 
+Windows 11 推荐直接运行统一入口：
+
+```bat
+scripts\validate_all.bat Fast
+scripts\validate_all.bat Full
+```
+
+下面的分项命令用于只调试某一层：
+
 ```bash
 cd backend
-pytest -q
+python ..\scripts\run_backend_tests.py
 
 cd ../frontend
 npm ci
@@ -514,17 +568,20 @@ npm run compile
 # Windows 隔离启动闭环
 cd ..
 scripts\runtime_smoke.bat
+scripts\run_golden_evals.bat
+scripts\run_browser_e2e.bat
 ```
 
-GitHub Actions 会在 Windows/Ubuntu 构建前后端，在 Windows 执行隔离启动闭环，并在 Linux 服务容器中验证 PostgreSQL 迁移和 Qdrant 写入/检索。后端启动时会自动执行 Alembic 数据库迁移；升级前请运行备份工具，不要手工修改 `alembic_version` 表。
+GitHub Actions 会在 Windows/Ubuntu 构建前后端并执行 75% 覆盖率门禁，运行九类 Golden 评测和 Playwright E2E，在 Windows 执行隔离启动闭环，并在 Linux 服务容器中验证 PostgreSQL 迁移和 Qdrant 写入/检索。后端启动时会自动执行 Alembic 数据库迁移；升级前请运行备份工具，不要手工修改 `alembic_version` 表。
 
 ## 11. 已知限制
 
 - 内置解析器是面向常见 GW/AP 语义的通用实现，真实产品日志格式仍需根据公司内部样例扩展；
 - 本地检索使用 BM25/精确词项、当前 Embedding 向量和可选 Reranker；SQLite 保存向量回退，配置 Qdrant 后会同步写入按模型隔离的 collection；
 - 当前领域知识图谱使用已审核 Markdown/元数据的确定性抽取，已支持设备—症状—事件码—诊断步骤—方案关系和 GraphRAG，但复杂同义词、冲突消解和人工实体合并仍待增强；
-- 检索评测已支持证据排序和根因短语 Top-K；尚未建立企业内网 Golden Dataset、自动回归阈值和 CI 门禁；
-- 本地后台任务适合当前单机/单后端进程；若扩展为多实例部署，应换用带租约的 Redis/Celery 或专用队列；
+- 仓库已提供纯合成 Golden Dataset 和 CI 阈值；真实厂商日志仍只能在企业内网脱敏、审批后建立私有回归集；
+- 数据库 lease 已支持多实例安全领取，但执行单元仍是各 FastAPI 实例内的线程池；大规模弹性 Worker 可进一步迁移到专用队列；
+- 生产 Agentic Search 仍默认使用确定性 Planner；类型化循环 Agent 已具备预算、审批、轨迹和回退基础，但尚未默认接管线上检索；
 - 静态分析是否可运行取决于后端环境是否安装工具和项目是否具备编译数据库；
 - 报告中的根因候选用于辅助人工排查，不替代工程师确认；
 - 示例仓库故意包含不完整校验和 `sprintf`，用于演示静态分析及候选补丁流程。

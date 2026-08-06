@@ -98,6 +98,18 @@ export interface Job {
   message: string
   result_json: string
   error_message?: string
+  idempotency_key?: string
+  attempt: number
+  max_attempts: number
+  available_at: string
+  lease_owner?: string
+  lease_expires_at?: string
+  heartbeat_at?: string
+  deadline_at?: string
+  timeout_seconds: number
+  resource_limits_json: string
+  dead_letter_at?: string
+  dead_letter_reason?: string
 }
 
 export interface LogEvent {
@@ -206,6 +218,78 @@ export interface KnowledgeRevision {
   snapshot: Record<string, any>
 }
 
+export interface KnowledgeCurationSource {
+  id: string
+  source_ref: string
+  relative_path: string
+  extraction_method?: 'plain_text' | 'html_visible_text' | 'docx_paragraphs_tables' | 'pdf_text_layer'
+  extraction_truncated: boolean
+  page_count?: number
+  sha256: string
+  size_bytes: number
+  media_type?: string
+  text_encoding?: string
+  line_count?: number
+  source_role: 'log' | 'error' | 'analysis' | 'solution' | 'context'
+  included: boolean
+  skip_reason?: string
+  created_at: string
+}
+
+export interface KnowledgeCurationMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  citations: string[]
+  draft_version?: number
+  model_profile_id?: string
+  created_by?: string
+  created_at: string
+}
+
+export interface KnowledgeCurationRevision {
+  id: string
+  version: number
+  content_hash: string
+  change_summary: string
+  validation: Record<string, any>
+  source_message_id?: string
+  created_by?: string
+  created_at: string
+}
+
+export interface KnowledgeCurationSession {
+  id: string
+  status: 'QUEUED' | 'EXTRACTING' | 'REVIEWING' | 'FAILED' | 'CANCELLED' | 'CONFIRMING' | 'CONFIRMED'
+  title_hint: string
+  category_id?: string
+  device_type?: string
+  device_model?: string
+  firmware_range?: string
+  module?: string
+  trust_level: string
+  confidentiality: string
+  model_profile_id?: string
+  model_snapshot: Record<string, any>
+  source_manifest: Record<string, any>
+  source_count: number
+  sources?: KnowledgeCurationSource[]
+  draft_title: string
+  draft_markdown?: string
+  draft_version: number
+  validation: Record<string, any>
+  open_questions: string[]
+  messages?: KnowledgeCurationMessage[]
+  revisions?: KnowledgeCurationRevision[]
+  knowledge_document_id?: string
+  job_id?: string
+  error_message?: string
+  created_by?: string
+  created_at: string
+  updated_at: string
+  confirmed_at?: string
+}
+
 export interface DomainGraphStatus {
   status: 'NOT_BUILT' | 'BUILDING' | 'READY' | 'STALE' | 'FAILED'
   active_generation_id?: string
@@ -254,4 +338,58 @@ export interface EvaluationRun {
   created_at: string
   started_at?: string
   completed_at?: string
+}
+
+export interface AgentTraceEvent {
+  id: string
+  sequence: number
+  stage: string
+  tool_name?: string
+  status: string
+  input_summary_hash: string
+  output_summary_hash?: string
+  input_tokens: number
+  output_tokens: number
+  duration_ms: number
+  retry_count: number
+  evidence_ids: string[]
+  stop_reason?: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface AgentRun {
+  run_id: string
+  case_id?: string
+  resource_type: string
+  resource_id?: string
+  operation: string
+  execution_mode: string
+  status: string
+  model_profile_id?: string
+  model_name?: string
+  model_config: Record<string, unknown>
+  prompt_version: string
+  input_summary_hash: string
+  output_summary_hash?: string
+  usage: {
+    input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    estimated_cost: number
+  }
+  duration_ms: number
+  retry_count: number
+  evidence_ids: string[]
+  stop_reason: string
+  approval_status: string
+  replay_of_run_id?: string
+  replay_payload: Record<string, unknown>
+  replay_supported: boolean
+  score: Record<string, number>
+  created_by?: string
+  created_at: string
+  started_at: string
+  completed_at?: string
+  events?: AgentTraceEvent[]
 }

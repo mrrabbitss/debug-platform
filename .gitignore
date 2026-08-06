@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 *.egg-info/
 *.tsbuildinfo
+.coverage
+coverage.xml
 backend/data/
 backups/
 /models/
@@ -16,4 +18,7 @@ log_check_result*.txt
 local_doctor_result*.txt
 hf_model_access_report*.txt
 .local_dependency_stamp
+/artifacts/validation/
+/artifacts/e2e/
+.agent-runtime/
 .DS_Store

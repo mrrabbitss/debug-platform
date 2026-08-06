@@ -1,0 +1,49 @@
+{
+  "default_python_file_lines": 900,
+  "default_vue_file_lines": 800,
+  "default_function_complexity": 50,
+  "file_line_limits": {
+    "backend/app/api/routes.py": 650,
+    "backend/app/api/knowledge.py": 600,
+    "backend/app/api/repositories.py": 330,
+    "backend/app/api/jobs.py": 60,
+    "backend/app/api/system.py": 650,
+    "backend/app/harness/golden.py": 850,
+    "backend/app/services/agent_trace.py": 380,
+    "backend/app/services/agentic/executor.py": 380,
+    "backend/app/services/agentic_search.py": 510,
+    "backend/app/services/jobs.py": 725,
+    "backend/app/services/knowledge_curation.py": 890,
+    "backend/app/services/knowledge_curation_evidence.py": 320,
+    "backend/app/models.py": 990,
+    "backend/app/services/knowledge_graph.py": 915,
+    "frontend/src/views/KnowledgeCurationView.vue": 690
+  },
+  "required_modules": [
+    "backend/app/api/agent_runs.py",
+    "backend/app/api/jobs.py",
+    "backend/app/api/knowledge.py",
+    "backend/app/api/repositories.py",
+    "backend/app/api/system.py",
+    "backend/app/services/agent_trace.py",
+    "backend/app/services/agentic/planner.py",
+    "backend/app/services/agentic/fusion.py",
+    "backend/app/services/agentic/tools.py",
+    "backend/app/services/agentic/timeouts.py",
+    "backend/app/services/agentic/executor.py",
+    "backend/app/services/curation_document_sandbox.py",
+    "backend/app/services/knowledge_curation_common.py",
+    "backend/app/services/knowledge_curation_evidence.py",
+    "backend/app/services/knowledge_curation_serialization.py",
+    "backend/app/services/knowledge_curation_uploads.py",
+    "backend/app/services/process_sandbox.py",
+    "frontend/src/api/knowledgeCuration.ts",
+    "frontend/src/components/curation/CurationSourcePreviewDialog.vue",
+    "frontend/src/composables/useKnowledgeCurationPresentation.ts",
+    "frontend/src/views/AgentRunsView.vue"
+  ],
+  "forbidden_imports": {
+    "app.models": ["app.api", "app.services"],
+    "app.services": ["app.api"]
+  }
+}

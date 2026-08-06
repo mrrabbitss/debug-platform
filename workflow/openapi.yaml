@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: GW/AP Debug Platform Workflow API
-  version: 0.2.0
+  version: 0.4.0
 servers:
   - url: http://localhost:8000/api/v1
 paths:
@@ -23,6 +23,40 @@ paths:
                 firmware_version: { type: string }
       responses:
         '200': { description: Created }
+  /cases/{case_id}/artifacts:
+    post:
+      operationId: uploadDebugArtifact
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                kind: { type: string, default: debug_log }
+      responses:
+        '200': { description: Artifact stored locally }
+  /cases/{case_id}/artifacts/{artifact_id}/parse:
+    post:
+      operationId: parseDebugArtifact
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: artifact_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Parse job accepted }
   /cases/{case_id}/analyses:
     post:
       operationId: startDiagnosis
@@ -52,6 +86,24 @@ paths:
                 question: { type: string }
       responses:
         '200': { description: Evidence-grounded answer }
+  /cases/{case_id}/analyses/{analysis_id}/report/preview:
+    get:
+      operationId: previewDiagnosisReport
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: analysis_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Evidence-grounded HTML report preview
+          content:
+            text/html:
+              schema: { type: string }
   /knowledge/upload:
     post:
       operationId: uploadKnowledgeDocument
@@ -137,6 +189,147 @@ paths:
                   items: { type: string, enum: [knowledge, code, commit, memory] }
       responses:
         '200': { description: Planned multi-module retrieval result }
+  /knowledge-curations:
+    get:
+      operationId: listKnowledgeCurations
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200': { description: Knowledge curation sessions }
+    post:
+      operationId: createKnowledgeCuration
+      description: >-
+        Stores source files locally and starts an evidence-gated background
+        extraction. API model egress requires explicit consent.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  items: { type: string, format: binary }
+                relative_paths_json: { type: string, default: '[]' }
+                title_hint: { type: string, maxLength: 512 }
+                category_id: { type: string }
+                device_type: { type: string }
+                device_model: { type: string }
+                firmware_range: { type: string }
+                module: { type: string }
+                trust_level: { type: string, enum: [LOW, MEDIUM, HIGH], default: MEDIUM }
+                confidentiality:
+                  type: string
+                  enum: [PUBLIC, INTERNAL, RESTRICTED]
+                  default: RESTRICTED
+                model_profile_id: { type: string }
+                consent_model_egress: { type: boolean, default: false }
+      responses:
+        '202': { description: Curation session and background job accepted }
+        '409': { description: Model egress consent is required }
+  /knowledge-curations/{session_id}:
+    get:
+      operationId: getKnowledgeCuration
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Session, sources, revisions and conversation }
+  /knowledge-curations/{session_id}/chat:
+    post:
+      operationId: refineKnowledgeCuration
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [instruction, expected_draft_version]
+              properties:
+                instruction: { type: string, minLength: 1, maxLength: 20000 }
+                expected_draft_version: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: New immutable draft revision }
+        '409': { description: Draft version conflict }
+  /knowledge-curations/{session_id}/confirm:
+    post:
+      operationId: confirmKnowledgeCurationDraft
+      description: Creates an inactive DRAFT document; it does not publish knowledge.
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_draft_version]
+              properties:
+                expected_draft_version: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Inactive DRAFT knowledge document created }
+        '409': { description: Draft version conflict or already confirmed }
+  /agent-runs:
+    get:
+      operationId: listAgentRuns
+      description: Lists redacted execution metadata; raw uploaded content is never returned.
+      parameters:
+        - in: query
+          name: case_id
+          schema: { type: string }
+        - in: query
+          name: resource_id
+          schema: { type: string }
+        - in: query
+          name: operation
+          schema: { type: string, maxLength: 64 }
+        - in: query
+          name: status
+          schema: { type: string, maxLength: 32 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200': { description: Redacted agent run summaries }
+  /agent-runs/{run_id}:
+    get:
+      operationId: getAgentRun
+      parameters:
+        - in: path
+          name: run_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Redacted run metadata and ordered trace events }
+        '404': { description: Run not found }
+  /agent-runs/{run_id}/replay:
+    post:
+      operationId: replayAgentRun
+      description: >-
+        Replays an eligible search from a redacted payload in read-only mode;
+        memory writes and knowledge publication remain disabled.
+      parameters:
+        - in: path
+          name: run_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: New traceable read-only search result }
+        '409': { description: The run has no safe replay payload }
 components:
   securitySchemes:
     ApiKey:
