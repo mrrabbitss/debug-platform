@@ -102,6 +102,7 @@
 | vNext 新电脑隔离部署 | `AVAILABLE` | `docs/new-pc-vnext-opencode-setup.md` 固定已验证 OpenCode V1 版本，使用独立仓库、Python、数据、端口、MCP 名和 XDG 配置，不覆盖 main |
 | CodeArts/CodeAgent 脚本化安装 | `AVAILABLE` | `scripts/setup_codeagent_vnext.bat` 使用独立 `%LOCALAPPDATA%\GWAPDebugVNext`、8766、项目 Skill 和命名空间化 MCP；支持 CodeArts 原生/Claude 兼容与 OpenCode V1/V2 schema |
 | CodeAgent 兼容探针 | `AVAILABLE` | `scripts/probe_codeagent_compatibility.bat` 脱敏检查命令、Skill 路径、配置 schema、Runtime 端口、stdio MCP 握手、12 个原始工具名和客户端连接状态 |
+| CodeAgent 双入口诊断包 | `AVAILABLE` | `scripts/collect_codeagent_diagnostics.bat` 自动定位实际 `nga` 启动器及其 `bin/codeagent.exe`，分别探测并生成可分享脱敏汇总；完整配置、环境和原始报告不进入分享文件 |
 | CodeAgent Skill zip | `AVAILABLE` | `scripts/package_codeagent_skill.bat` 生成不含机器路径、凭据和运行数据的标准 Skill 导入包 |
 | `gwap` CLI | `AVAILABLE` | Runtime、模型、Case、日志、Evidence、Workspace、诊断、报告的稳定 JSON CLI |
 | External Agent Mode | `AVAILABLE` | 跳过平台 Chat LLM diagnosis synthesis/chat/patch，最终推理由 Claude/OpenCode/CodeAgent 负责 |

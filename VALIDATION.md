@@ -10,6 +10,11 @@ machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
 
 - Portable Skill packaging, isolated Runtime setup/start/stop and compatibility
   probe scripts: PASS under Windows PowerShell 5.1.
+- The shareable dual-entry diagnostic collector: PASS. An isolated fixture with
+  a root `nga` launcher and `bin/codeagent.exe` verified automatic discovery,
+  separate probes, two direct 12-tool MCP handshakes, loopback-only Runtime
+  enforcement and removal of usernames, absolute repository paths and secret
+  patterns from the shareable report.
 - The generated OpenCode project configuration reached `FULL_SKILL_MCP` with
   OpenCode 1.18.15: project Skill discovered, Runtime healthy, MCP shown as
   connected, stdio `initialize`/`tools/list` handshake successful and all 12
@@ -74,7 +79,7 @@ machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
   `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260810-122707-full\summary.json`.
+`artifacts\validation\20260810-154515-full\summary.json`.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,

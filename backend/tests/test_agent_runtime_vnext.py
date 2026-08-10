@@ -272,6 +272,9 @@ def test_codeagent_skill_setup_and_probe_contracts() -> None:
     repo = Path(__file__).resolve().parents[2]
     setup = (repo / "scripts" / "setup_codeagent_vnext.ps1").read_text(encoding="utf-8")
     probe = (repo / "scripts" / "probe_codeagent_compatibility.ps1").read_text(encoding="utf-8")
+    collector = (repo / "scripts" / "collect_codeagent_diagnostics.ps1").read_text(
+        encoding="utf-8"
+    )
     package = (repo / "scripts" / "package_codeagent_skill.ps1").read_text(encoding="utf-8")
     wrapper = (repo / ".claude" / "skills" / "gw-ap-debug" / "scripts" / "gwap.ps1").read_text(
         encoding="utf-8"
@@ -310,6 +313,21 @@ def test_codeagent_skill_setup_and_probe_contracts() -> None:
     assert "codeagent-compatibility.md" in skill
     assert "Compress-Archive" in package
     assert "runtime-config.json" in package
+    collector.encode("ascii")
+    for contract in (
+        "nga-root-bin",
+        "codeagent.exe",
+        "Invoke-ProbeForCommand",
+        "debug', 'config",
+        "debug', 'paths",
+        "FULL_NGA_MCP",
+        "DIRECT_MCP_OK_CLIENT_CONFIG_NOT_ACTIVE",
+        "codeagent-diagnostics-shareable.json",
+        "local_only_files",
+        "RuntimeUrl must use HTTP(S) on loopback",
+    ):
+        assert contract in collector
+    assert (repo / "scripts" / "collect_codeagent_diagnostics.bat").is_file()
 
     native = json.loads(
         (repo / "agent-integrations" / "codearts.native.mcp.example.json").read_text(encoding="utf-8")

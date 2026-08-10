@@ -190,6 +190,47 @@ scripts\probe_codeagent_compatibility.bat `
 如果公司魔改版的可执行文件仍叫 `opencode`，但实际遵循 CodeArts 的 `.codeartsdoer` 目录，必须传
 `-ClientFamily CodeArts`，避免仅根据命令名误判 Skill 搜索路径。
 
+### 一键诊断 `nga` 与 `bin\codeagent.exe`
+
+若公司的实际入口是安装根目录下的 `nga`，内部程序是 `bin\codeagent.exe`，从 vNext 仓库根目录运行：
+
+```powershell
+scripts\collect_codeagent_diagnostics.bat
+```
+
+脚本会自动：
+
+- 解析 PATH 中的 `nga`，并优先查找其同级 `bin\codeagent.exe`；
+- 分别执行有超时的版本、帮助和 `mcp list` 探测；
+- 直接完成两次 stdio MCP `initialize`/`tools/list` 握手；
+- 只用布尔值记录 `nga debug config` 是否真正包含 `gw-ap-debug-vnext`，不保存完整生效配置；
+- 运行 `nga debug paths`，替换用户、仓库和 Runtime 路径并过滤密钥及非 loopback URL；
+- 生成明确区分“可以分享”和“仅本机保留”的诊断文件。
+
+自动定位失败时显式传路径：
+
+```powershell
+scripts\collect_codeagent_diagnostics.bat `
+  -NgaCommand 'C:\实际安装目录\nga.exe' `
+  -CodeAgentExe 'C:\实际安装目录\bin\codeagent.exe'
+```
+
+默认输出目录为：
+
+```text
+%LOCALAPPDATA%\GWAPDebugVNext\logs\codeagent-diagnostics\<timestamp>
+```
+
+可以检查并分享：
+
+- `codeagent-diagnostics-shareable.json`；
+- `codeagent-diagnostics-shareable.txt`；
+- 若生成，`nga-debug-paths-sanitized.txt`。
+
+不要分享 `nga-probe.json`、`codeagent-exe-probe.json`、完整 `debug config`、环境变量或 CLI 原始日志。
+汇总状态会直接区分 `FULL_NGA_MCP`、仅内部 exe 可连接、MCP 本体正常但客户端配置未生效，以及
+MCP 握手失败。
+
 ## 4. 手工确认 Skill 与 MCP
 
 启动 CodeArts TUI 后输入：

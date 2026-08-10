@@ -155,10 +155,11 @@ scripts\test_opencode_integration.bat
 ```bat
 scripts\setup_codeagent_vnext.bat -AgentCommand codearts
 scripts\probe_codeagent_compatibility.bat -AgentCommand codearts -Strict
+scripts\collect_codeagent_diagnostics.bat
 ```
 
 如果公司可执行文件名不是 `codearts`，可传实际命令名或绝对路径。Skill-only、MCP schema
-切换、Skill zip 导入和完整排查流程见
+切换、`nga` + `bin\codeagent.exe` 双入口脱敏诊断、Skill zip 导入和完整排查流程见
 [CodeAgent 兼容指南](docs/codeagent-compatibility.md)。
 
 默认 API 与 Optional Web 共用 `127.0.0.1:8765`。运行数据放在 `%LOCALAPPDATA%\GWAPDebug`；

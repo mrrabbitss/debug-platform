@@ -33,3 +33,7 @@ the tool description; do not treat a changed prefix as an incompatible server.
 Run `scripts/probe_codeagent_compatibility.bat` from the repository root to verify Skill discovery,
 known config schemas, Runtime health, the direct MCP handshake, raw tool names and the client MCP
 registration without reading credentials or log bodies.
+
+When a company wrapper launches `nga` while the internal binary is `bin/codeagent.exe`, run the
+repository-level `scripts/collect_codeagent_diagnostics.bat`. Share only its files named
+`codeagent-diagnostics-shareable.*`; keep the raw per-command probe reports local.
