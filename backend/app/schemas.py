@@ -279,6 +279,7 @@ class ModelProfileCreate(BaseModel):
     model_name: str = ""
     base_url: str | None = None
     api_key: str | None = None
+    proxy_url: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
 
@@ -291,6 +292,8 @@ class ModelProfileUpdate(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     clear_api_key: bool = False
+    proxy_url: str | None = None
+    clear_proxy_url: bool = False
     config: dict[str, Any] | None = None
     enabled: bool | None = None
 
@@ -305,6 +308,9 @@ class ModelProfileOut(ORMModel):
     base_url: str | None
     api_key_configured: bool = False
     api_key_hint: str | None = None
+    proxy_url_configured: bool = False
+    proxy_url_hint: str | None = None
+    certificate_revocation_check_skipped: bool = False
     config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool
     is_active: bool

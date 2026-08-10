@@ -38,11 +38,15 @@ from app.services.health import readiness_report, system_status_report
 from app.services.knowledge_graph import domain_graph_status
 from app.services.llm import LLMError, get_active_chat_model_info, get_llm_provider
 from app.services.model_profiles import (
+    COMPATIBLE_CHAT_PROVIDERS,
     activate_model_profile,
     get_active_model_profile,
+    get_profile_proxy_url,
     model_profile_to_dict,
     new_model_profile_id,
+    profile_uses_proxy,
     set_profile_api_key,
+    set_profile_proxy_url,
     validate_model_profile,
 )
 from app.services.retrieval_models import (
@@ -316,18 +320,17 @@ def revoke_user_token(user_id: str, token_id: str, request: Request, db: Db) -> 
 def model_config(db: Db) -> dict:
     profile = get_active_model_profile("chat", db)
     info = get_active_chat_model_info()
+    proxy_enabled = profile_uses_proxy(profile)
     return {
         "profile_id": info["profile_id"],
         "profile_name": info["profile_name"],
         "provider": info["provider"],
         "base_url_configured": bool(profile and profile.base_url),
         "api_key_configured": bool(profile and profile.api_key_ciphertext),
+        "proxy_url_configured": proxy_enabled,
+        "certificate_revocation_check_skipped": proxy_enabled,
         "model": info["model"],
-        "compatible_providers": [
-            "Qwen Model Studio OpenAI-compatible API",
-            "GLM OpenAI-compatible API",
-            "internal OpenAI-compatible gateway",
-        ],
+        "compatible_providers": list(COMPATIBLE_CHAT_PROVIDERS),
     }
 
 
@@ -405,6 +408,7 @@ def create_model_profile(payload: ModelProfileCreate, db: Db) -> dict:
             payload.provider,
             payload.model_name,
             payload.base_url,
+            payload.proxy_url,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -421,6 +425,10 @@ def create_model_profile(payload: ModelProfileCreate, db: Db) -> dict:
         is_active=False,
     )
     set_profile_api_key(profile, payload.api_key)
+    try:
+        set_profile_proxy_url(profile, payload.proxy_url)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     db.add(profile)
     db.commit()
     db.refresh(profile)
@@ -439,7 +447,12 @@ def update_model_profile(
     values = payload.model_dump(exclude_unset=True)
     api_key = values.pop("api_key", None)
     clear_api_key = bool(values.pop("clear_api_key", False))
+    proxy_url_supplied = "proxy_url" in values
+    proxy_url = values.pop("proxy_url", None)
+    clear_proxy_url = bool(values.pop("clear_proxy_url", False))
     config = values.pop("config", None)
+    if clear_proxy_url and proxy_url:
+        raise HTTPException(400, "Cannot set and clear the model proxy in one request")
     if profile.is_active and values.get("enabled") is False:
         raise HTTPException(409, "Activate another profile before disabling this one")
     before_signature = (
@@ -457,6 +470,13 @@ def update_model_profile(
         set_profile_api_key(profile, "")
     elif api_key is not None:
         set_profile_api_key(profile, api_key)
+    try:
+        if clear_proxy_url:
+            set_profile_proxy_url(profile, "")
+        elif proxy_url_supplied:
+            set_profile_proxy_url(profile, proxy_url)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if profile.is_active and profile.mode == "api" and not profile.api_key_ciphertext:
         raise HTTPException(409, "The active API profile must keep a configured API key")
     try:
@@ -466,6 +486,7 @@ def update_model_profile(
             profile.provider,
             profile.model_name,
             profile.base_url,
+            get_profile_proxy_url(profile) if profile.proxy_url_ciphertext else None,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -536,6 +557,7 @@ async def test_model_profile(profile_id: str, db: Db) -> dict:
                 "ok": provider.is_mock or "MODEL_CONNECTION_OK" in text,
                 "response": text[:500],
                 "model": provider.model_name,
+                "proxy_url_configured": getattr(provider, "proxy_configured", False),
             }
         if profile.task_type == "embedding":
             vectors = await run_in_threadpool(

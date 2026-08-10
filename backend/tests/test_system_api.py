@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -9,9 +10,12 @@ from app.api.routes import router
 from app.core.db import Base, get_db
 from app.services.knowledge_taxonomy import seed_knowledge_categories
 from app.services.model_profiles import seed_model_profiles
+from app.services import secrets
 
 
-def test_model_and_layered_knowledge_api_round_trip(tmp_path: Path):
+def test_model_and_layered_knowledge_api_round_trip(tmp_path: Path, monkeypatch):
+    fernet = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(secrets, "_get_fernet", lambda: fernet)
     engine = create_engine(f"sqlite:///{tmp_path / 'api.db'}", connect_args={"check_same_thread": False})
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     Base.metadata.create_all(bind=engine)
@@ -31,6 +35,31 @@ def test_model_and_layered_knowledge_api_round_trip(tmp_path: Path):
         models = client.get("/api/v1/system/models")
         assert models.status_code == 200
         assert {item["task_type"] for item in models.json()} == {"chat", "embedding", "reranker"}
+
+        chat_profile = client.post("/api/v1/system/models", json={
+            "name": "Proxied GLM",
+            "task_type": "chat",
+            "mode": "api",
+            "provider": "openai_compatible",
+            "model_name": "glm-5.2",
+            "base_url": "https://model.example.com/v1",
+            "api_key": "sk-test-secret",
+            "proxy_url": "http://proxy-user:proxy-secret@proxy.example.com:8080",
+            "config": {"temperature": 0.1, "timeout_seconds": 30},
+            "enabled": True,
+        })
+        assert chat_profile.status_code == 200, chat_profile.text
+        profile_json = chat_profile.json()
+        assert profile_json["proxy_url_configured"] is True
+        assert profile_json["proxy_url_hint"] == "http://proxy.example.com:8080"
+        assert "proxy-secret" not in chat_profile.text
+
+        cleared_proxy = client.patch(
+            f"/api/v1/system/models/{profile_json['id']}",
+            json={"clear_proxy_url": True},
+        )
+        assert cleared_proxy.status_code == 200, cleared_proxy.text
+        assert cleared_proxy.json()["proxy_url_configured"] is False
 
         categories = client.get("/api/v1/knowledge/categories")
         assert categories.status_code == 200

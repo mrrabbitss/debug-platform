@@ -32,14 +32,15 @@ def encrypt_secret(value: str) -> str:
     return _get_fernet().encrypt(value.encode("utf-8")).decode("ascii")
 
 
-def decrypt_secret(value: str | None) -> str:
+def decrypt_secret(value: str | None, secret_name: str = "secret") -> str:
     if not value:
         return ""
     try:
         return _get_fernet().decrypt(value.encode("ascii")).decode("utf-8")
     except (InvalidToken, ValueError) as exc:
         raise SecretDecryptionError(
-            "The saved API key cannot be decrypted. Restore MODEL_SECRET_KEY or enter the API key again."
+            f"The saved {secret_name} cannot be decrypted. "
+            "Restore MODEL_SECRET_KEY or enter it again."
         ) from exc
 
 

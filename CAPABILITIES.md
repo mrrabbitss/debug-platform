@@ -53,7 +53,7 @@
 | --- | --- | --- |
 | 规则诊断 | `AVAILABLE` | 基于事件码产生事实、假设、行动建议和限制 |
 | 证据约束 LLM 诊断 | `AVAILABLE` | 只允许引用已提供 evidence ID，非法输出回退到确定性结果 |
-| 模型网关 | `AVAILABLE` | 前端管理并切换 Chat、Embedding、Reranker 配置 |
+| 模型网关 | `AVAILABLE` | 前端管理并切换 Chat、Embedding、Reranker 配置；Chat API 支持逐 Profile 加密代理，空值直连，代理启用时保留证书链/主机名校验并跳过吊销检查 |
 | 本地/API Embedding | `AVAILABLE` | 内置 Hashing、本地 Sentence Transformers、兼容 API |
 | 本地/API Reranker | `AVAILABLE` | 本地 CrossEncoder、Qwen Rerank API |
 | 混合检索 | `AVAILABLE` | 有界 BM25 候选、Dense top-K、加权 RRF、模块均衡和单次 Reranker |

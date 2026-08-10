@@ -380,6 +380,11 @@ def _analyze_case_impl(ctx: JobContext, case_id: str) -> dict:
                 "mode": model_info.get("mode"),
                 "base_url": model_info.get("base_url"),
                 "config": model_info.get("config", {}),
+                "proxy_url_configured": model_info.get("proxy_url_configured", False),
+                "certificate_revocation_check_skipped": model_info.get(
+                    "certificate_revocation_check_skipped",
+                    False,
+                ),
             }),
             prompt_version="v2-evidence-validated",
         )

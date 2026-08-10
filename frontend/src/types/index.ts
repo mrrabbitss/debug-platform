@@ -158,6 +158,9 @@ export interface ModelProfile {
   base_url?: string
   api_key_configured: boolean
   api_key_hint?: string
+  proxy_url_configured: boolean
+  proxy_url_hint?: string
+  certificate_revocation_check_skipped: boolean
   config: Record<string, any>
   enabled: boolean
   is_active: boolean

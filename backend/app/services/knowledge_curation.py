@@ -136,6 +136,8 @@ def resolve_curation_model(
         "model": provider.model_name,
         "base_url": profile.base_url,
         "config": json_loads(profile.config_json, {}),
+        "proxy_url_configured": bool(profile.proxy_url_ciphertext),
+        "certificate_revocation_check_skipped": bool(profile.proxy_url_ciphertext),
         "prompt_version": PROMPT_VERSION,
     }
     return profile, snapshot

@@ -21,10 +21,13 @@ from app.services.knowledge_taxonomy import (
 from app.services.model_profiles import (
     activate_model_profile,
     get_active_model_profile,
+    get_profile_proxy_url,
     model_profile_to_dict,
     seed_model_profiles,
     set_profile_api_key,
+    set_profile_proxy_url,
     validate_model_endpoint,
+    validate_model_proxy_url,
 )
 from app.services.retrieval_models import rerank_documents
 
@@ -155,6 +158,46 @@ def test_api_keys_are_encrypted_and_never_returned(monkeypatch):
     assert output["api_key_hint"] == "****1234"
     assert "api_key_ciphertext" not in output
     assert "sk-secret-1234" not in str(output)
+
+
+def test_chat_proxy_credentials_are_encrypted_and_never_returned(monkeypatch):
+    fernet = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(secrets, "_get_fernet", lambda: fernet)
+    profile = ModelProfile(
+        id="MODEL-proxy",
+        name="Proxied API model",
+        task_type="chat",
+        mode="api",
+        provider="openai_compatible",
+        model_name="glm-5.2",
+        base_url="https://model.example.com/v1",
+    )
+
+    proxy_url = "http://proxy-user:proxy-password@proxy.example.com:8080"
+    set_profile_proxy_url(profile, proxy_url)
+    output = model_profile_to_dict(profile)
+
+    assert profile.proxy_url_ciphertext != proxy_url
+    assert get_profile_proxy_url(profile) == proxy_url
+    assert output["proxy_url_configured"] is True
+    assert output["proxy_url_hint"] == "http://proxy.example.com:8080"
+    assert output["certificate_revocation_check_skipped"] is True
+    assert "proxy_url_ciphertext" not in output
+    assert "proxy-user" not in str(output)
+    assert "proxy-password" not in str(output)
+
+
+def test_model_proxy_is_limited_to_api_chat_profiles(monkeypatch):
+    monkeypatch.setattr(model_profiles, "get_settings", lambda: _endpoint_settings())
+    monkeypatch.setattr(model_profiles, "_resolved_addresses", lambda host, port: set())
+
+    validate_model_proxy_url("chat", "api", "http://proxy.example.com:8080")
+    with pytest.raises(ValueError, match="API Chat"):
+        validate_model_proxy_url("embedding", "api", "http://proxy.example.com:8080")
+    with pytest.raises(ValueError, match="path"):
+        validate_model_proxy_url("chat", "api", "http://proxy.example.com:8080/admin")
+    with pytest.raises(ValueError, match="http or https"):
+        validate_model_proxy_url("chat", "api", "socks5://proxy.example.com:1080")
 
 
 def test_default_knowledge_taxonomy_has_fault_tree_and_solution_layers(tmp_path: Path):

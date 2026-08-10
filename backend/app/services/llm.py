@@ -14,8 +14,12 @@ from app.services.audit import record_model_egress
 from app.services.model_profiles import (
     get_active_model_profile,
     get_profile_api_key,
+    get_profile_proxy_url,
+    profile_uses_proxy,
     validate_model_endpoint,
+    validate_model_proxy_url,
 )
+from app.services.model_transport import build_chat_http_client, safe_model_connection_error
 
 
 logger = logging.getLogger(__name__)
@@ -70,24 +74,35 @@ class OpenAICompatibleProvider(LLMProvider):
         api_key = get_profile_api_key(profile) if profile else settings.llm_api_key
         base_url = profile.base_url if profile else settings.llm_base_url
         model_name = profile.model_name if profile else settings.llm_model
+        proxy_url = get_profile_proxy_url(profile) if profile and profile.proxy_url_ciphertext else None
         if not api_key or not base_url or not model_name:
             raise LLMError("API key, Base URL and model name are required")
         try:
             validate_model_endpoint(base_url)
+            validate_model_proxy_url("chat", "api", proxy_url)
         except ValueError as exc:
             raise LLMError(str(exc)) from exc
         self.model_name = model_name
         self.profile = profile
         self.base_url = base_url
+        self.proxy_configured = bool(proxy_url)
+        self.certificate_revocation_check_skipped = bool(proxy_url)
         self.temperature = float(config.get("temperature", settings.llm_temperature))
+        timeout_seconds = float(config.get("timeout_seconds", settings.llm_timeout_seconds))
         self.last_usage: dict[str, int | None] = {}
         self.last_duration_ms = 0
         self.last_outcome = "NOT_CALLED"
+        trust_environment = profile is None or profile.id == "MODEL-chat-env"
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
-            timeout=float(config.get("timeout_seconds", settings.llm_timeout_seconds)),
+            timeout=timeout_seconds,
             max_retries=int(config.get("max_retries", settings.llm_max_retries)),
+            http_client=build_chat_http_client(
+                proxy_url=proxy_url,
+                timeout_seconds=timeout_seconds,
+                trust_environment=trust_environment,
+            ),
         )
 
     def _record_egress(
@@ -153,7 +168,10 @@ class OpenAICompatibleProvider(LLMProvider):
                 error_type=type(exc).__name__,
             )
             logger.exception("OpenAI-compatible JSON request failed")
-            raise LLMError(f"Model request failed ({type(exc).__name__})") from exc
+            raise LLMError(safe_model_connection_error(
+                exc,
+                proxy_configured=getattr(self, "proxy_configured", False),
+            )) from exc
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.I)
         try:
             parsed = json.loads(content)
@@ -197,7 +215,10 @@ class OpenAICompatibleProvider(LLMProvider):
                 error_type=type(exc).__name__,
             )
             logger.exception("OpenAI-compatible text request failed")
-            raise LLMError(f"Model request failed ({type(exc).__name__})") from exc
+            raise LLMError(safe_model_connection_error(
+                exc,
+                proxy_configured=getattr(self, "proxy_configured", False),
+            )) from exc
         self._record_egress(
             purpose=purpose,
             system=system,
@@ -223,6 +244,7 @@ def get_llm_provider(profile: ModelProfile | None = None) -> LLMProvider:
 def get_active_chat_model_info() -> dict[str, Any]:
     profile = get_active_model_profile("chat")
     if profile:
+        proxy_enabled = profile_uses_proxy(profile)
         return {
             "profile_id": profile.id,
             "profile_name": profile.name,
@@ -231,6 +253,8 @@ def get_active_chat_model_info() -> dict[str, Any]:
             "mode": profile.mode,
             "base_url": profile.base_url,
             "config": json_loads(profile.config_json, {}),
+            "proxy_url_configured": proxy_enabled,
+            "certificate_revocation_check_skipped": proxy_enabled,
             "is_mock": profile.provider == "mock",
         }
     settings = get_settings()
@@ -246,5 +270,7 @@ def get_active_chat_model_info() -> dict[str, Any]:
             "timeout_seconds": settings.llm_timeout_seconds,
             "max_retries": settings.llm_max_retries,
         },
+        "proxy_url_configured": False,
+        "certificate_revocation_check_skipped": False,
         "is_mock": settings.llm_provider == "mock",
     }

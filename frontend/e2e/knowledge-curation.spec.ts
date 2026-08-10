@@ -127,3 +127,69 @@ test('uploads, previews, curates, corrects and confirms a DRAFT with no console 
     "throw new Error('HTML scripts must never execute')"
   )
 })
+
+
+test('configures and clears an encrypted Chat proxy without exposing credentials', async ({ page, request }) => {
+  const consoleErrors: string[] = []
+  page.on('console', message => {
+    if (message.type() === 'error' || message.type() === 'warning') {
+      consoleErrors.push(`${message.type()}: ${message.text()}`)
+    }
+  })
+  page.on('pageerror', error => consoleErrors.push(`pageerror: ${error.message}`))
+
+  const created = await request.post(`${apiUrl}/system/models`, {
+    data: {
+      name: 'Proxy Settings E2E Chat',
+      task_type: 'chat',
+      mode: 'api',
+      provider: 'openai_compatible',
+      model_name: 'proxy-settings-e2e',
+      base_url: `${fakeModelUrl}/v1`,
+      api_key: fakeApiCredential,
+      config: { temperature: 0, timeout_seconds: 10, max_retries: 0 },
+      enabled: true
+    }
+  })
+  expect(created.ok(), await created.text()).toBeTruthy()
+  const profile = await created.json()
+
+  try {
+    await page.goto('/settings')
+    let row = page.locator('.el-table__row').filter({ hasText: 'Proxy Settings E2E Chat' })
+    await expect(row).toContainText('直连')
+    await row.getByRole('button', { name: '修改' }).click()
+    await page.getByTestId('model-proxy-url').fill(
+      'http://proxy-user:proxy-secret@proxy.example.com:8080'
+    )
+    await page.getByTestId('model-profile-save').click()
+
+    row = page.locator('.el-table__row').filter({ hasText: 'Proxy Settings E2E Chat' })
+    await expect(row).toContainText('http://proxy.example.com:8080')
+    await expect(page.locator('body')).not.toContainText('proxy-user')
+    await expect(page.locator('body')).not.toContainText('proxy-secret')
+
+    let listed = await request.get(`${apiUrl}/system/models`, {
+      params: { task_type: 'chat' }
+    })
+    let saved = (await listed.json()).find((item: any) => item.id === profile.id)
+    expect(saved.proxy_url_configured).toBe(true)
+    expect(saved.proxy_url_hint).toBe('http://proxy.example.com:8080')
+    expect(JSON.stringify(saved)).not.toContain('proxy-secret')
+
+    await row.getByRole('button', { name: '修改' }).click()
+    await page.getByTestId('clear-model-proxy').click()
+    await page.getByTestId('model-profile-save').click()
+    row = page.locator('.el-table__row').filter({ hasText: 'Proxy Settings E2E Chat' })
+    await expect(row).toContainText('直连')
+
+    listed = await request.get(`${apiUrl}/system/models`, {
+      params: { task_type: 'chat' }
+    })
+    saved = (await listed.json()).find((item: any) => item.id === profile.id)
+    expect(saved.proxy_url_configured).toBe(false)
+    expect(consoleErrors).toEqual([])
+  } finally {
+    await request.delete(`${apiUrl}/system/models/${profile.id}`)
+  }
+})

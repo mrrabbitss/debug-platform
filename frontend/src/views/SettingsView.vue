@@ -27,6 +27,8 @@ const form = reactive({
   base_url: '',
   api_key: '',
   clear_api_key: false,
+  proxy_url: '',
+  clear_proxy_url: false,
   enabled: true,
   temperature: 0.1,
   timeout_seconds: 120,
@@ -41,6 +43,7 @@ const form = reactive({
 
 const taskProfiles = computed(() => profiles.value.filter(item => item.task_type === activeTask.value))
 const dialogTitle = computed(() => editingId.value ? '修改模型配置' : '添加模型配置')
+const editingProfile = computed(() => profiles.value.find(item => item.id === editingId.value))
 
 const taskLabels: Record<ModelTask, string> = {
   chat: '诊断大模型',
@@ -106,6 +109,8 @@ function resetForm(task: ModelTask) {
   form.base_url = ''
   form.api_key = ''
   form.clear_api_key = false
+  form.proxy_url = ''
+  form.clear_proxy_url = false
   form.enabled = true
   form.temperature = 0.1
   form.timeout_seconds = 120
@@ -139,6 +144,8 @@ function openEdit(profile: ModelProfile) {
   form.base_url = profile.base_url || ''
   form.api_key = ''
   form.clear_api_key = false
+  form.proxy_url = ''
+  form.clear_proxy_url = false
   form.enabled = profile.enabled
   form.temperature = Number(profile.config.temperature ?? 0.1)
   form.timeout_seconds = Number(profile.config.timeout_seconds ?? 120)
@@ -193,8 +200,14 @@ async function saveProfile() {
       enabled: form.enabled
     }
     if (form.api_key) payload.api_key = form.api_key
+    if (form.task_type === 'chat' && form.mode === 'api' && form.proxy_url.trim()) {
+      payload.proxy_url = form.proxy_url.trim()
+    }
     if (editingId.value) {
       payload.clear_api_key = form.clear_api_key
+      payload.clear_proxy_url = form.proxy_url.trim()
+        ? false
+        : (form.mode !== 'api' ? true : form.clear_proxy_url)
       await api.patch(`/system/models/${editingId.value}`, payload)
     } else {
       payload.task_type = form.task_type
@@ -227,7 +240,9 @@ async function testProfile(profile: ModelProfile) {
     } else if (profile.task_type === 'reranker') {
       ElMessage.success(data.disabled ? 'Reranker 已关闭' : 'Reranker 测试正常')
     } else {
-      ElMessage.success('模型连接正常')
+      ElMessage.success(data.proxy_url_configured
+        ? '模型连接正常（已使用配置代理，并跳过证书吊销检查）'
+        : '模型连接正常（直连）')
     }
   } catch (error) {
     ElMessage.error(errorText(error))
@@ -306,7 +321,7 @@ onMounted(load)
     </div>
 
     <el-alert type="info" :closable="false" style="margin-bottom:16px">
-      <template #title>模型密钥由后端加密保存，页面不会回显完整 API Key。切换诊断模型和 Reranker 立即生效；切换 Embedding 后需要重建向量索引。</template>
+      <template #title>模型密钥和含凭据的代理地址由后端加密保存，页面不会回显完整值。切换诊断模型和 Reranker 立即生效；切换 Embedding 后需要重建向量索引。</template>
     </el-alert>
 
     <el-card>
@@ -328,6 +343,9 @@ onMounted(load)
         <el-table-column label="适配器" min-width="180"><template #default="scope">{{ providerLabels[scope.row.provider] || scope.row.provider }}</template></el-table-column>
         <el-table-column prop="model_name" label="模型名/本地路径" min-width="220" show-overflow-tooltip />
         <el-table-column label="API Key" width="110"><template #default="scope">{{ scope.row.api_key_configured ? scope.row.api_key_hint || '已配置' : '—' }}</template></el-table-column>
+        <el-table-column v-if="activeTask === 'chat'" label="模型代理" min-width="190" show-overflow-tooltip>
+          <template #default="scope">{{ scope.row.mode === 'api' && scope.row.proxy_url_configured ? scope.row.proxy_url_hint || '已配置' : '直连' }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="250" fixed="right">
           <template #default="scope">
             <el-button v-if="!scope.row.is_active" link type="primary" @click="activate(scope.row as ModelProfile)">切换使用</el-button>
@@ -369,6 +387,29 @@ onMounted(load)
           <el-form-item label="Base URL"><el-input v-model="form.base_url" placeholder="Embedding/Chat 填到 /v1；Qwen Reranker 可填到 /compatible-api/v1" /></el-form-item>
           <el-form-item label="API Key"><el-input v-model="form.api_key" type="password" show-password :placeholder="editingId ? '留空则保留原密钥' : '仅发送并保存在后端'" /></el-form-item>
           <el-form-item v-if="editingId" label="清除原密钥"><el-switch v-model="form.clear_api_key" /></el-form-item>
+          <template v-if="form.task_type === 'chat'">
+            <el-form-item label="模型代理">
+              <div style="width:100%">
+                <el-input
+                  v-model="form.proxy_url"
+                  data-testid="model-proxy-url"
+                  type="password"
+                  show-password
+                  autocomplete="off"
+                  :placeholder="editingProfile?.proxy_url_configured ? '留空则保留原代理' : '留空直连，例如 http://proxy.corp:8080'"
+                />
+                <div class="muted" style="margin-top:6px">仅作用于此回答模型；可填写含认证信息的 HTTP/HTTPS 代理 URL，后端会加密保存。</div>
+              </div>
+            </el-form-item>
+            <el-form-item v-if="editingId" label="清除原代理"><el-switch v-model="form.clear_proxy_url" data-testid="clear-model-proxy" /></el-form-item>
+            <el-alert
+              v-if="form.proxy_url || (editingProfile?.proxy_url_configured && !form.clear_proxy_url)"
+              type="warning"
+              :closable="false"
+              style="margin-bottom:16px"
+              title="代理启用时会强制跳过证书吊销检查，但仍严格验证证书链和目标主机名；不会关闭 TLS 验证。"
+            />
+          </template>
         </template>
         <template v-if="form.task_type === 'chat'">
           <el-form-item label="Temperature"><el-input-number v-model="form.temperature" :min="0" :max="2" :step="0.1" /></el-form-item>
@@ -388,7 +429,7 @@ onMounted(load)
         <el-form-item v-if="form.mode === 'api'" label="超时秒数"><el-input-number v-model="form.timeout_seconds" :min="5" :max="600" /></el-form-item>
         <el-form-item label="启用"><el-switch v-model="form.enabled" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" :loading="saving" @click="saveProfile">保存</el-button></template>
+      <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button data-testid="model-profile-save" type="primary" :loading="saving" @click="saveProfile">保存</el-button></template>
     </el-dialog>
   </div>
 </template>

@@ -316,7 +316,9 @@ LLM_MODEL=your-model-name
 
 Qwen、GLM 或内部模型只要提供兼容的 `/chat/completions` 接口即可接入。业务代码不会直接依赖厂商 SDK。
 
-也可以直接在“系统设置 → 模型网关”中添加多套诊断模型、Embedding 和 Reranker 配置并切换。前端提交的模型 API Key 由后端加密保存，不会通过查询接口回显。`.env` 的 `LLM_*` 配置保留为首次升级和无人值守部署的兼容入口。
+也可以直接在“系统设置 → 模型网关”中添加多套诊断模型、Embedding 和 Reranker 配置并切换。前端提交的模型 API Key 和 Chat 模型代理 URL 由后端加密保存，不会通过查询接口回显完整值。代理留空时该 Profile 直连；配置代理后只影响该 Chat 模型，不改变 Embedding、Reranker 或项目其他网络访问。`.env` 的 `LLM_*` 配置保留为首次升级和无人值守部署的兼容入口。
+
+公司中间人代理可以在 Chat Profile 中填写标准 HTTP/HTTPS 代理 URL，例如 `http://proxy.corp.example:8080`。启用代理后，模型客户端强制关闭证书吊销检查，但仍要求证书链可信且目标主机名匹配，不会使用不安全的 `verify=false`。如果公司根证书尚未进入 Python 可用的信任源，请由管理员安装根证书或配置受管的 `SSL_CERT_FILE`；不要关闭完整 TLS 校验。
 
 本地 BGE Embedding 和 Qwen3 Reranker 属于可选大型依赖。先启动过一次项目以建立 `.venv`，关闭服务窗口。公司网络、代理或镜像情况不确定时，可以先双击以下检测脚本：
 
@@ -386,7 +388,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models
 - 模型服务是否经过公司批准；
 - 日志和源码是否允许发送到该端点；
 - Base URL 是否位于内网或受控网络；
-- API Key 不得写入前端、Git 或报告。
+- API Key 和代理凭据不得写入前端持久化、Git 或报告。
 
 模型网关地址会在保存、启用和实际请求前校验。默认只允许公开 HTTPS 地址，并拒绝 `file://`、云元数据、链路本地、未授权回环和私网地址。公司内网模型请在 `.env` 明确列出主机名：
 
@@ -395,7 +397,7 @@ MODEL_ENDPOINT_ALLOWLIST=model-gateway.corp.example,.approved-models.corp.exampl
 MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 ```
 
-白名单中的端点可以使用内网 HTTP（仍建议优先 HTTPS）。`APP_ENV=prod` 时所有 API 模型端点都必须在白名单内；不要为了省事开启整个私网，优先逐个列出批准的网关主机。
+白名单中的端点可以使用内网 HTTP（仍建议优先 HTTPS）。私网、本机或单标签代理主机也应加入同一白名单；`APP_ENV=prod` 时所有 API 模型端点和模型代理都必须在白名单内。不要为了省事开启整个私网，优先逐个列出批准的网关和代理主机。
 
 ## 6. 核心数据流
 
