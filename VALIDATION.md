@@ -1,35 +1,59 @@
 # Validation Record
 
-Last validated: 2026-08-05 on Windows 11.
+Last unified Full validation: 2026-08-10 on Windows 11.
+
+Latest focused Agent Runtime vNext validation: 2026-08-10 on Windows. The detailed
+machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
+`AGENT_RUNTIME_VNEXT_VALIDATION.md`.
+
+## Agent Runtime vNext follow-up
+
+- Focused Agent Runtime, CLI/MCP and startup tests: PASS, 39 passed.
+- Complete backend regression: PASS, 172 passed / 1 skipped / 0 failed.
+- Backend line coverage: 75.46%, above the enforced 75% quality gate.
+- Repository Harness: PASS, 13/13 checks and 25 Workflow/OpenAPI operations.
+- Architecture and PowerShell/JSON syntax gates: PASS.
+- Native Windows multi-process Agent Runtime E2E: PASS with exit code 0.
+- Real OpenCode 1.18.15 + free DeepSeek model + Skill + MCP diagnostic workflow:
+  PASS using synthetic data. OpenCode called all six required diagnostic tools
+  and cited real `EVT-*` evidence in its final reasoning.
+- The default installer was not run and main was not modified. Side-by-side
+  installer namespacing and external-result submission remain explicit limitations.
+- Python lock verification now tolerates Git-for-Windows CRLF checkout without
+  weakening content comparison. Current Python, frontend and extension production
+  dependency audits passed with no known vulnerabilities.
 
 ## Current local regression result
 
-- Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
+- Unified `scripts\validate_all.bat Full`: all 19 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 140 passed and 1 external-service test skipped locally.
-- Backend line coverage: 76.82%, above the enforced 75% quality gate.
+- Backend tests: 172 passed and 1 external-service test skipped locally.
+- Backend line coverage: 75.46%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
 - Browser E2E: 1 complete Edge scenario passed in an isolated runtime. It covered
   TXT, HTML, DOCX and PDF upload/preview, draft generation, conversational
   correction, human confirmation, trace inspection and safe replay. Browser
   console errors and warnings: zero.
-- Repository Harness: all 13 contracts passed across 19 required files, 14
-  Markdown files, dependency-update targets and 19 allowlisted Workflow operations.
-- Architecture checks: 70 Python files and 11 Vue files passed file-size,
+- Repository Harness: all 13 contracts passed across 19 required files, 20
+  Markdown files, dependency-update targets and 25 allowlisted Workflow operations.
+- Architecture checks: 80 Python files and 11 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest
   measured Python cyclomatic complexity was 47, below the limit of 50.
 - Backend dependency consistency, lock synchronization, Ruff and Python
   compilation: passed.
 - Vue TypeScript check, production Vite build and VS Code extension TypeScript
   compile: passed.
-- Python, frontend and VS Code extension dependency audits: no known vulnerabilities.
+- Python, frontend and VS Code extension production dependency audits: no known
+  vulnerabilities. The lock refresh includes `pypdf 6.15.0`, `Mako 1.4.1` and a
+  non-vulnerable `nanoid` resolution.
 - Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0012.
-- Isolated runtime smoke and `scripts\doctor.bat`: passed.
+- Native Agent Skill/MCP/CLI E2E, isolated frontend/backend runtime smoke and
+  `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260805-130511-full\summary.json`.
+`artifacts\validation\20260810-111013-full\summary.json`.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,

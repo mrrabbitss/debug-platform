@@ -47,8 +47,8 @@ const path = __importStar(require("path"));
 function workspaceConfig() {
     const c = vscode.workspace.getConfiguration('gwap');
     return {
-        backend: (c.get('backendUrl') || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, ''),
-        web: (c.get('webUrl') || 'http://127.0.0.1:5173').replace(/\/$/, ''),
+        backend: (c.get('backendUrl') || 'http://127.0.0.1:8765/api/v1').replace(/\/$/, ''),
+        web: (c.get('webUrl') || 'http://127.0.0.1:8765/ui').replace(/\/$/, ''),
         defaultCaseId: c.get('defaultCaseId') || ''
     };
 }
@@ -171,11 +171,28 @@ function activate(context) {
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!root)
             return vscode.window.showWarningMessage('Open a workspace first');
-        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Packaging and uploading workspace', cancellable: false }, async () => {
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Associating current workspace', cancellable: false }, async () => {
+            const c = await config(context);
+            try {
+                // vNext: when VS Code and Runtime are on the same machine, avoid copying
+                // a large repository. The Runtime registers this path read-only and reuses
+                // the existing Code/Commit Graph indexer.
+                const attached = await axios_1.default.post(`${c.backend}/cases/${caseId}/workspaces/attach`, { path: root, name: path.basename(root) }, { headers: c.headers, timeout: 30000 });
+                const indexed = await axios_1.default.post(`${c.backend}/workspaces/${attached.data.id}/index`, {}, { headers: c.headers, timeout: 30000 });
+                await waitForJob(c.backend, c.headers, indexed.data.job_id);
+                vscode.window.showInformationMessage(`Local workspace attached and indexed: ${attached.data.id}`);
+                return;
+            }
+            catch (error) {
+                const status = Number(error?.response?.status || 0);
+                if (![400, 404, 405].includes(status))
+                    throw error;
+                // Remote/legacy Runtime: the server cannot see this client path, so keep
+                // the previous archive-upload behavior as a compatibility fallback.
+            }
             const zip = await zipWorkspace(root);
             try {
                 const response = await uploadFile(context, caseId, vscode.Uri.file(zip), `/cases/${caseId}/repositories`);
-                const c = await config(context);
                 await waitForJob(c.backend, c.headers, response.data.job.id);
                 const job = await axios_1.default.post(`${c.backend}/repositories/${response.data.repository_id}/index`, {}, { headers: c.headers });
                 vscode.window.showInformationMessage(`Repository imported. Index job: ${job.data.id}`);

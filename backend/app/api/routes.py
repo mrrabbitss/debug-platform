@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.agent_runs import router as agent_runs_router
+from app.api.agent_runtime import router as agent_runtime_router
 from app.api.jobs import router as jobs_router
 from app.api.knowledge import router as knowledge_router
 from app.api.knowledge_governance import router as knowledge_governance_router
@@ -46,6 +47,7 @@ from app.services.text_files import read_text_range, search_text_lines
 
 router = APIRouter()
 router.include_router(agent_runs_router)
+router.include_router(agent_runtime_router)
 router.include_router(jobs_router)
 router.include_router(knowledge_router)
 router.include_router(knowledge_governance_router)

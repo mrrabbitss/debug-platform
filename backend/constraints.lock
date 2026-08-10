@@ -118,7 +118,7 @@ license-expression==30.4.4
     # via cyclonedx-python-lib
 lxml==6.1.1
     # via python-docx
-mako==1.4.0
+mako==1.4.1
     # via alembic
 markdown-it-py==4.2.0
     # via rich
@@ -247,7 +247,7 @@ pygments==2.20.0
     #   rich
 pyparsing==3.3.2
     # via pip-requirements-parser
-pypdf==6.14.2
+pypdf==6.15.0
     # via gw-ap-debug-backend
 pytest==9.1.1
     # via

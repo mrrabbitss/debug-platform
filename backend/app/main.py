@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
@@ -38,7 +39,7 @@ async def lifespan(app: FastAPI):
 settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
-    version="0.1.0",
+    version="0.5.0",
     description="Evidence-driven GW/AP collectDebuginfo analysis, RAG and code correlation platform.",
     lifespan=lifespan,
 )
@@ -58,4 +59,47 @@ app.include_router(router, prefix=settings.api_prefix, dependencies=[Depends(ver
 
 @app.get("/")
 def root() -> dict:
-    return {"name": settings.app_name, "docs": "/docs", "api": settings.api_prefix}
+    return {
+        "name": settings.app_name,
+        "docs": "/docs",
+        "api": settings.api_prefix,
+        "ui": "/ui/" if settings.serve_frontend else None,
+        "agent_mode": settings.agent_mode,
+    }
+
+
+def _frontend_file(relative: str):
+    dist = settings.frontend_dist.resolve()
+    candidate = (dist / relative).resolve()
+    if candidate != dist and dist not in candidate.parents:
+        raise HTTPException(404, "Frontend asset not found")
+    return candidate
+
+
+@app.get("/ui", include_in_schema=False)
+def ui_redirect():
+    index = settings.frontend_dist / "index.html"
+    if not settings.serve_frontend or not index.is_file():
+        return HTMLResponse(
+            "<h1>GW/AP Debug Web UI is not built.</h1>"
+            "<p>Run the production frontend build or use the Agent/CLI interface.</p>",
+            status_code=503,
+        )
+    return FileResponse(index)
+
+
+@app.get("/ui/{asset_path:path}", include_in_schema=False)
+def ui_files(asset_path: str):
+    index = settings.frontend_dist / "index.html"
+    if not settings.serve_frontend or not index.is_file():
+        return HTMLResponse(
+            "<h1>GW/AP Debug Web UI is not built.</h1>"
+            "<p>Run the production frontend build or use the Agent/CLI interface.</p>",
+            status_code=503,
+        )
+    if asset_path:
+        candidate = _frontend_file(asset_path)
+        if candidate.is_file():
+            return FileResponse(candidate)
+    # SPA history fallback (e.g. /ui/cases/CASE-...).
+    return FileResponse(index)

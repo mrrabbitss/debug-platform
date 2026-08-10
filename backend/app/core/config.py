@@ -8,7 +8,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BACKEND_ROOT.parent
-DEFAULT_DATA_ROOT = BACKEND_ROOT / "data"
 
 
 class Settings(BaseSettings):
@@ -57,6 +56,24 @@ class Settings(BaseSettings):
     job_default_timeout_seconds: int = 1800
     tool_timeout_seconds: int = 300
 
+    # Agent integration. ``platform`` preserves the standalone Web product;
+    # ``external`` keeps Claude Code/OpenCode as the final reasoner and prevents
+    # the platform diagnosis/chat path from invoking a second chat LLM.
+    agent_mode: Literal["platform", "external"] = "platform"
+    agent_runtime_host: str = "127.0.0.1"
+    agent_runtime_port: int = 8765
+    serve_frontend: bool = True
+    frontend_dist: Path = Path("../frontend/dist")
+
+    # Local runtime state and discovery roots. DATA_ROOT_PATH can be pointed at
+    # %LOCALAPPDATA%\GWAPDebug\data by the Win11 agent launcher.
+    data_root_path: Path = Path("./data")
+    model_roots: str = "models"
+    local_model_scan_max_depth: int = 4
+    local_model_metadata_max_bytes: int = 2 * 1024 * 1024
+    workspace_attach_enabled: bool = True
+    workspace_roots: str = ""
+
     llm_provider: Literal["mock", "openai_compatible"] = "mock"
     llm_api_key: str = ""
     llm_base_url: str = ""
@@ -96,6 +113,14 @@ class Settings(BaseSettings):
             self.storage_root = (BACKEND_ROOT / self.storage_root).resolve()
         else:
             self.storage_root = self.storage_root.resolve()
+        if not self.data_root_path.is_absolute():
+            self.data_root_path = (BACKEND_ROOT / self.data_root_path).resolve()
+        else:
+            self.data_root_path = self.data_root_path.resolve()
+        if not self.frontend_dist.is_absolute():
+            self.frontend_dist = (BACKEND_ROOT / self.frontend_dist).resolve()
+        else:
+            self.frontend_dist = self.frontend_dist.resolve()
         if self.app_env == "prod" and self.auth_mode == "local":
             raise ValueError("AUTH_MODE=local is not allowed in APP_ENV=prod")
         if self.auth_mode == "api_key" and not self.api_key:
@@ -104,7 +129,7 @@ class Settings(BaseSettings):
 
     @property
     def data_root(self) -> Path:
-        return DEFAULT_DATA_ROOT
+        return self.data_root_path
 
     @property
     def model_secret_key_path(self) -> Path:
@@ -115,12 +140,38 @@ class Settings(BaseSettings):
         return [x.strip() for x in self.cors_origins.split(",") if x.strip()]
 
     @property
+    def model_root_paths(self) -> list[Path]:
+        """Return deduplicated, absolute local model roots.
+
+        Semicolon is accepted on every platform so a Windows MODEL_ROOTS value
+        such as ``D:\\models;E:\\models`` is never split on the drive colon.
+        Relative paths are resolved from the repository root.
+        """
+        raw = self.model_roots.strip()
+        entries = [item.strip() for item in raw.split(";") if item.strip()]
+        if not entries and raw:
+            entries = [raw]
+        roots: list[Path] = []
+        for entry in entries or ["models"]:
+            path = Path(entry).expanduser()
+            if not path.is_absolute():
+                path = PROJECT_ROOT / path
+            resolved = path.resolve()
+            if resolved not in roots:
+                roots.append(resolved)
+        return roots
+
+    @property
+    def workspace_root_paths(self) -> list[Path]:
+        entries = [item.strip() for item in self.workspace_roots.split(";") if item.strip()]
+        return [Path(item).expanduser().resolve() for item in entries]
+
+    @property
     def model_endpoint_allowlist_entries(self) -> list[str]:
         return [x.strip().lower() for x in self.model_endpoint_allowlist.split(",") if x.strip()]
 
 
 @lru_cache
-
 def get_settings() -> Settings:
     settings = Settings()
     settings.storage_root.mkdir(parents=True, exist_ok=True)

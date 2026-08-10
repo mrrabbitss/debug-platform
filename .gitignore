@@ -22,3 +22,6 @@ hf_model_access_report*.txt
 /artifacts/e2e/
 .agent-runtime/
 .DS_Store
+
+# Agent integration generated for the current machine
+/.mcp.json

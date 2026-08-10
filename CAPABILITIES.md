@@ -3,7 +3,7 @@
 > 本文件是项目功能范围的唯一总账（Single Source of Truth）。
 > 新需求、在研能力、已交付能力、约束和冲突处理都必须同步更新本文件，防止跨迭代遗忘或重复建设。
 
-最后更新：2026-08-05
+最后更新：2026-08-10
 
 工程执行、验证、评测和 Agent 护栏的状态与优先级单独维护在
 [Harness Engineering 路线与状态总账](HARNESS_ENGINEERING.md)。本文件只判断业务能力是否
@@ -32,7 +32,8 @@
 | 仓库 Harness 契约 | `AVAILABLE` | `scripts/check_repo_harness.py` | 检查文档、CI、依赖治理和 Agent API 合同漂移 |
 | SQLite 备份恢复 | `AVAILABLE` | `scripts/backup_local.bat`、`restore_local.bat` | 带清单、哈希校验和回滚保留 |
 | 本地模型网络检测 | `AVAILABLE` | `scripts/check_hf_model_access.bat` | 检查镜像、CLI 和 curl 回退并生成脱敏报告 |
-| 本地模型安装 | `AVAILABLE` | `scripts/install_local_models.bat` | BGE Embedding、Qwen3 Reranker，支持断点续传和哈希校验 |
+| 旧固定模型下载脚本 | `DEPRECATED` | `scripts/install_local_models.bat` | 仅历史兼容；Agent Runtime 的模型发现/验证/激活不依赖此脚本 |
+| 本地模型自动发现与验证 | `AVAILABLE` | `gwap models *`、设置页 | 扫描 `models/`/`MODEL_ROOTS`，元数据确定性分类，低置信度可由 Chat LLM 复核安全 metadata；真实 loader smoke test 后才允许激活 |
 
 ### 2.2 日志接入与解析
 
@@ -90,7 +91,24 @@
 | Commit 意图图谱 | `LIMITED` | query → commit → changed file → 当前 HEAD 代码符号；最多索引 2,000 个 Commit |
 | Git Bundle 导入 | `AVAILABLE` | 在保留完整历史的情况下安全导入仓库 |
 
-### 2.6 安全、权限与部署
+### 2.6 Agent Skill Runtime
+
+| 能力 | 状态 | 说明 |
+| --- | --- | --- |
+| Claude Code / OpenCode Skill | `AVAILABLE` | `.claude/skills/gw-ap-debug`；Evidence-first，MCP 优先、CLI fallback |
+| 薄 MCP Tool 层 | `AVAILABLE` | 12 个高价值工具，复用既有 Tool Registry/FastAPI，不复制 Parser/RAG/Graph |
+| OpenCode MCP 配置 | `AVAILABLE` | 使用 OpenCode 原生 `mcp.<server>` schema；生成的独立配置需通过 `OPENCODE_CONFIG` 加载或合并进 `opencode.json` |
+| OpenCode CLI 合成数据 E2E | `AVAILABLE` | `scripts/test_opencode_integration.bat` 隔离验证 Skill、真实 LLM、MCP 六步工具链、证据引用与 Runtime 持久化 |
+| vNext 新电脑隔离部署 | `AVAILABLE` | `docs/new-pc-vnext-opencode-setup.md` 固定已验证 OpenCode V1 版本，使用独立仓库、Python、数据、端口、MCP 名和 XDG 配置，不覆盖 main |
+| `gwap` CLI | `AVAILABLE` | Runtime、模型、Case、日志、Evidence、Workspace、诊断、报告的稳定 JSON CLI |
+| External Agent Mode | `AVAILABLE` | 跳过平台 Chat LLM diagnosis synthesis/chat/patch，最终推理由 Claude/OpenCode 负责 |
+| External Agent 结论回写 | `PLANNED` | 最终结论当前保留在 Claude/OpenCode 会话；尚无工具将其提交为平台 `AnalysisRun` |
+| External Evidence Bundle | `AVAILABLE` | 有界聚合日志、Knowledge、Domain/Code/Commit Graph、Memory 和检索轨迹 |
+| 同机 Workspace Attach | `AVAILABLE` | read-only 引用真实源码，复用现有 Code/Commit Graph；非 local 鉴权必须配置 `WORKSPACE_ROOTS` |
+| 单端口 Optional Web | `AVAILABLE` | production build 由 FastAPI 在 `127.0.0.1:8765/ui/` 提供，Vite 仅开发时需要 |
+| Agent Runtime Win11 安装 | `LIMITED` | 单实例安装可用；默认 `%LOCALAPPDATA%\GWAPDebug`、全局 Skill 名和 MCP 名尚未命名空间化，不应与已有 main 安装并行执行安装器 |
+
+### 2.7 安全、权限与部署
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |

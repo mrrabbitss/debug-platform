@@ -10,6 +10,17 @@
 
 本仓库是可运行的完整工程，不依赖真实企业数据。默认使用规则引擎和 Mock LLM，因此没有模型密钥也能完成演示；配置公司批准的 Qwen、GLM 或其他 OpenAI-Compatible API 后，会启用受证据约束的 LLM 综合分析与候选补丁生成。
 
+### Agent Runtime vNext：Skill + Tools + Optional Web
+
+在保留上述 Web 独立产品全部能力的基础上，仓库现在同时支持 Claude Code/OpenCode 作为主交互与
+最终推理层：`.claude/skills/gw-ap-debug` 提供 Agent Skill，`backend/app/agent_runtime` 提供 12 个
+高价值 Tool 的薄 MCP 与 `gwap` CLI，FastAPI 继续作为唯一诊断/RAG/Graph Runtime。
+`AGENT_MODE=external` 会跳过平台 Chat LLM 的诊断 synthesis、案例 chat 和候选 patch 二次推理，
+避免“Claude → Qwen/GLM → Claude”的双 LLM 链；Embedding/Reranker 仍可作为检索模型使用。
+生产 Agent Runtime 将构建后的 Vue 挂在同一 `127.0.0.1:8765/ui/`，浏览器只在需要大日志、
+图谱、Trace、知识治理、设置或报告时按需打开。完整说明见
+[Agent Skill Runtime 文档](docs/agent-skill-runtime.md)。
+
 ## 1. 已实现能力
 
 ### P0：基础闭环
@@ -99,10 +110,12 @@
 gw_ap_debug_platform/
 ├── AGENTS.md                Agent/开发者项目地图与工程护栏
 ├── HARNESS_ENGINEERING.md   可执行验证、评测、轨迹和有界 Agent 路线
+├── .claude/skills/          Claude Code/OpenCode Agent Skill
 ├── backend/                 FastAPI、数据库、解析器、RAG、LLM、报告
 ├── frontend/                Vue 3 + TypeScript + Element Plus
 ├── vscode-extension/        私有 VS Code 客户端
-├── workflow/                内部 Skill / Workflow 接口定义
+├── workflow/                Runtime Machine Contract / allowlisted OpenAPI
+├── agent-integrations/      Claude/OpenCode MCP 配置示例
 ├── harness/                 Golden、覆盖率、架构和性能阈值
 ├── sample_data/             可直接演示和回归的纯合成数据
 ├── scripts/                 Windows/Linux 启动及 Demo 初始化
@@ -114,7 +127,30 @@ gw_ap_debug_platform/
 
 要求：Python 3.11+、Node.js 20.19+ 或 22.12+。Python、Node.js 和 npm 需要加入 `PATH`。
 
-### Windows
+### Windows Agent Runtime（Claude Code / OpenCode 推荐）
+
+```bat
+scripts\install_agent_runtime.bat -InstallLocalModels
+gwap start
+gwap doctor
+```
+
+如果机器上已有 main 版本的 Agent Runtime，请不要直接执行当前默认安装器：它仍会复用
+`%LOCALAPPDATA%\GWAPDebug`、全局 Skill 名和 MCP 名。先用完全隔离的合成数据实测 OpenCode：
+
+```bat
+scripts\test_opencode_integration.bat
+```
+
+该命令不会修改 main、个人 OpenCode 配置或真实源码。并行安装的命名空间化仍属于待完成项。
+新电脑从零安装、固定 OpenCode 版本、独立运行目录/端口、真实 LLM + Skill + MCP 验收和常见排错，
+见 [vNext OpenCode 新电脑完整指南](docs/new-pc-vnext-opencode-setup.md)。
+
+默认 API 与 Optional Web 共用 `127.0.0.1:8765`。运行数据放在 `%LOCALAPPDATA%\GWAPDebug`；
+本地模型直接放入 `models/` 或通过 `MODEL_ROOTS` 指定，不需要先运行固定模型下载脚本。
+详见 [docs/agent-skill-runtime.md](docs/agent-skill-runtime.md)。
+
+### Windows 开发模式
 
 ```bat
 scripts\start_local.bat
@@ -318,66 +354,31 @@ Qwen、GLM 或内部模型只要提供兼容的 `/chat/completions` 接口即可
 
 也可以直接在“系统设置 → 模型网关”中添加多套诊断模型、Embedding 和 Reranker 配置并切换。前端提交的模型 API Key 由后端加密保存，不会通过查询接口回显。`.env` 的 `LLM_*` 配置保留为首次升级和无人值守部署的兼容入口。
 
-本地 BGE Embedding 和 Qwen3 Reranker 属于可选大型依赖。先启动过一次项目以建立 `.venv`，关闭服务窗口。公司网络、代理或镜像情况不确定时，可以先双击以下检测脚本：
+本地 Embedding、Reranker 和 Chat 模型的 **vNext 正式入口是自动发现**，不要求采用固定模型名称或固定三级目录，也不依赖旧下载脚本。把已经下载好的 Hugging Face 格式模型放到项目 `models/`，或设置多个模型根目录：
+
+```env
+MODEL_ROOTS=D:\AI\models;E:\shared-models
+```
+
+然后在 Agent Runtime 中执行：
 
 ```bat
-scripts\check_hf_model_access.bat
+gwap models scan
+gwap models list
+gwap models validate LM_xxx --device cpu
+gwap models activate LM_xxx --device cpu
 ```
 
-它只下载 BGE 的 `config.json`，不会下载模型权重，并在项目根目录生成 `hf_model_access_report_*.txt`。结果为 `PASS_HF_CLI` 表示官方 CLI 可用；`PASS_CURL_FALLBACK` 表示 CLI 的元数据请求失败，但正式安装器可以自动使用 `curl.exe` 回退。
+设置页“本地模型自动发现”提供同样能力。扫描器只读取有界 `config.json`、Tokenizer、Sentence-Transformers 等安全元数据并统计权重文件大小；不会读取或向 LLM 上传模型权重。确定性规则无法高置信判断时，显式扫描动作可以调用当前 Chat Profile 对脱敏后的元数据做二次分类。只有真实 loader smoke test 通过、状态为 `VALIDATED` 后，默认才允许激活。
 
-然后运行：
+自动 loader 覆盖 SentenceTransformer Embedding、Sentence-Transformers CrossEncoder、普通 Transformers SequenceClassification Reranker 和 Transformers CausalLM Chat。切换 Embedding 后仍需重建知识库向量 generation。
 
-```bat
-scripts\install_local_models.bat
-```
+<details>
+<summary>历史兼容：固定 BGE/Qwen 下载器</summary>
 
-安装器默认使用 `https://hf-mirror.com` 和 `Auto` 下载模式。它会关闭误继承的离线模式、安装固定兼容版 Hugging Face Hub、锁定两个模型的 revision，并先用 `hf download --local-dir` 下载小型 `config.json` 作为预检。若公司代理或镜像导致 `LocalEntryNotFoundError`，则自动切换到 Win11 内置 `curl.exe`：从镜像 API 读取文件清单，支持 `.partial` 断点续传，并校验文件大小和权重 SHA-256。完成后还会执行项目适配器真实加载测试。它会创建以下目录：
+旧 `scripts\check_hf_model_access.bat` / `scripts\install_local_models.bat` 仍保留，便于已经按旧目录部署的环境维护，但它们不再是 Agent Runtime 模型发现、匹配、验证或激活的前置条件，也不是新实现的模型目录假设来源。已有旧数据库中的固定 Model Profile 不会被自动删除。
 
-```text
-models/
-├─ inference/                         # 预留给后续本地诊断推理模型
-├─ embedding/bge-base-zh-v1.5/       # BAAI/bge-base-zh-v1.5
-└─ reranker/Qwen3-Reranker-0.6B/     # Qwen/Qwen3-Reranker-0.6B
-```
-
-对应的首选下载命令如下。为了保持“推理 / Reranker / Embedding”三级目录，Qwen 模型放在 `models\reranker` 下，而不是直接放在 `models` 根目录：
-
-```powershell
-$env:HF_ENDPOINT = "https://hf-mirror.com"
-
-.\.venv\Scripts\hf.exe download BAAI/bge-base-zh-v1.5 `
-  --local-dir .\models\embedding\bge-base-zh-v1.5
-
-.\.venv\Scripts\hf.exe download Qwen/Qwen3-Reranker-0.6B `
-  --local-dir .\models\reranker\Qwen3-Reranker-0.6B
-```
-
-`models` 已被 Git 忽略，模型权重不会被提交或上传。建议至少预留 6 GiB 磁盘空间；CPU 可以运行，但首次加载 Qwen Reranker 可能需要几分钟。下载中断后重新运行同一个 BAT 文件即可复用已经完成的文件。
-
-如需强制指定下载路径：
-
-```powershell
-# 跳过 hf CLI，直接使用可续传并校验哈希的 curl.exe 路径
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -DownloadMode Curl
-
-# 只允许 hf CLI；CLI 失败时不自动回退
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -DownloadMode HfCli
-```
-
-安装完成后重新运行 `scripts\start_local.bat`，打开“系统设置”：
-
-1. 在“Embedding 模型”中测试并激活带“项目 models 目录”的 BGE Base 配置；
-2. 点击“重建向量索引”；
-3. 在“Reranker 模型”中测试并激活带“项目 models 目录”的 Qwen3 配置。
-
-只检查已下载文件和适配器、不重新下载：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -VerifyOnly
-```
-
-如果公司使用其他 Hugging Face 镜像，可通过 `-Mirror` 指定；如果 Python 包已经由管理员统一安装，可增加 `-SkipRuntimeInstall`。检测报告只记录软件版本、端点、离线开关、代理是否存在以及下载错误，不记录代理地址、API Key、日志或数据库内容。本地 Qwen3 Reranker 的“排序指令”和“推理批量”、BGE 的“检索查询指令”和批量大小均可在系统设置中调整。普通 Win11 CPU 建议先保持默认小批量。
+</details>
 
 详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。从案例文件夹生成并多轮校正知识草稿见 [大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。故障案例、代码/Commit 图谱、三类记忆和 Agentic Search 见 [认知检索与图谱使用说明](docs/cognitive-retrieval.md)。知识审核、领域 GraphRAG、检索评测和人工反馈见 [知识治理、领域图谱与检索评测](docs/quality-governance-and-evaluation.md)。Golden、Playwright、轨迹和有界 Agent 见 [质量评测、Agent 轨迹与有界执行](docs/quality-harness-and-agent-runtime.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
 
@@ -408,8 +409,9 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
   → 事件时间线和规则诊断
   → Agentic Search 编排知识/领域 GraphRAG/记忆/代码图谱/Commit 图谱
   → BM25 + RRF + Dense Embedding + 可选 Reranker 统一排序
-  → 受控 LLM 综合分析与 evidence_id 校验
-  → 结构化诊断 JSON
+  → platform 模式：受控 Qwen/GLM/OpenAI-Compatible LLM 综合分析与 evidence_id 校验
+    或 external 模式：Evidence Bundle → Claude Code / OpenCode 最终推理
+  → 结构化诊断 JSON / 外部 Agent 可追溯诊断
   → HTML / PDF / Word 报告
 ```
 

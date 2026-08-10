@@ -6,6 +6,10 @@ import type { Job, ModelMode, ModelProfile, ModelTask } from '../types'
 
 const profiles = ref<ModelProfile[]>([])
 const retrieval = ref<any>({})
+const agentRuntime = ref<any>({})
+const localModels = ref<any[]>([])
+const scanningModels = ref(false)
+const localModelActionId = ref('')
 const activeTask = ref<ModelTask>('chat')
 const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
@@ -13,8 +17,6 @@ const saving = ref(false)
 const testingId = ref('')
 const reindexing = ref(false)
 const apiKey = ref(localStorage.getItem('gw_ap_api_key') || '')
-const defaultEmbeddingPath = 'models/embedding/bge-base-zh-v1.5'
-const defaultRerankerPath = 'models/reranker/Qwen3-Reranker-0.6B'
 const defaultEmbeddingInstruction = '为这个句子生成表示以用于检索相关文章：'
 const defaultRerankerInstruction = 'Given a network troubleshooting query, retrieve passages that help diagnose and solve it.'
 
@@ -54,7 +56,9 @@ const providerLabels: Record<string, string> = {
   hashing: '内置字符向量',
   sentence_transformers: '本地 Sentence Transformers',
   disabled: '不使用 Reranker',
-  qwen_rerank_api: 'Qwen Rerank API'
+  qwen_rerank_api: 'Qwen Rerank API',
+  transformers_local: '本地 Transformers Chat',
+  transformers_sequence_classifier: '本地 Transformers Sequence Classifier'
 }
 
 function errorText(error: any) {
@@ -62,16 +66,20 @@ function errorText(error: any) {
 }
 
 async function load() {
-  const [modelResponse, retrievalResponse] = await Promise.all([
+  const [modelResponse, retrievalResponse, localResponse, agentRuntimeResponse] = await Promise.all([
     api.get('/system/models'),
-    api.get('/system/retrieval')
+    api.get('/system/retrieval'),
+    api.get('/system/local-models'),
+    api.get('/system/agent-runtime')
   ])
   profiles.value = modelResponse.data
   retrieval.value = retrievalResponse.data
+  localModels.value = localResponse.data
+  agentRuntime.value = agentRuntimeResponse.data
 }
 
 function providerFor(task: ModelTask, mode: ModelMode) {
-  if (task === 'chat') return mode === 'builtin' ? 'mock' : 'openai_compatible'
+  if (task === 'chat') return mode === 'builtin' ? 'mock' : mode === 'local' ? 'transformers_local' : 'openai_compatible'
   if (task === 'embedding') {
     return mode === 'builtin' ? 'hashing' : mode === 'local' ? 'sentence_transformers' : 'openai_compatible'
   }
@@ -79,7 +87,7 @@ function providerFor(task: ModelTask, mode: ModelMode) {
 }
 
 function allowedModes(task: ModelTask): ModelMode[] {
-  return task === 'chat' ? ['builtin', 'api'] : ['builtin', 'local', 'api']
+  return ['builtin', 'local', 'api']
 }
 
 function updateProvider() {
@@ -88,12 +96,6 @@ function updateProvider() {
   if (form.provider === 'hashing') form.model_name = 'hashing-char-384'
   if (form.provider === 'mock') form.model_name = 'rule-engine'
   if (form.provider === 'disabled') form.model_name = 'disabled'
-  if (form.provider === 'sentence_transformers' && form.task_type === 'embedding' && !form.model_name) {
-    form.model_name = defaultEmbeddingPath
-  }
-  if (form.provider === 'sentence_transformers' && form.task_type === 'reranker' && !form.model_name) {
-    form.model_name = defaultRerankerPath
-  }
   if (form.provider === 'qwen_rerank_api' && !form.model_name) form.model_name = 'qwen3-rerank'
 }
 
@@ -154,7 +156,7 @@ function openEdit(profile: ModelProfile) {
 
 function modelConfig() {
   if (form.task_type === 'chat') {
-    return { temperature: form.temperature, timeout_seconds: form.timeout_seconds, max_retries: form.max_retries }
+    return { temperature: form.temperature, timeout_seconds: form.timeout_seconds, max_retries: form.max_retries, device: form.mode === 'local' ? form.device : undefined, max_new_tokens: form.mode === 'local' ? 512 : undefined }
   }
   if (form.task_type === 'embedding') {
     return {
@@ -289,6 +291,47 @@ async function removeProfile(profile: ModelProfile) {
   }
 }
 
+async function scanLocalModels() {
+  scanningModels.value = true
+  try {
+    const { data } = await api.post('/system/local-models/scan?use_llm=true')
+    localModels.value = data.models
+    ElMessage.success(`扫描完成：发现 ${data.count} 个本地模型候选`)
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  } finally {
+    scanningModels.value = false
+  }
+}
+
+async function validateLocalModel(model: any) {
+  localModelActionId.value = model.id
+  try {
+    const { data } = await api.post(`/system/local-models/${model.id}/validate`, { device: 'cpu' })
+    ElMessage.success(data.validation_status === 'VALIDATED' ? '本地模型真实加载验证通过' : `验证状态：${data.validation_status}`)
+    await load()
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  } finally {
+    localModelActionId.value = ''
+  }
+}
+
+async function activateLocalModel(model: any) {
+  if (model.validation_status !== 'VALIDATED') return ElMessage.warning('请先完成真实加载验证')
+  localModelActionId.value = model.id
+  try {
+    const { data } = await api.post(`/system/local-models/${model.id}/activate`, { device: 'cpu', force: false })
+    ElMessage.success(`已激活 ${model.name}`)
+    await load()
+    if (data.requires_reindex) ElMessage.warning('Embedding 已切换，请重建知识库向量索引')
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  } finally {
+    localModelActionId.value = ''
+  }
+}
+
 function saveKey() {
   localStorage.setItem('gw_ap_api_key', apiKey.value)
   ElMessage.success('前端 API Key 已保存到当前浏览器')
@@ -308,6 +351,20 @@ onMounted(load)
     <el-alert type="info" :closable="false" style="margin-bottom:16px">
       <template #title>模型密钥由后端加密保存，页面不会回显完整 API Key。切换诊断模型和 Reranker 立即生效；切换 Embedding 后需要重建向量索引。</template>
     </el-alert>
+
+    <el-card style="margin-bottom:16px">
+      <template #header>Agent Runtime</template>
+      <el-descriptions :column="2" border>
+        <el-descriptions-item label="Agent Mode">
+          <el-tag :type="agentRuntime.agent_mode === 'external' ? 'success' : 'info'">{{ agentRuntime.agent_mode || 'loading' }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="Optional Web">{{ agentRuntime.frontend_available ? '已构建' : '未构建' }}</el-descriptions-item>
+        <el-descriptions-item label="Runtime" :span="2">{{ agentRuntime.reasoning_contract || '加载中' }}</el-descriptions-item>
+      </el-descriptions>
+      <p v-if="agentRuntime.agent_mode === 'external'" class="muted" style="margin-top:12px">
+        External Agent Mode 下平台不会再调用第二个 Chat LLM 完成诊断 synthesis / case chat / patch；Claude Code 或 OpenCode 使用 Evidence Bundle 完成最终推理和源码修改。Embedding/Reranker 仍属于检索层。
+      </p>
+    </el-card>
 
     <el-card>
       <el-tabs v-model="activeTask">
@@ -340,9 +397,24 @@ onMounted(load)
     </el-card>
 
     <el-card style="margin-top:16px">
-      <template #header>本地模型说明</template>
-      <p class="muted">本地 BGE Embedding 与 Qwen3 Reranker 使用 Sentence Transformers。运行 <span class="mono">scripts\install_local_models.bat</span> 后，模型会下载到项目的 <span class="mono">models\embedding</span> 与 <span class="mono">models\reranker</span>，并可直接选择带“项目 models 目录”的预置配置。</p>
-      <p class="muted">
+      <template #header>本地模型自动发现</template>
+      <div class="toolbar">
+        <el-button type="primary" :loading="scanningModels" @click="scanLocalModels">扫描 models / MODEL_ROOTS</el-button>
+        <span class="muted">不依赖旧下载脚本。先读安全元数据确定性分类；低置信度时才允许 Chat LLM 复核元数据，模型权重不会发送给 LLM。</span>
+      </div>
+      <el-table :data="localModels" stripe style="margin-top:12px">
+        <el-table-column prop="name" label="模型" min-width="180" />
+        <el-table-column prop="task_type" label="用途" width="100" />
+        <el-table-column prop="loader" label="Loader" min-width="210" show-overflow-tooltip />
+        <el-table-column label="识别" width="150"><template #default="scope">{{ scope.row.classification_source }} / {{ Math.round(Number(scope.row.confidence || 0) * 100) }}%</template></el-table-column>
+        <el-table-column prop="validation_status" label="真实验证" width="120" />
+        <el-table-column prop="path" label="目录" min-width="260" show-overflow-tooltip />
+        <el-table-column label="操作" width="170" fixed="right"><template #default="scope">
+          <el-button link :loading="localModelActionId === scope.row.id" @click="validateLocalModel(scope.row)">验证</el-button>
+          <el-button link type="primary" :disabled="scope.row.validation_status !== 'VALIDATED'" @click="activateLocalModel(scope.row)">激活</el-button>
+        </template></el-table-column>
+      </el-table>
+      <p class="muted" style="margin-top:12px">
         当前知识存储：{{ retrieval.knowledge_storage || '加载中' }}；
         方法派生关系 {{ retrieval.knowledge_graph?.derivations || 0 }}；
         代码符号/关系 {{ retrieval.code_graph?.symbols || 0 }}/{{ retrieval.code_graph?.relations || 0 }}；
@@ -371,6 +443,7 @@ onMounted(load)
           <el-form-item v-if="editingId" label="清除原密钥"><el-switch v-model="form.clear_api_key" /></el-form-item>
         </template>
         <template v-if="form.task_type === 'chat'">
+          <el-form-item v-if="form.mode === 'local'" label="运行设备"><el-select v-model="form.device"><el-option label="CPU" value="cpu"/><el-option label="CUDA" value="cuda"/></el-select></el-form-item>
           <el-form-item label="Temperature"><el-input-number v-model="form.temperature" :min="0" :max="2" :step="0.1" /></el-form-item>
         </template>
         <template v-if="form.task_type === 'embedding'">

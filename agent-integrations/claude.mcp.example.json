@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "gw-ap-debug": {
+      "command": "gwap-mcp",
+      "args": [],
+      "env": {
+        "GWAP_RUNTIME_URL": "http://127.0.0.1:8765",
+        "GWAP_AGENT_ROLE": "ENGINEER"
+      }
+    }
+  }
+}

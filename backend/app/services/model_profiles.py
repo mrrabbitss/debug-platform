@@ -16,9 +16,9 @@ from app.services.secrets import decrypt_secret, encrypt_secret, secret_hint
 
 
 PROVIDERS_BY_TASK = {
-    "chat": {"mock", "openai_compatible"},
+    "chat": {"mock", "openai_compatible", "transformers_local"},
     "embedding": {"hashing", "sentence_transformers", "openai_compatible"},
-    "reranker": {"disabled", "sentence_transformers", "qwen_rerank_api"},
+    "reranker": {"disabled", "sentence_transformers", "transformers_sequence_classifier", "qwen_rerank_api"},
 }
 
 MODE_BY_PROVIDER = {
@@ -28,6 +28,8 @@ MODE_BY_PROVIDER = {
     "sentence_transformers": "local",
     "openai_compatible": "api",
     "qwen_rerank_api": "api",
+    "transformers_local": "local",
+    "transformers_sequence_classifier": "local",
 }
 
 _ALWAYS_BLOCKED_HOSTS = {

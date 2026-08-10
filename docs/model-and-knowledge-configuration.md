@@ -116,39 +116,33 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 
 诊断结果不是直接信任模型返回值：后端会检查固定 JSON 结构、置信度范围以及每个事实/假设引用的 `evidence_id`。如果模型引用不存在的证据、返回非法 JSON 或调用失败，诊断会保留规则与 RAG 的确定性结果并记录警告。历史诊断还会保存当时模型名称、配置 ID、Base URL 和非密钥参数快照，API Key 永远不会进入该快照。
 
-## 5. 本地 BGE Embedding
+## 5. 本地模型自动发现与 Embedding
 
-默认启动不会安装 PyTorch 或下载大型模型。先启动过一次项目以建立 `.venv`，关闭服务窗口。可先运行不会下载权重的网络检测：
+新 Agent Runtime 不再把固定 BGE/Qwen 下载脚本作为本地模型前置条件。已经下载好的模型可以直接放到项目 `models/`，也可以在 `.env` 配置多个目录：
+
+```env
+MODEL_ROOTS=D:\AI\models;E:\shared-models
+```
+
+然后在“系统设置 → 本地模型自动发现”点击扫描，或使用：
 
 ```bat
-scripts\check_hf_model_access.bat
+gwap models scan
+gwap models list
 ```
 
-检测会分别验证镜像 API、`curl.exe` 小文件下载和 Hugging Face CLI，并生成 `hf_model_access_report_*.txt`。`PASS_HF_CLI` 和 `PASS_CURL_FALLBACK` 都表示正式安装器存在可用下载路径。
+扫描器只读取有界 JSON/Tokenizer/Sentence-Transformers 元数据和文件名，并统计权重大小，不读取权重正文。确定性分类置信度不足时，显式扫描动作可以调用当前 Chat Profile 对经过敏感字段清理的 metadata 做复核；模型权重、日志和源码不会进入该请求。
 
-然后运行：
+Embedding 候选通常会识别为 `sentence_transformers` loader。对候选执行真实加载验证：
 
 ```bat
-scripts\install_local_models.bat
+gwap models validate LM_xxx --device cpu
+gwap models activate LM_xxx --device cpu
 ```
 
-该脚本会设置 `HF_ENDPOINT=https://hf-mirror.com`、关闭 `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`，固定兼容版 Hub 和模型 revision，再优先使用 `.venv\Scripts\hf.exe download --local-dir` 下载并验证：
+只有 smoke test 产生有效向量后才标记 `VALIDATED`。激活新的 Embedding 后必须执行“重建向量索引”，让知识库生成新的向量 generation。BGE v1.5 等 Sentence Transformers 模型仍支持查询指令、归一化和批量大小配置。
 
-```text
-BAAI/bge-base-zh-v1.5
-→ models/embedding/bge-base-zh-v1.5
-
-Qwen/Qwen3-Reranker-0.6B
-→ models/reranker/Qwen3-Reranker-0.6B
-```
-
-如果 CLI 因公司代理、TLS 检查或镜像 HEAD 元数据响应报 `LocalEntryNotFoundError`，`Auto` 模式会自动改用 Win11 自带的 `curl.exe`。回退路径从镜像 API 读取固定 revision 的文件清单，以 `.partial` 文件断点续传，拒绝不安全路径，并校验大小和 LFS 权重 SHA-256。也可以使用 `-DownloadMode Curl` 强制走该路径。
-
-然后在“系统设置 → Embedding 模型”中测试并激活“本地 BGE Base 中文向量（项目 models 目录）”。激活后必须执行“重建向量索引”。项目会把仓库相对路径稳定地解析到项目根目录，不受从 BAT、终端或 IDE 启动的当前目录影响。
-
-系统只会给检索问题添加 `为这个句子生成表示以用于检索相关文章：`，知识正文不会添加该指令；向量默认归一化。查询指令和批量大小可以在前端修改。也可以填写其他 Sentence Transformers 兼容的 BGE 模型或本地绝对路径。
-
-BGE v1.5 的 Sentence Transformers、查询指令及归一化用法见官方模型卡：[BAAI/bge-base-zh-v1.5](https://huggingface.co/BAAI/bge-base-zh-v1.5)。
+旧 `scripts\check_hf_model_access.bat` / `scripts\install_local_models.bat` 仅作为已经采用旧固定目录的历史环境兼容工具保留；自动发现、匹配、验证和激活逻辑不依赖它们。
 
 ## 6. Embedding API
 
@@ -162,18 +156,22 @@ https://your-approved-endpoint.example/v1
 
 阿里云百炼的 Embedding OpenAI-Compatible 调用和维度说明见：[Embedding API](https://help.aliyun.com/en/model-studio/embedding)。
 
-## 7. 本地 Qwen3 Reranker
+## 7. 本地 Reranker
 
-运行本地模型安装脚本后，可以测试并激活“本地 Qwen3 Reranker 0.6B（项目 models 目录）”：
+Reranker 与 Embedding 共用本地模型自动发现入口。扫描器会根据目录名、`config.json`、Sentence-Transformers `modules.json` 和 architecture 区分两类 loader：
 
-```text
-Qwen/Qwen3-Reranker-0.6B
-→ models/reranker/Qwen3-Reranker-0.6B
+- Sentence-Transformers CrossEncoder → `sentence_transformers_cross_encoder`；
+- 普通 Transformers SequenceClassification → `transformers_sequence_classifier`。
+
+当前 Qwen3-Reranker 的 Sentence-Transformers 兼容格式会走 CrossEncoder；其他 SequenceClassification 模型不会被强行当成 CrossEncoder。候选必须执行真实 query/document pair 打分 smoke test，成功后才可激活。
+
+```bat
+gwap models scan
+gwap models validate LM_xxx --device cpu
+gwap models activate LM_xxx --device cpu
 ```
 
-该适配器使用 Sentence Transformers `CrossEncoder` 和自定义网络诊断排序指令。安装器会真实加载模型并通过项目适配器对两个示例文档执行排序，只有返回有效分数才会报告成功。CPU 可以运行，但速度和内存占用取决于模型大小；公司电脑资源有限时保持批量大小 `1`–`4`，或使用批准的 API。
-
-Qwen 官方模型卡列出了 0.6B、4B、8B Reranker，并提供 CrossEncoder 和自定义指令用法：[Qwen3-Reranker-0.6B](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)。
+CPU 可以运行小型 Reranker，但速度和内存取决于模型规模。资源有限时应保持小 batch，或者使用公司批准的 Reranker API。
 
 ## 8. Qwen Reranker API
 

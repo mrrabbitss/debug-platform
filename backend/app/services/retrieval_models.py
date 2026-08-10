@@ -10,7 +10,6 @@ from time import perf_counter
 from typing import Any
 
 import httpx
-from openai import OpenAI
 from sklearn.feature_extraction.text import HashingVectorizer
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
@@ -216,7 +215,7 @@ def _load_sentence_transformer(model_name: str, device: str):
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
         raise RetrievalModelError(
-            "Local model support is not installed. Run scripts\\install_local_models.bat first."
+            "Local model support is not installed. Install backend[local-models]."
         ) from exc
     try:
         return SentenceTransformer(model_name, device=device)
@@ -230,7 +229,7 @@ def _load_cross_encoder(model_name: str, device: str, instruction: str):
         from sentence_transformers import CrossEncoder
     except ImportError as exc:
         raise RetrievalModelError(
-            "Local model support is not installed. Run scripts\\install_local_models.bat first."
+            "Local model support is not installed. Install backend[local-models]."
         ) from exc
     try:
         prompt_options = (
@@ -241,6 +240,75 @@ def _load_cross_encoder(model_name: str, device: str, instruction: str):
         return CrossEncoder(model_name, device=device, **prompt_options)
     except Exception as exc:
         raise RetrievalModelError(f"Unable to load local reranker model {model_name!r}: {exc}") from exc
+
+
+
+@lru_cache(maxsize=2)
+def _load_sequence_classifier(model_name: str, device: str):
+    try:
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    except ImportError as exc:
+        raise RetrievalModelError(
+            "Local model support is not installed. Install backend[local-models]."
+        ) from exc
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            local_files_only=True,
+            trust_remote_code=False,
+        )
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            local_files_only=True,
+            trust_remote_code=False,
+        )
+        if device and device != "auto":
+            model = model.to(device)
+        model.eval()
+        return tokenizer, model, torch
+    except Exception as exc:
+        raise RetrievalModelError(
+            f"Unable to load local sequence-classification reranker {model_name!r}: {exc}"
+        ) from exc
+
+
+def _sequence_classifier_scores(
+    model_name: str,
+    device: str,
+    query: str,
+    documents: list[str],
+    batch_size: int,
+) -> list[float]:
+    tokenizer, model, torch = _load_sequence_classifier(model_name, device)
+    values: list[float] = []
+    for start in range(0, len(documents), batch_size):
+        batch = documents[start:start + batch_size]
+        try:
+            inputs = tokenizer(
+                [query] * len(batch),
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+            target_device = next(model.parameters()).device
+            inputs = {key: value.to(target_device) for key, value in inputs.items()}
+            with torch.inference_mode():
+                logits = model(**inputs).logits
+            if logits.ndim == 1:
+                batch_scores = logits
+            elif logits.shape[-1] == 1:
+                batch_scores = logits[:, 0]
+            else:
+                # Binary/multi-class heads conventionally place the positive/relevant
+                # class at the last index.  Validation remains mandatory before use.
+                batch_scores = logits[:, -1]
+            values.extend(float(item) for item in batch_scores.detach().cpu().tolist())
+        except Exception as exc:
+            raise RetrievalModelError(f"Local sequence-classification reranking failed: {exc}") from exc
+    return values
 
 
 def embed_texts(
@@ -276,6 +344,10 @@ def embed_texts(
         started = perf_counter()
         try:
             validate_model_endpoint(profile.base_url or "")
+            try:
+                from openai import OpenAI
+            except ImportError as exc:
+                raise RetrievalModelError("OpenAI-compatible embedding support is not installed") from exc
             client = OpenAI(
                 api_key=get_profile_api_key(profile),
                 base_url=profile.base_url,
@@ -675,6 +747,17 @@ def rerank_documents(
             values = [float(value) for value in raw_scores]
         except Exception as exc:
             raise RetrievalModelError(f"Local reranking failed: {exc}") from exc
+        return sorted(enumerate(values), key=lambda item: item[1], reverse=True)[:top_n]
+    if profile.provider == "transformers_sequence_classifier":
+        device = str(config.get("device") or "cpu")
+        model_name = resolve_local_model_reference(profile.model_name)
+        values = _sequence_classifier_scores(
+            model_name,
+            device,
+            query,
+            documents,
+            max(1, min(int(config.get("batch_size") or 4), 32)),
+        )
         return sorted(enumerate(values), key=lambda item: item[1], reverse=True)[:top_n]
     if profile.provider == "qwen_rerank_api":
         started = perf_counter()

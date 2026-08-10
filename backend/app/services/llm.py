@@ -2,10 +2,11 @@ import json
 import logging
 import re
 from abc import ABC, abstractmethod
+from functools import lru_cache
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from openai import AsyncOpenAI
 
 from app.core.config import get_settings
 from app.core.utils import json_loads
@@ -61,6 +62,134 @@ class MockProvider(LLMProvider):
         return "当前使用 Mock 模型。系统已基于日志规则和知识库完成确定性分析；配置 Qwen/GLM API 后可获得更深入的综合推理。"
 
 
+def _resolve_local_chat_path(model_name: str) -> Path:
+    path = Path(model_name).expanduser()
+    if not path.is_absolute():
+        for root in get_settings().model_root_paths:
+            candidate = (root / path).resolve()
+            if candidate.is_dir():
+                path = candidate
+                break
+        else:
+            path = path.resolve()
+    else:
+        path = path.resolve()
+    if not path.is_dir() or path.is_symlink():
+        raise LLMError(f"Local chat model directory was not found: {path}")
+    allowed = get_settings().model_root_paths
+    if allowed and not any(path == root or root in path.parents for root in allowed):
+        raise LLMError("Local chat model path must be inside a configured MODEL_ROOTS directory")
+    return path
+
+
+@lru_cache(maxsize=2)
+def _load_local_chat_model(model_path: str, device: str, dtype: str):
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError as exc:
+        raise LLMError(
+            "Local chat model support is not installed. Install backend[local-models]."
+        ) from exc
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            local_files_only=True,
+            trust_remote_code=False,
+        )
+        kwargs: dict[str, Any] = {
+            "local_files_only": True,
+            "trust_remote_code": False,
+        }
+        if dtype:
+            kwargs["torch_dtype"] = dtype
+        model = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
+        if device and device != "auto":
+            model = model.to(device)
+        model.eval()
+        return tokenizer, model, torch
+    except Exception as exc:
+        raise LLMError(f"Unable to load local chat model {model_path!r}: {exc}") from exc
+
+
+class LocalTransformersProvider(LLMProvider):
+    provider_id = "transformers_local"
+
+    def __init__(self, profile: ModelProfile) -> None:
+        self.profile = profile
+        self.model_path = str(_resolve_local_chat_path(profile.model_name))
+        config = json_loads(profile.config_json, {})
+        self.model_name = profile.model_name
+        self.device = str(config.get("device") or "cpu")
+        self.dtype = str(config.get("dtype") or "auto")
+        self.temperature = max(0.0, float(config.get("temperature", 0.0)))
+        self.max_new_tokens = max(1, min(int(config.get("max_new_tokens") or 512), 4096))
+
+    def _generate(self, system: str, user: str) -> str:
+        tokenizer, model, torch = _load_local_chat_model(
+            self.model_path, self.device, self.dtype
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        try:
+            if getattr(tokenizer, "chat_template", None):
+                prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            else:
+                prompt = f"System: {system}\nUser: {user}\nAssistant:"
+            inputs = tokenizer(prompt, return_tensors="pt")
+            target_device = next(model.parameters()).device
+            inputs = {key: value.to(target_device) for key, value in inputs.items()}
+            kwargs: dict[str, Any] = {
+                "max_new_tokens": self.max_new_tokens,
+                "do_sample": self.temperature > 0,
+                "pad_token_id": tokenizer.eos_token_id,
+            }
+            if self.temperature > 0:
+                kwargs["temperature"] = self.temperature
+            with torch.inference_mode():
+                output = model.generate(**inputs, **kwargs)
+            prompt_tokens = inputs["input_ids"].shape[-1]
+            generated = output[0][prompt_tokens:]
+            return tokenizer.decode(generated, skip_special_tokens=True).strip()
+        except Exception as exc:
+            raise LLMError(f"Local chat generation failed: {exc}") from exc
+
+    async def generate_text(
+        self,
+        system: str,
+        user: str,
+        purpose: str = "case_assistance",
+    ) -> str:
+        del purpose
+        return self._generate(system, user)
+
+    async def generate_json(
+        self,
+        system: str,
+        user: str,
+        schema_name: str = "diagnosis",
+        purpose: str = "case_diagnosis",
+    ) -> dict[str, Any]:
+        del schema_name, purpose
+        content = self._generate(
+            system + "\nReturn only valid JSON without Markdown fences.", user
+        )
+        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.I)
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise LLMError("Local model returned invalid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise LLMError("Local model JSON response must be an object")
+        return parsed
+
+
 class OpenAICompatibleProvider(LLMProvider):
     provider_id = "openai_compatible"
 
@@ -83,6 +212,10 @@ class OpenAICompatibleProvider(LLMProvider):
         self.last_usage: dict[str, int | None] = {}
         self.last_duration_ms = 0
         self.last_outcome = "NOT_CALLED"
+        try:
+            from openai import AsyncOpenAI
+        except ImportError as exc:
+            raise LLMError("OpenAI-compatible support is not installed") from exc
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -214,6 +347,8 @@ def get_llm_provider(profile: ModelProfile | None = None) -> LLMProvider:
     if selected:
         if selected.provider == "openai_compatible":
             return OpenAICompatibleProvider(selected)
+        if selected.provider == "transformers_local":
+            return LocalTransformersProvider(selected)
         return MockProvider()
     if get_settings().llm_provider == "openai_compatible":
         return OpenAICompatibleProvider()

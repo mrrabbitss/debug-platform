@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: GW/AP Debug Platform Workflow API
-  version: 0.4.0
+  version: 0.5.0
 servers:
-  - url: http://localhost:8000/api/v1
+  - url: http://127.0.0.1:8765/api/v1
 paths:
   /cases:
     post:
@@ -186,7 +186,7 @@ paths:
                 max_hops: { type: integer, minimum: 0, maximum: 3, default: 2 }
                 modules:
                   type: array
-                  items: { type: string, enum: [knowledge, code, commit, memory] }
+                  items: { type: string, enum: [knowledge, domain_graph, code, commit, memory] }
       responses:
         '200': { description: Planned multi-module retrieval result }
   /knowledge-curations:
@@ -330,6 +330,75 @@ paths:
       responses:
         '200': { description: New traceable read-only search result }
         '409': { description: The run has no safe replay payload }
+  /system/agent-runtime:
+    get:
+      operationId: getAgentRuntimeStatus
+      responses:
+        '200': { description: Agent mode, localhost runtime and optional Web status }
+  /system/local-models:
+    get:
+      operationId: listDiscoveredLocalModels
+      responses:
+        '200': { description: Safe local-model discovery registry }
+  /system/local-models/scan:
+    post:
+      operationId: scanLocalModels
+      parameters:
+        - in: query
+          name: use_llm
+          schema: { type: boolean, default: true }
+      responses:
+        '200': { description: Deterministic metadata scan with optional low-confidence LLM metadata review }
+  /cases/{case_id}/evidence-bundle:
+    post:
+      operationId: getExternalAgentEvidenceBundle
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: [string, 'null'] }
+                top_k: { type: integer, minimum: 1, maximum: 20, default: 12 }
+                max_hops: { type: integer, minimum: 0, maximum: 3, default: 2 }
+                modules: { type: [array, 'null'], items: { type: string } }
+      responses:
+        '200': { description: Bounded evidence bundle; no final Chat-LLM synthesis }
+  /cases/{case_id}/workspaces/attach:
+    post:
+      operationId: attachLocalWorkspace
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string }
+                name: { type: [string, 'null'] }
+      responses:
+        '201': { description: Read-only same-machine workspace registration }
+  /workspaces/{repository_id}/index:
+    post:
+      operationId: indexLocalWorkspace
+      parameters:
+        - in: path
+          name: repository_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Code/Commit Graph indexing job for attached workspace }
 components:
   securitySchemes:
     ApiKey:

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.utils import json_dumps, json_loads, new_id
 from app.models import AnalysisRun, Artifact, Case, CodeSymbol, Job, Repository
@@ -281,6 +282,28 @@ async def patch_suggestion(case_id: str, payload: PatchRequest, db: Db) -> dict:
         .order_by(AnalysisRun.created_at.desc()).limit(1)
     ).first()
     diagnosis = json_loads(latest.result_json, {}) if latest else {}
+    if get_settings().agent_mode == "external":
+        return {
+            "status": "EXTERNAL_AGENT_REQUIRED",
+            "message": (
+                "External Agent Mode does not invoke the platform Chat LLM for code edits. "
+                "Use Claude Code/OpenCode native workspace tools after reviewing evidence."
+            ),
+            "symbol": {
+                "symbol_id": symbol.logical_id or symbol.id,
+                "file": symbol.file_path,
+                "name": symbol.name,
+                "line_start": symbol.line_start,
+                "line_end": symbol.line_end,
+            },
+            "review_checklist": [
+                "Confirm log/knowledge evidence reaches this symbol through a data-flow or graph path",
+                "Read the current workspace file before editing",
+                "Make the smallest change consistent with the evidence",
+                "Run targeted tests/static analysis and inspect git diff",
+            ],
+            "auto_applied": False,
+        }
     provider = get_llm_provider()
     if provider.is_mock:
         return {

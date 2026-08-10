@@ -1,0 +1,102 @@
+{
+  "schema_version": 4,
+  "validated_at": "2026-08-10",
+  "platform": "windows",
+  "source": {
+    "base_branch": "main",
+    "base_commit": "da29b2b8b44ca7abcaa2796f77fc90354777ab44",
+    "original_vnext_is_separate_directory": true,
+    "original_vnext_is_git_worktree": false,
+    "archived_branch": "codex/agent-runtime-vnext-opencode",
+    "archived_in_independent_worktree": true,
+    "main_workspace_modified": false
+  },
+  "results": {
+    "changed_python_compile": "PASS",
+    "targeted_pytest": {
+      "status": "PASS",
+      "passed": 39,
+      "failed": 0
+    },
+    "backend_pytest": {
+      "status": "PASS",
+      "passed": 172,
+      "skipped": 1,
+      "failed": 0,
+      "line_coverage_percent": 75.46,
+      "coverage_gate_percent": 75
+    },
+    "repository_harness": {
+      "status": "PASS",
+      "checks": 13,
+      "workflow_operations": 25
+    },
+    "architecture": {
+      "status": "PASS",
+      "python_files": 80,
+      "vue_files": 11,
+      "max_complexity": 47
+    },
+    "powershell_ast_and_json": "PASS",
+    "unified_full_validation": {
+      "status": "PASS",
+      "run_id": "20260810-111013-full",
+      "steps": 19,
+      "duration_seconds": 270.83,
+      "python_dependency_audit": "PASS_NO_KNOWN_VULNERABILITIES",
+      "frontend_production_dependency_audit": "PASS_ZERO_VULNERABILITIES",
+      "vscode_extension_production_dependency_audit": "PASS_ZERO_VULNERABILITIES",
+      "frontend_build": "PASS",
+      "vscode_extension_compile": "PASS",
+      "windows_doctor": "PASS",
+      "runtime_smoke": "PASS",
+      "browser_e2e": "PASS"
+    },
+    "agent_runtime_e2e": {
+      "status": "PASS",
+      "exit_code": 0,
+      "events": 10,
+      "tool_count": 12,
+      "single_port_web": true,
+      "workspace_index": "COMPLETED",
+      "analysis_provider": "deterministic",
+      "analysis_model": "rule+agentic-evidence",
+      "analysis_engine": "rule+agentic-evidence-external",
+      "model_scan": "embedding",
+      "report": "html"
+    },
+    "opencode": {
+      "status": "PASS",
+      "version": "1.18.15",
+      "model": "opencode/deepseek-v4-flash-free",
+      "mcp_connected": true,
+      "skill_loaded": true,
+      "elapsed_seconds": 163.5,
+      "case_id": "CASE-0986b5a03e364cc3",
+      "artifact_count": 2,
+      "parsed_event_count": 10,
+      "analysis_count": 1,
+      "analysis_provider": "deterministic",
+      "analysis_model": "rule+agentic-evidence",
+      "external_llm_result_persisted": false,
+      "final_marker": "OPENCODE_GWAP_E2E_PASS",
+      "cited_real_event_ids": true,
+      "tool_calls": [
+        "skill",
+        "gw-ap-debug_debug_status",
+        "gw-ap-debug_debug_create_case",
+        "gw-ap-debug_debug_ingest",
+        "gw-ap-debug_debug_attach_workspace",
+        "gw-ap-debug_debug_diagnose",
+        "gw-ap-debug_debug_evidence_bundle"
+      ]
+    }
+  },
+  "limitations": {
+    "external_result_submission": "PLANNED",
+    "parallel_main_vnext_installer": "LIMITED_NOT_NAMESPACED",
+    "claude_code_live_test": "NOT_RUN",
+    "production_real_log_external_model": "REQUIRES_EXPLICIT_CONSENT_AND_APPROVED_ENDPOINT",
+    "total_evidence_bundle_budget": "RECOMMENDED"
+  }
+}

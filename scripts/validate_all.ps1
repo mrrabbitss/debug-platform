@@ -231,6 +231,7 @@ try {
                 "tests/test_deployment_files.py",
                 "tests/test_local_startup_scripts.py",
                 "tests/test_harness_contract.py",
+                "tests/test_agent_runtime_vnext.py",
                 "--junitxml", $JunitPath
             )
     } else {
@@ -243,6 +244,11 @@ try {
                 "--coverage-xml", $CoverageXmlPath
             )
     }
+
+    Invoke-ValidationStep `
+        -Name "Agent Skill MCP CLI runtime E2E" `
+        -FilePath $Python `
+        -Arguments @("scripts/run_agent_runtime_e2e.py")
 
     Invoke-ValidationStep `
         -Name "Frontend type check and production build" `

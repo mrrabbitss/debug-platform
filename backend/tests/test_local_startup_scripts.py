@@ -63,6 +63,9 @@ def test_runtime_smoke_uses_isolated_database_and_alternate_ports() -> None:
 def test_unified_validation_has_bounded_modes_and_machine_readable_results() -> None:
     batch = (PROJECT_ROOT / "scripts" / "validate_all.bat").read_text(encoding="utf-8")
     script = (PROJECT_ROOT / "scripts" / "validate_all.ps1").read_text(encoding="utf-8")
+    lock_script = (PROJECT_ROOT / "scripts" / "refresh_python_lock.ps1").read_text(
+        encoding="utf-8"
+    )
 
     assert "-ExecutionPolicy Bypass" in batch
     assert '[ValidateSet("Fast", "Full", "External")]' in script
@@ -74,6 +77,9 @@ def test_unified_validation_has_bounded_modes_and_machine_readable_results() -> 
     assert "runtime_smoke.ps1" in script
     assert "docker.exe" in script
     assert "MaxAttempts 2" in script
+    assert "[System.IO.File]::ReadAllText" in lock_script
+    assert '.Replace("`r`n", "`n").Replace("`r", "`n")' in lock_script
+    assert "Get-FileHash -LiteralPath $temporaryConstraints" not in lock_script
 
 
 def test_local_model_installer_uses_project_layout_and_hf_mirror() -> None:

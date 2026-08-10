@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "gw-ap-debug": {
+      "type": "local",
+      "command": ["gwap-mcp"],
+      "enabled": true,
+      "environment": {
+        "GWAP_RUNTIME_URL": "http://127.0.0.1:8765",
+        "GWAP_AGENT_ROLE": "ENGINEER"
+      }
+    }
+  }
+}

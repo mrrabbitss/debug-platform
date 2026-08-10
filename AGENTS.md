@@ -9,7 +9,8 @@ of guardrails, not a duplicate architecture document.
 - `HARNESS_ENGINEERING.md`: engineering-harness status and ordered backlog.
 - `docs/README.md`: architecture and operating-document index.
 - `VALIDATION.md`: most recent verified regression record.
-- `workflow/skill.yaml`: allowlisted agent-facing API operations and safety rules.
+- `workflow/skill.yaml`: allowlisted runtime API operations and safety rules.
+- `.claude/skills/gw-ap-debug/SKILL.md`: Claude Code/OpenCode procedural Agent Skill.
 
 When behavior changes, update the relevant source-of-truth file in the same
 commit. Do not describe an unverified feature as available.
@@ -18,11 +19,13 @@ commit. Do not describe an unverified feature as available.
 
 - `backend/app/api`: FastAPI HTTP boundaries.
 - `backend/app/services`: domain logic, parsers, retrieval, graphs and jobs.
+- `backend/app/agent_runtime`: thin CLI/MCP adapters over the existing FastAPI runtime.
 - `backend/tests`: backend, migration, security and repository-contract tests.
 - `frontend/src`: Vue 3 administrator and diagnosis workbench.
 - `vscode-extension`: internal VS Code client.
 - `scripts`: Win11 bootstrap, diagnostics, model installation and validation.
-- `workflow`: deliberately allowlisted API contract for agent integrations.
+- `workflow`: deliberately allowlisted machine API contract for agent integrations.
+- `.claude/skills/gw-ap-debug`: coding-agent workflow, evidence and safety instructions.
 - `sample_data`: synthetic regression fixtures only; never add company data.
 
 ## First actions
@@ -38,6 +41,8 @@ commit. Do not describe an unverified feature as available.
 
 ```bat
 scripts\start_local.bat
+scripts\start_agent_runtime.bat
+scripts\run_agent_runtime_e2e.bat
 scripts\validate_all.bat Fast
 scripts\validate_all.bat Full
 scripts\refresh_python_lock.bat -Check

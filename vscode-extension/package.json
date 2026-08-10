@@ -27,8 +27,8 @@
     "configuration": {
       "title": "GW/AP Debug",
       "properties": {
-        "gwap.backendUrl": { "type": "string", "default": "http://127.0.0.1:8000/api/v1", "description": "Debug Platform API base URL" },
-        "gwap.webUrl": { "type": "string", "default": "http://127.0.0.1:5173", "description": "Debug Platform Web URL" },
+        "gwap.backendUrl": { "type": "string", "default": "http://127.0.0.1:8765/api/v1", "description": "Debug Platform API base URL" },
+        "gwap.webUrl": { "type": "string", "default": "http://127.0.0.1:8765/ui", "description": "Debug Platform Web URL" },
         "gwap.apiKey": { "type": "string", "default": "", "description": "Legacy plaintext X-API-Key fallback. Prefer the GW/AP: Set or Clear Access Credential command.", "scope": "machine-overridable" },
         "gwap.defaultCaseId": { "type": "string", "default": "", "description": "Default case ID" }
       }

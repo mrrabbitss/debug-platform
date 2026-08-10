@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import case as sql_case, select
 from starlette.concurrency import run_in_threadpool
 
+from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import AnalysisRun, Artifact, Case, CodeSymbol, ConversationMessage, LogEvent, Repository
@@ -322,6 +323,13 @@ def _find_related_symbols(case_id: str, events: list[LogEvent]) -> list[CodeSymb
 
 
 async def _augment_with_llm(case: Case, result: dict, evidence: list[dict]) -> dict:
+    if get_settings().agent_mode == "external":
+        result["analysis_engine"] = "rule+agentic-evidence-external"
+        result.setdefault("warnings", []).append(
+            "External Agent Mode: platform Chat LLM synthesis was skipped. "
+            "Use the evidence bundle from Claude Code/OpenCode for final reasoning."
+        )
+        return result
     provider = get_llm_provider()
     if provider.is_mock:
         return result
@@ -364,7 +372,24 @@ async def _augment_with_llm(case: Case, result: dict, evidence: list[dict]) -> d
 
 
 def _analyze_case_impl(ctx: JobContext, case_id: str) -> dict:
-    model_info = get_active_chat_model_info()
+    settings = get_settings()
+    if settings.agent_mode == "external":
+        model_info = {
+            "provider": "deterministic",
+            "model": "rule+agentic-evidence",
+            "profile_id": "external-evidence",
+            "profile_name": "Platform evidence preparation (no external-agent result submitted)",
+            "mode": "external",
+            "base_url": None,
+            "config": {
+                "platform_chat_llm_skipped": True,
+                "external_agent_result_submitted": False,
+            },
+        }
+        prompt_version = "external-evidence-v1"
+    else:
+        model_info = get_active_chat_model_info()
+        prompt_version = "v2-evidence-validated"
     with SessionLocal() as db:
         case = db.get(Case, case_id)
         if not case:
@@ -381,7 +406,7 @@ def _analyze_case_impl(ctx: JobContext, case_id: str) -> dict:
                 "base_url": model_info.get("base_url"),
                 "config": model_info.get("config", {}),
             }),
-            prompt_version="v2-evidence-validated",
+            prompt_version=prompt_version,
         )
         db.add(run)
         db.commit()
@@ -562,16 +587,26 @@ async def chat_about_case(case_id: str, question: str) -> tuple[str, list[dict]]
     if latest:
         citations.insert(0, {"evidence_id": latest.id, "source_type": "analysis", "title": "最新诊断结果", "content": latest.result_json[:5000]})
 
-    provider = get_llm_provider()
-    if provider.is_mock:
-        hypothesis_text = "；".join(item.get("title", "") for item in diagnosis.get("hypotheses", [])[:3]) or "暂无明确根因"
-        answer = f"基于当前案例，主要根因候选为：{hypothesis_text}。你的问题是“{question}”。建议结合引用证据逐条核验；当前为 Mock 模式，未进行额外模型推理。"
-    else:
-        answer = await provider.generate_text(
-            "你是 GW/AP 故障诊断助手。仅基于提供的案例、诊断和证据回答；引用证据编号，明确不确定性。",
-            json_dumps({"question": question, "case": {"title": case.title, "description": case.description}, "diagnosis": diagnosis, "evidence": citations}),
-            purpose="case_chat",
+    if get_settings().agent_mode == "external":
+        hypothesis_text = "；".join(
+            item.get("title", "") for item in diagnosis.get("hypotheses", [])[:3]
+        ) or "暂无平台侧确定性根因"
+        answer = (
+            "External Agent Mode 已启用：平台没有调用第二个 Chat LLM。"
+            f"当前确定性根因候选：{hypothesis_text}。"
+            "请由 Claude Code/OpenCode 使用 evidence-bundle 与当前工作区继续回答和验证。"
         )
+    else:
+        provider = get_llm_provider()
+        if provider.is_mock:
+            hypothesis_text = "；".join(item.get("title", "") for item in diagnosis.get("hypotheses", [])[:3]) or "暂无明确根因"
+            answer = f"基于当前案例，主要根因候选为：{hypothesis_text}。你的问题是“{question}”。建议结合引用证据逐条核验；当前为 Mock 模式，未进行额外模型推理。"
+        else:
+            answer = await provider.generate_text(
+                "你是 GW/AP 故障诊断助手。仅基于提供的案例、诊断和证据回答；引用证据编号，明确不确定性。",
+                json_dumps({"question": question, "case": {"title": case.title, "description": case.description}, "diagnosis": diagnosis, "evidence": citations}),
+                purpose="case_chat",
+            )
     with SessionLocal() as db:
         user_message = ConversationMessage(
             id=new_id("MSG"),

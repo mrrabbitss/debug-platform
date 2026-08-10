@@ -68,9 +68,14 @@ try {
             if ($LASTEXITCODE -ne 0) {
                 throw "Could not export the pip constraints from backend\uv.lock."
             }
-            $expectedHash = (Get-FileHash -LiteralPath $temporaryConstraints -Algorithm SHA256).Hash
-            $actualHash = (Get-FileHash -LiteralPath $constraints -Algorithm SHA256).Hash
-            if ($expectedHash -ne $actualHash) {
+            # Git for Windows may check a tracked text file out with CRLF while
+            # ``uv export`` always writes LF. Compare canonical text so a clean
+            # clone does not fail solely because of core.autocrlf.
+            $expectedContent = [System.IO.File]::ReadAllText($temporaryConstraints)
+            $actualContent = [System.IO.File]::ReadAllText($constraints)
+            $expectedContent = $expectedContent.Replace("`r`n", "`n").Replace("`r", "`n")
+            $actualContent = $actualContent.Replace("`r`n", "`n").Replace("`r", "`n")
+            if (-not [string]::Equals($expectedContent, $actualContent, [System.StringComparison]::Ordinal)) {
                 throw "backend\constraints.lock does not match backend\uv.lock."
             }
         } finally {
