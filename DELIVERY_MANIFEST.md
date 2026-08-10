@@ -27,7 +27,7 @@
 | `.github/dependabot.yml` | 1711 | `59009709797dd3fd62ba222daa8ed1fad94f6741afec61d72020d47a6defc5a7` |
 | `.github/pull_request_template.md` | 1063 | `9a3c0912e4a08065d8c46f6aaaa2e1975cf23184bc315bb6344f23e3bd91530b` |
 | `.github/workflows/ci.yml` | 9311 | `fc8cf4a8ba12b25e1be0cb49acded8ae3d2d851cb6c836d948be773ec7203e51` |
-| `.gitignore` | 464 | `2900bcce941ce927e5592271be350d73811a7d75e5ae3cb662cb4e8a16b4fdd4` |
+| `.gitignore` | 435 | `cde9495c538312fa283f16c2bb30c2c61137ed942efd8991c0e39dc5b67a5b8c` |
 | `AGENT_RUNTIME_VNEXT_CHANGED_FILES.md` | 3147 | `f591c5174c823ae0b68368eec7b1b159ea8bfde6c3c74fbde67c5d6e6f304cbc` |
 | `AGENT_RUNTIME_VNEXT_VALIDATION.json` | 3165 | `0e8354d09490b1a26eeef93f1e1a12d774deae5b542ba5c6624a9379e86e4e6b` |
 | `AGENT_RUNTIME_VNEXT_VALIDATION.md` | 6882 | `35ea921b75a562dbc46e9bdc389186aa7e4b07fbbe5c6d369b40f5370ecbb4a8` |
