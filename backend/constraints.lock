@@ -247,7 +247,7 @@ pygments==2.20.0
     #   rich
 pyparsing==3.3.2
     # via pip-requirements-parser
-pypdf==6.14.2
+pypdf==6.15.0
     # via gw-ap-debug-backend
 pytest==9.1.1
     # via

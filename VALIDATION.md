@@ -1,23 +1,24 @@
 # Validation Record
 
-Last validated: 2026-08-05 on Windows 11.
+Last validated: 2026-08-10 on Windows 11.
 
 ## Current local regression result
 
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 140 passed and 1 external-service test skipped locally.
-- Backend line coverage: 76.82%, above the enforced 75% quality gate.
+- Backend tests: 145 passed and 1 external-service test skipped locally.
+- Backend line coverage: 77.37%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
-- Browser E2E: 1 complete Edge scenario passed in an isolated runtime. It covered
-  TXT, HTML, DOCX and PDF upload/preview, draft generation, conversational
-  correction, human confirmation, trace inspection and safe replay. Browser
-  console errors and warnings: zero.
+- Browser E2E: 2 complete Edge scenarios passed in an isolated runtime. They
+  covered TXT, HTML, DOCX and PDF upload/preview, draft generation,
+  conversational correction, human confirmation, trace inspection, safe replay,
+  and encrypted Chat proxy configuration/clearing without credential exposure.
+  Browser console errors and warnings: zero.
 - Repository Harness: all 13 contracts passed across 19 required files, 14
   Markdown files, dependency-update targets and 19 allowlisted Workflow operations.
-- Architecture checks: 70 Python files and 11 Vue files passed file-size,
+- Architecture checks: 72 Python files and 11 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest
   measured Python cyclomatic complexity was 47, below the limit of 50.
 - Backend dependency consistency, lock synchronization, Ruff and Python
@@ -25,11 +26,11 @@ Last validated: 2026-08-05 on Windows 11.
 - Vue TypeScript check, production Vite build and VS Code extension TypeScript
   compile: passed.
 - Python, frontend and VS Code extension dependency audits: no known vulnerabilities.
-- Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0012.
-- Isolated runtime smoke and `scripts\doctor.bat`: passed.
+- Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0013.
+- Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260805-130511-full\summary.json`.
+`artifacts\validation\20260810-191640-full\summary.json`.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,
@@ -98,7 +99,9 @@ human review feedback into a rule, test, document or evaluation case.
 - persistent LLM-assisted folder curation with TXT/MD/HTML/DOCX/PDF extraction,
   source citations, immutable revisions, correction chat and human-confirmed drafts;
 - Code Graph, Commit Graph, three-class memory and Agentic Search integration;
-- encrypted model credentials, endpoint policy, egress audit and local/API model switching;
+- encrypted model credentials and per-profile Chat proxy URLs, endpoint policy,
+  certificate-chain/hostname verification with proxy-mode revocation checking
+  disabled, egress audit and local/API model switching;
 - case ownership/membership, role enforcement, token lifecycle and storage cleanup;
 - backup verification, Docker/Compose definitions and runtime health/readiness checks.
 

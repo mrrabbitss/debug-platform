@@ -31,16 +31,16 @@
 - `code_relations`、`commit_records`、`commit_file_changes`：代码与 Commit 工程图谱；
 - `agent_memories`：情景、程序和失败记忆；
 - `diagnosis_feedback`、`retrieval_evaluation_*`：人工反馈与检索评测；
-- `model_profiles`：Chat、Embedding、Reranker 配置和加密后的 API Key。
+- `model_profiles`：Chat、Embedding、Reranker 配置、加密后的 API Key 和 Chat 代理 URL。
 
 配置 `QDRANT_URL` 后，向量也会按模型配置写入独立 Qdrant collection。SQLite 向量仍是本地可靠回退，因此 Qdrant 临时不可用不会阻止知识正文和分块入库。
 
-原始模型 API Key 不会通过查询接口返回。后端使用 Fernet 加密后保存密文：
+原始模型 API Key 和含凭据的代理 URL 不会通过查询接口返回。后端使用 Fernet 加密后保存密文：
 
 - 本地模式默认密钥文件：`backend/data/model_secret.key`；
 - 生产或多实例部署：通过 `MODEL_SECRET_KEY` 注入同一把 Fernet key；
 - `backend/data` 和 `.env` 已被 Git 忽略，不会上传到仓库；
-- 如果密钥文件丢失，旧 API Key 无法解密，需要在前端重新填写。
+- 如果密钥文件丢失，旧 API Key 和代理 URL 无法解密，需要在前端重新填写。
 
 API 模式会传输业务内容：诊断大模型接收案例证据，Embedding API 在重建索引时接收
 知识分块，在 Agentic Search 中还可能接收记忆或源码候选；Reranker API 接收检索问题
@@ -53,6 +53,11 @@ HTTPS 和后端鉴权。
 - 云元数据、链路本地、未授权的回环/私网地址会被拒绝；
 - HTTP、回环地址以及 `APP_ENV=prod` 下的所有 API 地址必须显式加入 `MODEL_ENDPOINT_ALLOWLIST`；
 - 内网主机较多时可临时设置 `MODEL_ALLOW_PRIVATE_ENDPOINTS=true`，但回环和危险系统地址仍受限制，生产环境优先维护精确白名单。
+
+Chat 模型代理执行相同的危险地址和生产白名单策略。代理 URL 仅支持 `http://` 或
+`https://`，可以包含认证信息，但不能包含路径、查询串或片段；返回给前端的提示会移除
+用户名和密码。私网、本机和单标签代理主机必须加入 `MODEL_ENDPOINT_ALLOWLIST`，推荐把
+模型端点和代理主机都逐项列入，而不是允许整个私网。
 
 示例：
 
@@ -110,9 +115,19 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 - 模型名称；
 - OpenAI-Compatible Base URL；
 - API Key；
+- 可选模型代理 URL，留空表示该 Profile 直连；
 - Temperature 和超时。
 
 保存后先点击“测试”，成功后点击“切换使用”。系统允许保存多套 Qwen、GLM 或内部兼容网关配置，但同一时间只有一个诊断模型处于激活状态。已有 `.env` 中的 `LLM_*` 配置会在首次升级启动时导入为一个模型配置，作为兼容路径。
+
+代理是逐 Profile 配置，只应用于该 Chat 模型的诊断、案例问答和知识提炼请求。代理地址
+和其中的账号密码使用与 API Key 相同的 Fernet 密钥加密，列表只显示不含凭据的
+`scheme://host:port`。启用代理时客户端不再继承进程或浏览器代理，并强制清除 TLS CRL
+吊销检查标志；`CERT_REQUIRED`、证书链校验和主机名校验保持开启。代理留空时前端创建的
+Profile 明确直连；历史 `MODEL-chat-env` 环境变量 Profile 仍保留读取系统代理的兼容行为。
+
+跳过吊销检查不能解决“不受信任的签发机构”。公司中间人代理的根证书仍必须进入系统
+信任源，或由管理员通过 `SSL_CERT_FILE` 提供受控 CA bundle。禁止使用 `verify=false`。
 
 诊断结果不是直接信任模型返回值：后端会检查固定 JSON 结构、置信度范围以及每个事实/假设引用的 `evidence_id`。如果模型引用不存在的证据、返回非法 JSON 或调用失败，诊断会保留规则与 RAG 的确定性结果并记录警告。历史诊断还会保存当时模型名称、配置 ID、Base URL 和非密钥参数快照，API Key 永远不会进入该快照。
 

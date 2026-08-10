@@ -30,6 +30,12 @@ MODE_BY_PROVIDER = {
     "qwen_rerank_api": "api",
 }
 
+COMPATIBLE_CHAT_PROVIDERS = (
+    "Qwen Model Studio OpenAI-compatible API",
+    "GLM OpenAI-compatible API",
+    "internal OpenAI-compatible gateway",
+)
+
 _ALWAYS_BLOCKED_HOSTS = {
     "metadata.google.internal",
     "metadata.azure.internal",
@@ -127,12 +133,63 @@ def validate_model_endpoint(base_url: str) -> None:
         )
 
 
+def validate_model_proxy_url(task_type: str, mode: str, proxy_url: str | None) -> None:
+    """Validate an explicitly selected Chat proxy without exposing credentials."""
+    value = (proxy_url or "").strip()
+    if not value:
+        return
+    if task_type != "chat" or mode != "api":
+        raise ValueError("A proxy can only be configured for an API Chat model")
+    if len(value) > 2048 or any(
+        character.isspace() or ord(character) == 127
+        for character in value
+    ):
+        raise ValueError("Model proxy URL is invalid")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Model proxy URL is invalid") from exc
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("Model proxy URL must use http or https")
+    if not parsed.hostname:
+        raise ValueError("Model proxy URL must include a hostname")
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise ValueError("Model proxy URL must not contain a path, query string or fragment")
+
+    settings = get_settings()
+    host = parsed.hostname.rstrip(".").lower()
+    allowlisted = _host_is_allowlisted(host, settings.model_endpoint_allowlist_entries)
+    if host in _ALWAYS_BLOCKED_HOSTS or host.startswith("metadata."):
+        raise ValueError("Cloud metadata endpoints cannot be used as model proxies")
+    if settings.app_env == "prod" and not allowlisted:
+        raise ValueError("Production model proxies must be listed in MODEL_ENDPOINT_ALLOWLIST")
+    if (host == "localhost" or host.endswith(".localhost")) and not allowlisted:
+        raise ValueError("Loopback model proxies must be explicitly allowlisted")
+    if "." not in host and not allowlisted and not settings.model_allow_private_endpoints:
+        raise ValueError("Single-label/internal model proxies must be explicitly allowed")
+
+    try:
+        literal_address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        addresses = set() if allowlisted else _resolved_addresses(host, port)
+    else:
+        addresses = {literal_address}
+    for address in addresses:
+        _reject_unsafe_address(
+            address,
+            allowlisted=allowlisted,
+            allow_private=settings.model_allow_private_endpoints,
+        )
+
+
 def validate_model_profile(
     task_type: str,
     mode: str,
     provider: str,
     model_name: str,
     base_url: str | None,
+    proxy_url: str | None = None,
 ) -> None:
     if task_type not in PROVIDERS_BY_TASK:
         raise ValueError(f"Unsupported model task: {task_type}")
@@ -147,6 +204,7 @@ def validate_model_profile(
         raise ValueError("Base URL is required for API models")
     if mode == "api":
         validate_model_endpoint(base_url or "")
+    validate_model_proxy_url(task_type, mode, proxy_url)
 
 
 def model_profile_to_dict(profile: ModelProfile) -> dict[str, Any]:
@@ -160,6 +218,9 @@ def model_profile_to_dict(profile: ModelProfile) -> dict[str, Any]:
         "base_url": profile.base_url,
         "api_key_configured": bool(profile.api_key_ciphertext),
         "api_key_hint": profile.api_key_hint,
+        "proxy_url_configured": bool(profile.proxy_url_ciphertext),
+        "proxy_url_hint": profile.proxy_url_hint,
+        "certificate_revocation_check_skipped": profile_uses_proxy(profile),
         "config": json_loads(profile.config_json, {}),
         "enabled": profile.enabled,
         "is_active": profile.is_active,
@@ -168,8 +229,18 @@ def model_profile_to_dict(profile: ModelProfile) -> dict[str, Any]:
     }
 
 
+def profile_uses_proxy(profile: ModelProfile | None) -> bool:
+    return bool(
+        profile
+        and profile.task_type == "chat"
+        and profile.mode == "api"
+        and profile.provider == "openai_compatible"
+        and profile.proxy_url_ciphertext
+    )
+
+
 def get_profile_api_key(profile: ModelProfile) -> str:
-    return decrypt_secret(profile.api_key_ciphertext)
+    return decrypt_secret(profile.api_key_ciphertext, "API key")
 
 
 def set_profile_api_key(profile: ModelProfile, api_key: str | None) -> None:
@@ -178,6 +249,27 @@ def set_profile_api_key(profile: ModelProfile, api_key: str | None) -> None:
     cleaned = api_key.strip()
     profile.api_key_ciphertext = encrypt_secret(cleaned) if cleaned else None
     profile.api_key_hint = secret_hint(cleaned) if cleaned else None
+
+
+def _proxy_url_hint(proxy_url: str) -> str:
+    parsed = urlsplit(proxy_url)
+    hostname = parsed.hostname or ""
+    rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return f"{parsed.scheme.lower()}://{rendered_host}{port}"
+
+
+def get_profile_proxy_url(profile: ModelProfile) -> str:
+    return decrypt_secret(profile.proxy_url_ciphertext, "model proxy URL")
+
+
+def set_profile_proxy_url(profile: ModelProfile, proxy_url: str | None) -> None:
+    if proxy_url is None:
+        return
+    cleaned = proxy_url.strip()
+    validate_model_proxy_url(profile.task_type, profile.mode, cleaned)
+    profile.proxy_url_ciphertext = encrypt_secret(cleaned) if cleaned else None
+    profile.proxy_url_hint = _proxy_url_hint(cleaned) if cleaned else None
 
 
 def get_active_model_profile(task_type: str, db: Session | None = None) -> ModelProfile | None:
@@ -201,7 +293,15 @@ def get_active_model_profile(task_type: str, db: Session | None = None) -> Model
 def activate_model_profile(db: Session, profile: ModelProfile) -> None:
     if not profile.enabled:
         raise ValueError("Disabled model profiles cannot be activated")
-    validate_model_profile(profile.task_type, profile.mode, profile.provider, profile.model_name, profile.base_url)
+    proxy_url = get_profile_proxy_url(profile) if profile.proxy_url_ciphertext else None
+    validate_model_profile(
+        profile.task_type,
+        profile.mode,
+        profile.provider,
+        profile.model_name,
+        profile.base_url,
+        proxy_url,
+    )
     if profile.mode == "api" and not profile.api_key_ciphertext:
         raise ValueError("An API key is required before this profile can be activated")
     db.execute(
@@ -332,6 +432,7 @@ def seed_model_profiles(db: Session) -> None:
                 "temperature": settings.llm_temperature,
                 "timeout_seconds": settings.llm_timeout_seconds,
                 "max_retries": settings.llm_max_retries,
+                "trust_environment_proxy": True,
             }),
             is_active=True,
         )

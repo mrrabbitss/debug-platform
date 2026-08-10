@@ -505,6 +505,8 @@ class ModelProfile(Base):
     base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     api_key_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     api_key_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    proxy_url_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proxy_url_hint: Mapped[str | None] = mapped_column(String(512), nullable=True)
     config_json: Mapped[str] = mapped_column(Text, default="{}")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
