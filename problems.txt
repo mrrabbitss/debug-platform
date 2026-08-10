@@ -1,0 +1,33 @@
+运行出现：[INFO] Installing frontend dependencies...
+npm error code EPERM
+npm error syscall unlink
+npm error path D:\DEBUGNEW\debug-platform\frontend\node_modules\@esbuild\win32-x64\esbuild.exe
+npm error errno -4048
+npm error [Error: EPERM: operation not permitted, unlink 'D:\DEBUGNEW\debug-platform\frontend\node_modules\@esbuild\win32-x64\esbuild.exe'] {
+npm error   errno: -4048,
+npm error   code: 'EPERM',
+npm error   syscall: 'unlink',
+npm error   path: 'D:\\DEBUGNEW\\debug-platform\\frontend\\node_modules\\@esbuild\\win32-x64\\esbuild.exe'
+npm error }
+npm error
+npm error The operation was rejected by your operating system.
+npm error It's possible that the file was already in use (by a text editor or antivirus), or that you lack permissions to access it.
+npm error
+npm error If you believe this might be a permissions issue, please double-check the permissions of the file and its containing directories, or try running the command again as root/Administrator.
+npm error A complete log of this run can be found in: C:\Users\b50062801\AppData\Local\npm-cache\_logs\2026-08-10T11_43_45_291Z-debug-0.log
+
+[OK] Local dependencies are ready. Future starts skip installation until dependency files change.
+[INFO] Starting backend at http://127.0.0.1:8000
+[INFO] Starting frontend at http://127.0.0.1:5173
+
+> gw-ap-debug-frontend@0.1.0 dev
+> vite
+
+'vite' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+[ERROR] Frontend development server failed to start.
+[ERROR] Startup stopped. Review the message above, then try again.
+请按任意键继续. . .
+
+此外在添加代理节点时会显示：Private-network model endpoints require MODEL_ENDPOINT_ALLOWLIST or MODEL_ALLOW_PRIVATE_ENDPOINTS=true
