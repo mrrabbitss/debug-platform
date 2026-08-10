@@ -1,0 +1,15 @@
+GW/AP CodeAgent Diagnostic Summary
+status=FULL_NGA_MCP
+nga_found=True
+codeagent_exe_found=True
+codeagent_discovery=nga-root-bin
+direct_mcp_passed=True
+known_config_contains_server=True
+nga_server_connected=True
+codeagent_exe_server_connected=True
+nga_debug_config_contains_server=True
+
+Findings:
+- The GW/AP MCP server passed a direct stdio initialize/tools-list handshake.
+- The actual nga launcher reports gw-ap-debug-vnext as connected.
+- Share only the shareable JSON/TXT files after reviewing them; raw probe reports are local-only.
