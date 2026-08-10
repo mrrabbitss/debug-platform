@@ -10,11 +10,24 @@ machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
 
 - Portable Skill packaging, isolated Runtime setup/start/stop and compatibility
   probe scripts: PASS under Windows PowerShell 5.1.
+- Company target-machine proxy reproduction: CONFIRMED. With `HTTP_PROXY`,
+  `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` all unset, HTTPX `trust_env=True`
+  reached the HIS proxy and returned 504, while the same vNext Python with
+  `trust_env=False` reached Uvicorn and returned `200 {"status":"ok"}`.
+- Loopback proxy correction: PASS. `RuntimeClient` now disables environment/
+  Windows system proxy discovery only for localhost, `.localhost`, IPv4
+  loopback and `::1`; non-loopback endpoints preserve the previous policy.
+  Generated MCP environments also include `NO_PROXY=127.0.0.1,localhost,::1`.
 - The shareable dual-entry diagnostic collector: PASS. An isolated fixture with
   a root `nga` launcher and `bin/codeagent.exe` verified automatic discovery,
-  separate probes, two direct 12-tool MCP handshakes, loopback-only Runtime
-  enforcement and removal of usernames, absolute repository paths and secret
-  patterns from the shareable report.
+  separate probes, two direct 12-tool MCP protocol handshakes, a read-only
+  `debug_status` Runtime data-plane call, loopback-only Runtime enforcement and
+  removal of usernames, absolute repository paths and secret patterns from the
+  shareable report. FULL status now requires the data-plane call to pass.
+- The zero-argument company launcher contract: PASS under Windows PowerShell
+  5.1. It fixes the tested `nga` + CodeArts Skill + OpenCode V1 project MCP
+  profile, repairs missing/stale assets, checks the real RuntimeClient path and
+  launches the TUI without changing main or the global company proxy.
 - The generated OpenCode project configuration reached `FULL_SKILL_MCP` with
   OpenCode 1.18.15: project Skill discovered, Runtime healthy, MCP shown as
   connected, stdio `initialize`/`tools/list` handshake successful and all 12
@@ -24,10 +37,9 @@ machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
   and cited real `EVT-*` evidence in its conclusion.
 - The same setup script emits either Huawei CodeArts native `mcp` or
   Claude-compatible `mcpServers` configuration and installs the project Skill
-  under `.codeartsdoer/skills`. Those schemas and the CLI fallback were
-  contract-tested locally, but the proprietary company CodeAgent executable and
-  its authenticated model were unavailable on this machine. Final client/model
-  acceptance therefore remains a target-machine test.
+  under `.codeartsdoer/skills`. The proprietary target reported the Skill and
+  MCP as connected before this correction; final authenticated-model tool-use
+  acceptance must be repeated on that machine after pulling this fix.
 - MCP uses stdio and has no TCP port. The separate GW/AP Runtime data plane uses
   loopback port 8766 by default; the agent application's own serve/UI port is
   not used for this integration.
@@ -35,8 +47,8 @@ machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
 ## Agent Runtime vNext follow-up
 
 - Focused Agent Runtime, CLI/MCP and startup tests: PASS, 39 passed.
-- Complete backend regression: PASS, 173 passed / 1 skipped / 0 failed.
-- Backend line coverage: 75.46%, above the enforced 75% quality gate.
+- Complete backend regression: PASS, 179 passed / 1 skipped / 0 failed.
+- Backend line coverage: 75.48%, above the enforced 75% quality gate.
 - Repository Harness: PASS, 13/13 checks and 25 Workflow/OpenAPI operations.
 - Architecture and PowerShell/JSON syntax gates: PASS.
 - Native Windows multi-process Agent Runtime E2E: PASS with exit code 0.
@@ -54,15 +66,15 @@ machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
 - Unified `scripts\validate_all.bat Full`: all 19 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 173 passed and 1 external-service test skipped locally.
-- Backend line coverage: 75.46%, above the enforced 75% quality gate.
+- Backend tests: 179 passed and 1 external-service test skipped locally.
+- Backend line coverage: 75.48%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
 - Browser E2E: 1 complete Edge scenario passed in an isolated runtime. It covered
   TXT, HTML, DOCX and PDF upload/preview, draft generation, conversational
   correction, human confirmation, trace inspection and safe replay. Browser
   console errors and warnings: zero.
-- Repository Harness: all 13 contracts passed across 19 required files, 20
+- Repository Harness: all 13 contracts passed across 19 required files, 21
   Markdown files, dependency-update targets and 25 allowlisted Workflow operations.
 - Architecture checks: 80 Python files and 11 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest

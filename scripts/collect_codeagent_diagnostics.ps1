@@ -365,6 +365,12 @@ function ConvertTo-ShareableProbe($ProbeResult) {
     mcp_handshake = [ordered]@{
       attempted = [bool]$Report.mcp_handshake.attempted
       passed = [bool]$Report.mcp_handshake.passed
+      protocol_passed = [bool]$Report.mcp_handshake.protocol_passed
+      data_plane_attempted = [bool]$Report.mcp_handshake.data_plane_attempted
+      data_plane_passed = [bool]$Report.mcp_handshake.data_plane_passed
+      data_plane_status = $Report.mcp_handshake.data_plane_status
+      data_plane_agent_mode = $Report.mcp_handshake.data_plane_agent_mode
+      data_plane_error = Protect-ShareableText ([string]$Report.mcp_handshake.data_plane_error) 500
       server_name = $Report.mcp_handshake.server_name
       protocol_version = $Report.mcp_handshake.protocol_version
       tool_count = $Report.mcp_handshake.tool_count
@@ -433,20 +439,28 @@ $CodeAgentConnected = $false
 if ($CodeAgentProbe.client) {
   $CodeAgentConnected = [bool]$CodeAgentProbe.client.expected_server_connected
 }
+$DirectProtocolPassed = [bool]$NgaProbe.mcp_handshake.protocol_passed -or [bool]$CodeAgentProbe.mcp_handshake.protocol_passed
+$DirectDataPlanePassed = [bool]$NgaProbe.mcp_handshake.data_plane_passed -or [bool]$CodeAgentProbe.mcp_handshake.data_plane_passed
 $DirectMcpPassed = [bool]$NgaProbe.mcp_handshake.passed -or [bool]$CodeAgentProbe.mcp_handshake.passed
 $KnownConfigContainsServer = @(
   @($NgaProbe.config_checks) + @($CodeAgentProbe.config_checks) |
     Where-Object { $_.contains_expected_server }
 ).Count -gt 0
 
-$DiagnosticStatus = if ($NgaConnected) {
+$DiagnosticStatus = if ($NgaConnected -and $DirectMcpPassed) {
   'FULL_NGA_MCP'
-} elseif ($CodeAgentConnected) {
+} elseif ($NgaConnected -and $DirectProtocolPassed) {
+  'NGA_MCP_CONNECTED_RUNTIME_TOOL_FAILED'
+} elseif ($CodeAgentConnected -and $DirectMcpPassed) {
   'CODEAGENT_EXE_MCP_ONLY'
+} elseif ($CodeAgentConnected -and $DirectProtocolPassed) {
+  'CODEAGENT_EXE_MCP_CONNECTED_RUNTIME_TOOL_FAILED'
 } elseif ($DirectMcpPassed -and $KnownConfigContainsServer) {
   'DIRECT_MCP_OK_CLIENT_CONFIG_NOT_ACTIVE'
 } elseif ($DirectMcpPassed) {
   'DIRECT_MCP_OK_CLIENT_UNCONFIRMED'
+} elseif ($DirectProtocolPassed) {
+  'DIRECT_MCP_PROTOCOL_OK_RUNTIME_TOOL_FAILED'
 } elseif (-not $NgaInfo.found -and -not $CodeAgentInfo.found) {
   'CLIENT_COMMANDS_NOT_FOUND'
 } else {
@@ -460,14 +474,21 @@ if (-not $NgaInfo.found) {
 if (-not $CodeAgentInfo.found) {
   $Findings.Add('bin\codeagent.exe was not found. Pass -CodeAgentExe with its absolute path.')
 }
-if ($DirectMcpPassed) {
+if ($DirectProtocolPassed) {
   $Findings.Add('The GW/AP MCP server passed a direct stdio initialize/tools-list handshake.')
 } else {
   $Findings.Add('The direct GW/AP MCP handshake failed; fix this before changing client configuration.')
 }
-if ($NgaConnected) {
+if ($DirectDataPlanePassed) {
+  $Findings.Add('A read-only debug_status MCP tools/call reached the local Runtime data plane successfully.')
+} elseif ($DirectProtocolPassed) {
+  $Findings.Add('MCP protocol discovery works, but read-only debug_status cannot reach the Runtime data plane; inspect loopback proxy handling.')
+}
+if ($NgaConnected -and $DirectMcpPassed) {
   $Findings.Add('The actual nga launcher reports gw-ap-debug-vnext as connected.')
-} elseif ($CodeAgentConnected) {
+} elseif ($NgaConnected) {
+  $Findings.Add('The actual nga launcher reports connected, but the Runtime tool path is not usable yet.')
+} elseif ($CodeAgentConnected -and $DirectMcpPassed) {
   $Findings.Add('codeagent.exe connects to MCP but nga does not; the wrapper changes configuration or environment.')
 } elseif ($DirectMcpPassed) {
   $Findings.Add('The MCP server works but neither tested client path confirms the configured server.')
@@ -492,7 +513,7 @@ if ($CodeAgentProbeResult.report_path) {
 }
 
 $Shareable = [ordered]@{
-  schema_version = 1
+  schema_version = 2
   generated_at = (Get-Date).ToString('o')
   status = $DiagnosticStatus
   expected_server_name = 'gw-ap-debug-vnext'
@@ -528,6 +549,8 @@ $TextLines = @(
   "nga_found=$($NgaInfo.found)",
   "codeagent_exe_found=$($CodeAgentInfo.found)",
   "codeagent_discovery=$($CodeAgentDiscovery.discovery_method)",
+  "direct_mcp_protocol_passed=$DirectProtocolPassed",
+  "direct_mcp_data_plane_passed=$DirectDataPlanePassed",
   "direct_mcp_passed=$DirectMcpPassed",
   "known_config_contains_server=$KnownConfigContainsServer",
   "nga_server_connected=$NgaConnected",

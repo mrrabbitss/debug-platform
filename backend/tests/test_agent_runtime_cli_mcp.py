@@ -254,6 +254,11 @@ def test_runtime_client_http_errors_and_wrappers(
     assert runtime.get("/health") == {"ok": True}
     assert runtime.post("/plain", json={}) == "plain"
     assert calls[0][1] == "http://runtime/api/v1/health"
+    assert calls[0][2]["trust_env"] is True
+
+    loopback = RuntimeClient("http://127.0.0.1:8766")
+    assert loopback.get("/health") == {"ok": True}
+    assert calls[-1][2]["trust_env"] is False
 
     monkeypatch.setattr(
         client.httpx,
@@ -319,6 +324,24 @@ def test_runtime_client_http_errors_and_wrappers(
     assert runtime.ui_url("CASE-1").endswith("/ui/cases/CASE-1")
     assert runtime.ui_url().endswith("/ui/")
     assert runtime.open_ui()["opened"] is True
+
+
+@pytest.mark.parametrize(
+    ("runtime_url", "trust_env"),
+    [
+        ("http://127.0.0.1:8766", False),
+        ("http://127.20.30.40:8766", False),
+        ("http://localhost:8766", False),
+        ("http://runtime.localhost:8766", False),
+        ("http://[::1]:8766", False),
+        ("https://runtime.example.com", True),
+    ],
+)
+def test_runtime_client_only_trusts_environment_for_non_loopback_urls(
+    runtime_url: str,
+    trust_env: bool,
+) -> None:
+    assert RuntimeClient(runtime_url).trust_env is trust_env
 
 
 def test_mcp_protocol_methods_and_stdio_boundary(

@@ -101,6 +101,30 @@ scripts\setup_codeagent_vnext.bat `
 - 生成可供 IDE/企业控制台导入的 Skill zip；
 - 运行兼容探针，并把脱敏 JSON 报告写入 Runtime 的 `logs` 目录。
 
+### 公司已测 `nga` 环境：零参数启动
+
+对于已经确认使用根目录 `nga`、内部 `bin\codeagent.exe`、CodeArts 项目 Skill，并从项目
+`opencode.json` 读取 OpenCode V1 MCP 的公司环境，直接运行：
+
+```bat
+scripts\start_huawei_codeagent_vnext.bat
+```
+
+该入口固定使用 `%LOCALAPPDATA%\GWAPDebugVNext`、`127.0.0.1:8766`、
+`gw-ap-debug-vnext`、CodeArts Skill 和 OpenCode V1 `mcp.<server>`，不再需要逐项传
+`-AgentCommand`、`-TargetClient`、`-McpSchema`、`-RuntimePort` 或 `-BuildFrontend`。首次运行或发现
+Python、Skill、MCP 配置、`NO_PROXY`、前端 build 缺失时，它会调用通用 setup 自动补齐；日常运行只会
+启动/复用 Runtime，使用真实 `RuntimeClient` 验证数据面，然后在仓库根目录进入 `nga` TUI。
+
+拉取新版本后如需强制重新同步 Skill/MCP 配置，可运行：
+
+```bat
+scripts\start_huawei_codeagent_vnext.bat -Repair
+```
+
+该脚本只为已实测公司环境固化默认值；标准 OpenCode、Claude Code 或不同 CodeAgent schema 继续使用
+通用 `setup_codeagent_vnext.bat`。
+
 可选 Web UI 默认不构建。需要 UI 时：
 
 ```powershell
@@ -167,13 +191,14 @@ scripts\probe_codeagent_compatibility.bat `
 
 探针执行以下只读或临时检查：
 
-- 查找 `codearts`、`codeagent`、`opencode` 或显式命令路径；
+- 查找 `nga`、`codearts`、`codeagent`、`opencode` 或显式命令路径；
 - 有超时地执行 `--version`、`help`、`mcp list`；
 - 检查已知项目级/个人级 Skill 路径；
 - 识别 CodeArts 原生、Claude 兼容、OpenCode V1 和 OpenCode V2 schema；
 - 只报告 MCP server key 和 loopback URL，不打印配置密钥或完整配置值；
 - 探测 `8765`、`8766` 及配置中出现的 loopback Runtime URL；
 - 直接完成 MCP `initialize` 和 `tools/list` stdio 握手；
+- 通过 MCP `tools/call` 实际调用只读 `debug_status`，确认 Python MCP 到 Runtime HTTP 数据面可用；
 - 返回 MCP server 自报名称、协议版本及 12 个原始工具名；
 - 检查 CodeAgent 的 `mcp list` 是否真的显示预期 server 已连接。
 
@@ -181,8 +206,9 @@ scripts\probe_codeagent_compatibility.bat `
 
 | `status` | 含义 |
 | --- | --- |
-| `FULL_SKILL_MCP` | Skill、Runtime、MCP server 和 CodeAgent 注册全部确认 |
+| `FULL_SKILL_MCP` | Skill、Runtime、MCP server、只读数据面工具调用和 CodeAgent 注册全部确认 |
 | `SKILL_CLI_READY_MCP_CLIENT_UNCONFIRMED` | Skill + CLI 已可用，MCP server 正常，但客户端尚未确认连接 |
+| `MCP_PROTOCOL_OK_RUNTIME_TOOL_FAILED` | MCP 协议与工具发现正常，但 `debug_status` 未能访问 Runtime；优先检查 loopback 代理 |
 | `PORTABLE_ASSETS_READY_RUNTIME_NOT_CONFIRMED` | 文件和 MCP 协议正常，Runtime 尚未启动或端口不对 |
 | `PARTIAL` | 至少一项基础契约缺失，按 `recommendations` 修复 |
 
@@ -202,7 +228,7 @@ scripts\collect_codeagent_diagnostics.bat
 
 - 解析 PATH 中的 `nga`，并优先查找其同级 `bin\codeagent.exe`；
 - 分别执行有超时的版本、帮助和 `mcp list` 探测；
-- 直接完成两次 stdio MCP `initialize`/`tools/list` 握手；
+- 直接完成两次 stdio MCP `initialize`/`tools/list` 握手，并调用只读 `debug_status`；
 - 只用布尔值记录 `nga debug config` 是否真正包含 `gw-ap-debug-vnext`，不保存完整生效配置；
 - 运行 `nga debug paths`，替换用户、仓库和 Runtime 路径并过滤密钥及非 loopback URL；
 - 生成明确区分“可以分享”和“仅本机保留”的诊断文件。
@@ -228,8 +254,9 @@ scripts\collect_codeagent_diagnostics.bat `
 - 若生成，`nga-debug-paths-sanitized.txt`。
 
 不要分享 `nga-probe.json`、`codeagent-exe-probe.json`、完整 `debug config`、环境变量或 CLI 原始日志。
-汇总状态会直接区分 `FULL_NGA_MCP`、仅内部 exe 可连接、MCP 本体正常但客户端配置未生效，以及
-MCP 握手失败。
+汇总状态会直接区分 `FULL_NGA_MCP`、客户端显示 connected 但 Runtime 工具失败、仅内部 exe 可连接、
+MCP 本体正常但客户端配置未生效，以及 MCP 协议握手失败。`FULL_NGA_MCP` 现在必须包含一次真实的
+`debug_status` 数据面成功，不再只根据 `mcp list` 判定。
 
 ## 4. 手工确认 Skill 与 MCP
 
@@ -276,8 +303,25 @@ scripts\probe_codeagent_compatibility.bat `
   -PythonExe $Python
 ```
 
-如果直接 MCP 握手通过、但 `codearts mcp list` 失败，问题在 CodeAgent 配置发现或 schema，不在
-GW/AP Debug MCP server。
+如果 `mcp_handshake.protocol_passed=true` 且 `data_plane_passed=true`，但客户端 `mcp list` 失败，
+问题在 CodeAgent 配置发现或 schema；若只有 `protocol_passed=true`，则 MCP server 可启动，但 Runtime
+HTTP 数据面仍不可用。
+
+### `Runtime HTTP 504` / `HIS Proxy Notification`
+
+如果浏览器和 `Invoke-RestMethod` 可访问 `127.0.0.1:8766`，但 MCP 工具返回 HIS Proxy 504，说明
+Python HTTP 客户端读取了 Windows 公司系统代理。代理服务器无法访问用户电脑自己的 loopback，因而
+返回 504；这不是 Runtime 超时，也不应通过绑定 `0.0.0.0` 解决。
+
+当前 RuntimeClient 对 `localhost`、`*.localhost`、`127.0.0.0/8` 和 `::1` 强制
+`trust_env=false`，生成的 MCP 子进程配置同时包含：
+
+```json
+"NO_PROXY": "127.0.0.1,localhost,::1"
+```
+
+更新后运行 `scripts\start_huawei_codeagent_vnext.bat -Repair`，完全退出旧 TUI/MCP 子进程，再使用零参数
+命令重新启动。不要全局删除公司代理；CodeAgent 访问公司模型仍可能需要它。
 
 ## 5. 工具名称发生魔改时怎么判断
 
@@ -360,6 +404,12 @@ Runtime。Skill 本身不携带 Python 虚拟环境和诊断数据库。
 ```powershell
 scripts\stop_codeagent_vnext.bat
 scripts\start_codeagent_vnext.bat
+```
+
+已测 `nga` 公司环境的日常启动优先使用：
+
+```bat
+scripts\start_huawei_codeagent_vnext.bat
 ```
 
 自定义目录或端口时，停止和启动必须传相同参数：

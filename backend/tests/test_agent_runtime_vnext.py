@@ -275,6 +275,9 @@ def test_codeagent_skill_setup_and_probe_contracts() -> None:
     collector = (repo / "scripts" / "collect_codeagent_diagnostics.ps1").read_text(
         encoding="utf-8"
     )
+    company_start = (repo / "scripts" / "start_huawei_codeagent_vnext.ps1").read_text(
+        encoding="utf-8"
+    )
     package = (repo / "scripts" / "package_codeagent_skill.ps1").read_text(encoding="utf-8")
     wrapper = (repo / ".claude" / "skills" / "gw-ap-debug" / "scripts" / "gwap.ps1").read_text(
         encoding="utf-8"
@@ -292,6 +295,8 @@ def test_codeagent_skill_setup_and_probe_contracts() -> None:
         "OpenCodeV2",
         "gw-ap-debug-vnext",
         "TargetClient",
+        "NO_PROXY",
+        "'nga'",
     ):
         assert contract in setup
     for contract in (
@@ -300,6 +305,9 @@ def test_codeagent_skill_setup_and_probe_contracts() -> None:
         "opencode",
         "initialize",
         "tools/list",
+        "tools/call",
+        "data_plane_passed",
+        "MCP_PROTOCOL_OK_RUNTIME_TOOL_FAILED",
         "FULL_SKILL_MCP",
         "mcp_tcp_port = $null",
         "ClientFamily",
@@ -321,13 +329,29 @@ def test_codeagent_skill_setup_and_probe_contracts() -> None:
         "debug', 'config",
         "debug', 'paths",
         "FULL_NGA_MCP",
+        "NGA_MCP_CONNECTED_RUNTIME_TOOL_FAILED",
         "DIRECT_MCP_OK_CLIENT_CONFIG_NOT_ACTIVE",
+        "DIRECT_MCP_PROTOCOL_OK_RUNTIME_TOOL_FAILED",
         "codeagent-diagnostics-shareable.json",
         "local_only_files",
         "RuntimeUrl must use HTTP(S) on loopback",
     ):
         assert contract in collector
     assert (repo / "scripts" / "collect_codeagent_diagnostics.bat").is_file()
+    company_start.encode("ascii")
+    for contract in (
+        "GWAPDebugVNext",
+        "gw-ap-debug-vnext",
+        "TargetClient = 'CodeArts'",
+        "McpSchema = 'OpenCodeV1'",
+        "NO_PROXY",
+        "RuntimeClient",
+        "start_codeagent_vnext.ps1",
+        "setup_codeagent_vnext.ps1",
+        "& $NgaExecutable @NgaArguments",
+    ):
+        assert contract in company_start
+    assert (repo / "scripts" / "start_huawei_codeagent_vnext.bat").is_file()
 
     native = json.loads(
         (repo / "agent-integrations" / "codearts.native.mcp.example.json").read_text(encoding="utf-8")
@@ -337,6 +361,7 @@ def test_codeagent_skill_setup_and_probe_contracts() -> None:
     assert native_server["command"][-2:] == ["-m", "app.agent_runtime.mcp_server"]
     assert native_server["enabled"] is True
     assert native_server["environment"]["GWAP_RUNTIME_URL"] == "http://127.0.0.1:8766"
+    assert native_server["environment"]["NO_PROXY"] == "127.0.0.1,localhost,::1"
 
     claude = json.loads(
         (repo / "agent-integrations" / "codearts.claude.mcp.example.json").read_text(encoding="utf-8")
@@ -345,6 +370,7 @@ def test_codeagent_skill_setup_and_probe_contracts() -> None:
     assert claude_server["transportType"] == "stdio"
     assert claude_server["disabled"] is False
     assert claude_server["args"] == ["-m", "app.agent_runtime.mcp_server"]
+    assert claude_server["env"]["NO_PROXY"] == "127.0.0.1,localhost,::1"
 
 
 def test_agent_runtime_routes_are_integrated_with_existing_rbac() -> None:

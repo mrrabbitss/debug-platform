@@ -210,6 +210,12 @@ function Invoke-McpHandshake([string]$Executable) {
   $Result = [ordered]@{
     attempted = $false
     passed = $false
+    protocol_passed = $false
+    data_plane_attempted = $false
+    data_plane_passed = $false
+    data_plane_status = $null
+    data_plane_agent_mode = $null
+    data_plane_error = $null
     server_name = $null
     server_version = $null
     protocol_version = $null
@@ -242,7 +248,11 @@ function Invoke-McpHandshake([string]$Executable) {
         }
       },
       [ordered]@{jsonrpc = '2.0'; method = 'notifications/initialized'; params = [ordered]@{}},
-      [ordered]@{jsonrpc = '2.0'; id = 2; method = 'tools/list'; params = [ordered]@{}}
+      [ordered]@{jsonrpc = '2.0'; id = 2; method = 'tools/list'; params = [ordered]@{}},
+      [ordered]@{
+        jsonrpc = '2.0'; id = 3; method = 'tools/call'
+        params = [ordered]@{name = 'debug_status'; arguments = [ordered]@{}}
+      }
     )
     $MessageLines = @($Messages | ForEach-Object { $_ | ConvertTo-Json -Depth 8 -Compress })
     [System.IO.File]::WriteAllLines($InputPath, [string[]]$MessageLines, $Utf8NoBom)
@@ -271,6 +281,7 @@ function Invoke-McpHandshake([string]$Executable) {
     }
     $Initialize = $Responses | Where-Object { $_.id -eq 1 } | Select-Object -First 1
     $Tools = $Responses | Where-Object { $_.id -eq 2 } | Select-Object -First 1
+    $StatusCall = $Responses | Where-Object { $_.id -eq 3 } | Select-Object -First 1
     if (-not $Initialize -or -not $Tools) {
       throw "MCP did not return initialize and tools/list responses. $ErrorText"
     }
@@ -285,7 +296,31 @@ function Invoke-McpHandshake([string]$Executable) {
       'debug_code_context', 'debug_diagnose', 'debug_generate_report', 'debug_open_ui'
     )
     $Result.missing_required_tools = @($Required | Where-Object { $Result.tool_names -notcontains $_ })
-    $Result.passed = $Result.server_name -eq 'gw-ap-debug' -and $Result.missing_required_tools.Count -eq 0
+    $Result.protocol_passed = $Result.server_name -eq 'gw-ap-debug' -and $Result.missing_required_tools.Count -eq 0
+    $Result.data_plane_attempted = $null -ne $StatusCall
+    if (-not $StatusCall) {
+      $Result.data_plane_error = 'MCP did not return the read-only debug_status tools/call response.'
+    } elseif ([bool]$StatusCall.result.isError) {
+      $StatusContent = @($StatusCall.result.content | Select-Object -First 1)
+      $Result.data_plane_error = Protect-CommandOutput $(
+        if ($StatusContent.Count) { [string]$StatusContent[0].text } else { 'debug_status returned isError=true.' }
+      )
+    } else {
+      try {
+        $StatusContent = @($StatusCall.result.content | Select-Object -First 1)
+        if (-not $StatusContent.Count) { throw 'debug_status returned no content.' }
+        $StatusPayload = ([string]$StatusContent[0].text) | ConvertFrom-Json
+        $Result.data_plane_status = [string]$StatusPayload.health.status
+        $Result.data_plane_agent_mode = [string]$StatusPayload.agent_runtime.agent_mode
+        $Result.data_plane_passed = $Result.data_plane_status -eq 'ok'
+        if (-not $Result.data_plane_passed) {
+          $Result.data_plane_error = 'debug_status did not return health.status=ok.'
+        }
+      } catch {
+        $Result.data_plane_error = Protect-CommandOutput $_.Exception.Message
+      }
+    }
+    $Result.passed = $Result.protocol_passed -and $Result.data_plane_passed
   } catch {
     $Result.error = Protect-CommandOutput $_.Exception.Message
   } finally {
@@ -409,7 +444,9 @@ $Compatibility = if ($ClientSkillReady -and $RuntimeReady -and $McpHandshake.pas
   'FULL_SKILL_MCP'
 } elseif ($ClientSkillReady -and $RuntimeReady -and $McpHandshake.passed) {
   'SKILL_CLI_READY_MCP_CLIENT_UNCONFIRMED'
-} elseif ($AnySkillReady -and $McpHandshake.passed) {
+} elseif ($ClientSkillReady -and $RuntimeReady -and $McpHandshake.protocol_passed -and -not $McpHandshake.data_plane_passed) {
+  'MCP_PROTOCOL_OK_RUNTIME_TOOL_FAILED'
+} elseif ($AnySkillReady -and $McpHandshake.protocol_passed) {
   'PORTABLE_ASSETS_READY_RUNTIME_NOT_CONFIRMED'
 } else {
   'PARTIAL'
@@ -419,9 +456,12 @@ $Recommendations = New-Object System.Collections.Generic.List[string]
 if (-not $ClientFound) { $Recommendations.Add('Pass -AgentCommand with the actual CodeAgent executable name or absolute path.') }
 if (-not $ClientSkillReady) { $Recommendations.Add('Run scripts\setup_codeagent_vnext.bat with the correct -TargetClient to install a discoverable project Skill.') }
 if (-not $RuntimeReady) { $Recommendations.Add('Start the isolated vNext Runtime and verify its /api/v1/health endpoint.') }
-if (-not $McpHandshake.passed) { $Recommendations.Add('Fix the direct stdio MCP handshake before changing any CodeAgent MCP configuration.') }
+if (-not $McpHandshake.protocol_passed) { $Recommendations.Add('Fix the direct stdio MCP initialize/tools-list handshake before changing any CodeAgent MCP configuration.') }
+if ($McpHandshake.protocol_passed -and -not $McpHandshake.data_plane_passed) {
+  $Recommendations.Add('The MCP protocol works but read-only debug_status cannot reach the Runtime data plane. Verify loopback proxy bypass and RuntimeClient trust_env policy.')
+}
 if ($McpHandshake.passed -and -not $ClientMcpConnected) { $Recommendations.Add('Use Skill + CLI fallback now, or configure one supported MCP schema and rerun this probe.') }
-if ($ClientMcpConnected) { $Recommendations.Add('Run a synthetic end-to-end diagnosis and confirm real debug_* tool calls and EVT evidence IDs.') }
+if ($ClientMcpConnected -and $McpHandshake.data_plane_passed) { $Recommendations.Add('Run a synthetic end-to-end diagnosis and confirm real debug_* tool calls and EVT evidence IDs.') }
 
 $Report = [ordered]@{
   generated_at = (Get-Date).ToString('o')

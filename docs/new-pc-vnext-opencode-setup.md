@@ -501,6 +501,19 @@ Test-Path $VenvPython
 
 确认配置中的 `PYTHONPATH` 指向当前 vNext 的 `backend`，端口与 Runtime 一致，并查看终端 A 的错误。
 
+### MCP 显示 connected，但工具返回 HIS Proxy 504
+
+这表示 stdio MCP 协议正常，但 Python MCP 子进程到 `127.0.0.1:8766` 的 HTTP 请求被 Windows 公司
+系统代理接管。更新后的 RuntimeClient 对 loopback 强制禁用 HTTPX `trust_env`，生成的 MCP 环境也包含
+`NO_PROXY=127.0.0.1,localhost,::1`。华为公司已测 `nga` 环境可以直接执行：
+
+```bat
+scripts\start_huawei_codeagent_vnext.bat -Repair
+```
+
+完全退出旧 TUI 后，再用不带参数的同一脚本日常启动。不要修改为 `0.0.0.0`，也不要全局关闭公司
+代理；前者扩大本机服务暴露，后者可能导致公司模型连接失败。
+
 ### `ModuleNotFoundError` 或 pytest 不存在
 
 确认命令使用 `$VenvPython`，然后重新执行第 4 节安装。不要退回系统 Python。

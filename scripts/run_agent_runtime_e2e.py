@@ -155,9 +155,27 @@ def main() -> int:
             assert ingest["parse_result"]["status"] == "COMPLETED"
             assert report["format"] == "html"
             assert models["count"] == 1 and models["models"][0]["task_type"] == "embedding"
-            mcp_request = json.dumps({
-                "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
-            }) + "\n"
+            mcp_requests = [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "gwap-e2e", "version": "1.0"},
+                    },
+                },
+                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "debug_status", "arguments": {}},
+                },
+            ]
+            mcp_request = "\n".join(json.dumps(item) for item in mcp_requests) + "\n"
             mcp = subprocess.run(
                 [sys.executable, "-m", "app.agent_runtime.mcp_server"],
                 cwd=BACKEND,
@@ -168,13 +186,24 @@ def main() -> int:
                 timeout=10,
                 check=True,
             )
-            tools = json.loads(mcp.stdout.splitlines()[0])["result"]["tools"]
+            mcp_responses = {
+                response.get("id"): response
+                for response in (json.loads(line) for line in mcp.stdout.splitlines() if line.strip())
+                if response.get("id") is not None
+            }
+            tools = mcp_responses[2]["result"]["tools"]
+            status_call = mcp_responses[3]["result"]
+            assert status_call["isError"] is False
+            mcp_status = json.loads(status_call["content"][0]["text"])
+            assert mcp_status["health"]["status"] == "ok"
+            assert mcp_status["agent_runtime"]["agent_mode"] == "external"
             assert 8 <= len(tools) <= 12
             summary = {
                 "status": "PASS",
                 "case_id": case_id,
                 "events": len(evidence["log_evidence"]),
                 "tool_count": len(tools),
+                "mcp_data_plane": True,
                 "analysis_engine": result_json["analysis_engine"],
                 "workspace_index": workspace_result["index_result"]["status"],
                 "report": report["format"],

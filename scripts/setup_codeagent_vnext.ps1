@@ -115,7 +115,7 @@ function Resolve-AgentExecutable([string]$Name) {
     if ($Explicit) { return $(if ($Explicit.Source) { $Explicit.Source } else { $Explicit.Definition }) }
     return $null
   }
-  foreach ($Candidate in @('codearts', 'codeagent', 'opencode')) {
+  foreach ($Candidate in @('nga', 'codearts', 'codeagent', 'opencode')) {
     $Detected = Get-Command $Candidate -ErrorAction SilentlyContinue
     if ($Detected) { return $(if ($Detected.Source) { $Detected.Source } else { $Detected.Definition }) }
   }
@@ -262,6 +262,7 @@ if ($McpSchema -ne 'None') {
     PYTHONPATH = Join-Path $RepositoryRoot 'backend'
     GWAP_RUNTIME_URL = $RuntimeUrl
     GWAP_AGENT_ROLE = 'ENGINEER'
+    NO_PROXY = '127.0.0.1,localhost,::1'
   }
   if ($McpSchema -eq 'CodeArtsNative') {
     $JsoncPath = Join-Path $ProjectRoot '.codeartsdoer\codearts_cli.jsonc'

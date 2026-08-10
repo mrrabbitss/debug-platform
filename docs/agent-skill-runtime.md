@@ -155,6 +155,16 @@ scripts\probe_codeagent_compatibility.bat -AgentCommand codearts -Strict
 命名空间化 MCP 配置。具体 schema 选择、Skill-only fallback、端口/工具名判定和 zip 导入见
 [CodeAgent 兼容指南](codeagent-compatibility.md)。
 
+当前已经实测的公司环境是根命令 `nga`、内部 `bin\codeagent.exe`、CodeArts 项目 Skill 与 OpenCode
+V1 项目 MCP 的混合形态。首次安装修复和日常运行都可以使用同一个零参数入口：
+
+```bat
+scripts\start_huawei_codeagent_vnext.bat
+```
+
+它会自动补齐缺失的隔离 Python、Skill、MCP/`NO_PROXY` 和前端 build，启动或复用 Runtime，使用真实
+RuntimeClient 验证数据面后进入 TUI；拉取新版本后可加 `-Repair` 强制重新同步配置。
+
 ## 4. Skill
 
 项目级 Skill 位于：

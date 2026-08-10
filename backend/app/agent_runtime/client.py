@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import time
 import webbrowser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -13,11 +15,25 @@ class RuntimeClientError(RuntimeError):
     pass
 
 
+def _is_loopback_runtime_url(runtime_url: str) -> bool:
+    hostname = (urlsplit(runtime_url).hostname or "").rstrip(".").lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 class RuntimeClient:
     def __init__(self, base_url: str | None = None, api_key: str | None = None) -> None:
         runtime = (base_url or os.environ.get("GWAP_RUNTIME_URL") or "http://127.0.0.1:8765").rstrip("/")
         self.runtime_url = runtime
         self.api_base = f"{runtime}/api/v1"
+        # HTTPX discovers Windows/macOS system proxy settings when trust_env is
+        # enabled. A local Runtime data plane must never leave the machine via
+        # such a proxy, while non-loopback endpoints retain the existing policy.
+        self.trust_env = not _is_loopback_runtime_url(runtime)
         key = api_key if api_key is not None else os.environ.get("GWAP_API_KEY", "")
         self.headers = {"X-API-Key": key} if key else {}
 
@@ -28,6 +44,7 @@ class RuntimeClient:
                 f"{self.api_base}{path}",
                 headers=self.headers,
                 timeout=kwargs.pop("timeout", 180.0),
+                trust_env=self.trust_env,
                 **kwargs,
             )
         except httpx.HTTPError as exc:

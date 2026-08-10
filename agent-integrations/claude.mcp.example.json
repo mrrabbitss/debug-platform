@@ -5,7 +5,8 @@
       "args": [],
       "env": {
         "GWAP_RUNTIME_URL": "http://127.0.0.1:8765",
-        "GWAP_AGENT_ROLE": "ENGINEER"
+        "GWAP_AGENT_ROLE": "ENGINEER",
+        "NO_PROXY": "127.0.0.1,localhost,::1"
       }
     }
   }

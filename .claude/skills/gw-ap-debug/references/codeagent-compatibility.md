@@ -31,8 +31,19 @@ the tool description; do not treat a changed prefix as an incompatible server.
   the Debug Runtime port.
 
 Run `scripts/probe_codeagent_compatibility.bat` from the repository root to verify Skill discovery,
-known config schemas, Runtime health, the direct MCP handshake, raw tool names and the client MCP
-registration without reading credentials or log bodies.
+known config schemas, Runtime health, the direct MCP handshake, a read-only `debug_status` data-plane
+call, raw tool names and the client MCP registration without reading credentials or log bodies.
+
+The tested company profile with a root `nga` launcher, internal `bin/codeagent.exe`, CodeArts project
+Skill and OpenCode V1 project MCP config can be started with no arguments:
+
+```bat
+scripts\start_huawei_codeagent_vnext.bat
+```
+
+The Runtime client bypasses environment and Windows system proxies only for loopback URLs. Generated
+MCP environments also set `NO_PROXY=127.0.0.1,localhost,::1`; do not disable the company proxy globally,
+because the coding-agent model connection may still require it.
 
 When a company wrapper launches `nga` while the internal binary is `bin/codeagent.exe`, run the
 repository-level `scripts/collect_codeagent_diagnostics.bat`. Share only its files named

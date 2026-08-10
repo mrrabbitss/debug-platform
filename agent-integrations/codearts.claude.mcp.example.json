@@ -9,7 +9,8 @@
       "env": {
         "PYTHONPATH": "D:\\GWAP\\debugplatform-vnext\\backend",
         "GWAP_RUNTIME_URL": "http://127.0.0.1:8766",
-        "GWAP_AGENT_ROLE": "ENGINEER"
+        "GWAP_AGENT_ROLE": "ENGINEER",
+        "NO_PROXY": "127.0.0.1,localhost,::1"
       }
     }
   }
