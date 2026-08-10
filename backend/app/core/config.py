@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     tool_timeout_seconds: int = 300
 
     # Agent integration. ``platform`` preserves the standalone Web product;
-    # ``external`` keeps Claude Code/OpenCode as the final reasoner and prevents
+    # ``external`` keeps Claude Code/OpenCode/CodeArts as the final reasoner and prevents
     # the platform diagnosis/chat path from invoking a second chat LLM.
     agent_mode: Literal["platform", "external"] = "platform"
     agent_runtime_host: str = "127.0.0.1"

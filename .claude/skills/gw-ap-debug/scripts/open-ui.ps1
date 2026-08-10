@@ -1,2 +1,4 @@
 param([string]$CaseId = "")
-if ($CaseId) { gwap open --case-id $CaseId --human } else { gwap open --human }
+$Gwap = Join-Path $PSScriptRoot 'gwap.ps1'
+if ($CaseId) { & $Gwap open --case-id $CaseId --human } else { & $Gwap open --human }
+exit $LASTEXITCODE

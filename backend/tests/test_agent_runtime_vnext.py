@@ -268,6 +268,67 @@ def test_win11_agent_installer_and_launcher_contracts() -> None:
     assert opencode_example["mcp"]["gw-ap-debug"]["enabled"] is True
 
 
+def test_codeagent_skill_setup_and_probe_contracts() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    setup = (repo / "scripts" / "setup_codeagent_vnext.ps1").read_text(encoding="utf-8")
+    probe = (repo / "scripts" / "probe_codeagent_compatibility.ps1").read_text(encoding="utf-8")
+    package = (repo / "scripts" / "package_codeagent_skill.ps1").read_text(encoding="utf-8")
+    wrapper = (repo / ".claude" / "skills" / "gw-ap-debug" / "scripts" / "gwap.ps1").read_text(
+        encoding="utf-8"
+    )
+    skill = (repo / ".claude" / "skills" / "gw-ap-debug" / "SKILL.md").read_text(encoding="utf-8")
+
+    for contract in (
+        "GWAPDebugVNext",
+        ".codeartsdoer\\skills",
+        "ProjectSkillStatus.txt",
+        "runtime-config.json",
+        "CodeArtsNative",
+        "CodeArtsClaude",
+        "OpenCodeV1",
+        "OpenCodeV2",
+        "gw-ap-debug-vnext",
+        "TargetClient",
+    ):
+        assert contract in setup
+    for contract in (
+        "codearts",
+        "codeagent",
+        "opencode",
+        "initialize",
+        "tools/list",
+        "FULL_SKILL_MCP",
+        "mcp_tcp_port = $null",
+        "ClientFamily",
+        "debug_evidence_bundle",
+    ):
+        assert contract in probe
+    assert "runtime-config.json" in wrapper
+    assert "app.agent_runtime.cli" in wrapper
+    assert "GWAP_RUNTIME_URL" in wrapper
+    assert "CodeArts/CodeAgent" in skill
+    assert "codeagent-compatibility.md" in skill
+    assert "Compress-Archive" in package
+    assert "runtime-config.json" in package
+
+    native = json.loads(
+        (repo / "agent-integrations" / "codearts.native.mcp.example.json").read_text(encoding="utf-8")
+    )
+    native_server = native["mcp"]["gw-ap-debug-vnext"]
+    assert native_server["type"] == "local"
+    assert native_server["command"][-2:] == ["-m", "app.agent_runtime.mcp_server"]
+    assert native_server["enabled"] is True
+    assert native_server["environment"]["GWAP_RUNTIME_URL"] == "http://127.0.0.1:8766"
+
+    claude = json.loads(
+        (repo / "agent-integrations" / "codearts.claude.mcp.example.json").read_text(encoding="utf-8")
+    )
+    claude_server = claude["mcpServers"]["gw-ap-debug-vnext"]
+    assert claude_server["transportType"] == "stdio"
+    assert claude_server["disabled"] is False
+    assert claude_server["args"] == ["-m", "app.agent_runtime.mcp_server"]
+
+
 def test_agent_runtime_routes_are_integrated_with_existing_rbac() -> None:
     from app.services import access_control
 

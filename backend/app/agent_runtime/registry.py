@@ -104,7 +104,7 @@ def build_agent_tool_registry() -> ToolRegistry:
     ))
     registry.register(ToolSpec(
         name="debug_evidence_bundle",
-        description="Primary External Agent Mode tool: return a compact evidence bundle for Claude/OpenCode final reasoning.",
+        description="Primary External Agent Mode tool: return a compact evidence bundle for Claude/OpenCode/CodeArts final reasoning.",
         input_schema=EvidenceBundleInput,
         output_schema=ToolResult,
         handler=lambda ctx, p: {"data": _client(ctx).evidence_bundle(

@@ -27,6 +27,8 @@ Harness 的目标不是让模型自由度无限增大，而是让每一步都有
 - [x] 模型端点策略、内容外发同意、用量审计、证据 ID 校验和 DRAFT 门禁；
 - [x] Agentic Search 的计划、阶段状态、候选数、耗时与确定性回退；
 - [x] `CAPABILITIES.md` 业务总账和 `VALIDATION.md` 验证记录。
+- [x] CodeArts/CodeAgent 项目 Skill、独立 Runtime/MCP 配置生成，以及命令、schema、端口、
+  stdio 握手和工具名的脱敏兼容探针；
 
 ### 本轮 P0
 

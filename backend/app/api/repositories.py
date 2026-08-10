@@ -287,7 +287,7 @@ async def patch_suggestion(case_id: str, payload: PatchRequest, db: Db) -> dict:
             "status": "EXTERNAL_AGENT_REQUIRED",
             "message": (
                 "External Agent Mode does not invoke the platform Chat LLM for code edits. "
-                "Use Claude Code/OpenCode native workspace tools after reviewing evidence."
+                "Use Claude Code/OpenCode/CodeArts native workspace tools after reviewing evidence."
             ),
             "symbol": {
                 "symbol_id": symbol.logical_id or symbol.id,

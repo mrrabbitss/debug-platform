@@ -121,7 +121,7 @@ def agent_runtime_status() -> dict:
         "workspace_roots": [str(path) for path in settings.workspace_root_paths],
         "workspace_attach_enabled": settings.workspace_attach_enabled,
         "reasoning_contract": (
-            "Platform returns bounded evidence; Claude Code/OpenCode performs final root-cause reasoning."
+            "Platform returns bounded evidence; Claude Code/OpenCode/CodeArts performs final root-cause reasoning."
             if settings.agent_mode == "external"
             else "Platform may use its active Chat model for final synthesis."
         ),

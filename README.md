@@ -12,14 +12,17 @@
 
 ### Agent Runtime vNext：Skill + Tools + Optional Web
 
-在保留上述 Web 独立产品全部能力的基础上，仓库现在同时支持 Claude Code/OpenCode 作为主交互与
+在保留上述 Web 独立产品全部能力的基础上，仓库现在同时支持 Claude Code、OpenCode 和华为
+CodeArts/CodeAgent 作为主交互与
 最终推理层：`.claude/skills/gw-ap-debug` 提供 Agent Skill，`backend/app/agent_runtime` 提供 12 个
 高价值 Tool 的薄 MCP 与 `gwap` CLI，FastAPI 继续作为唯一诊断/RAG/Graph Runtime。
 `AGENT_MODE=external` 会跳过平台 Chat LLM 的诊断 synthesis、案例 chat 和候选 patch 二次推理，
 避免“Claude → Qwen/GLM → Claude”的双 LLM 链；Embedding/Reranker 仍可作为检索模型使用。
 生产 Agent Runtime 将构建后的 Vue 挂在同一 `127.0.0.1:8765/ui/`，浏览器只在需要大日志、
 图谱、Trace、知识治理、设置或报告时按需打开。完整说明见
-[Agent Skill Runtime 文档](docs/agent-skill-runtime.md)。
+[Agent Skill Runtime 文档](docs/agent-skill-runtime.md)。针对 OpenCode 魔改版，仓库提供 CodeArts
+项目级 Skill 安装、四种 MCP schema 生成、stdio 握手与端口/工具名探测，详见
+[CodeAgent Skill 导入与兼容探测](docs/codeagent-compatibility.md)。
 
 ## 1. 已实现能力
 
@@ -110,12 +113,12 @@
 gw_ap_debug_platform/
 ├── AGENTS.md                Agent/开发者项目地图与工程护栏
 ├── HARNESS_ENGINEERING.md   可执行验证、评测、轨迹和有界 Agent 路线
-├── .claude/skills/          Claude Code/OpenCode Agent Skill
+├── .claude/skills/          Claude/OpenCode/CodeArts Agent Skill 源
 ├── backend/                 FastAPI、数据库、解析器、RAG、LLM、报告
 ├── frontend/                Vue 3 + TypeScript + Element Plus
 ├── vscode-extension/        私有 VS Code 客户端
 ├── workflow/                Runtime Machine Contract / allowlisted OpenAPI
-├── agent-integrations/      Claude/OpenCode MCP 配置示例
+├── agent-integrations/      Claude/OpenCode/CodeArts MCP 配置示例
 ├── harness/                 Golden、覆盖率、架构和性能阈值
 ├── sample_data/             可直接演示和回归的纯合成数据
 ├── scripts/                 Windows/Linux 启动及 Demo 初始化
@@ -142,9 +145,21 @@ gwap doctor
 scripts\test_opencode_integration.bat
 ```
 
-该命令不会修改 main、个人 OpenCode 配置或真实源码。并行安装的命名空间化仍属于待完成项。
+该命令不会修改 main、个人 OpenCode 配置或真实源码。CodeArts/CodeAgent 的 vNext 命名空间化
+安装已由 `setup_codeagent_vnext.bat` 提供；旧的通用安装器仍是单实例入口。
 新电脑从零安装、固定 OpenCode 版本、独立运行目录/端口、真实 LLM + Skill + MCP 验收和常见排错，
 见 [vNext OpenCode 新电脑完整指南](docs/new-pc-vnext-opencode-setup.md)。
+
+华为 CodeArts/CodeAgent 或其他 OpenCode 魔改版使用：
+
+```bat
+scripts\setup_codeagent_vnext.bat -AgentCommand codearts
+scripts\probe_codeagent_compatibility.bat -AgentCommand codearts -Strict
+```
+
+如果公司可执行文件名不是 `codearts`，可传实际命令名或绝对路径。Skill-only、MCP schema
+切换、Skill zip 导入和完整排查流程见
+[CodeAgent 兼容指南](docs/codeagent-compatibility.md)。
 
 默认 API 与 Optional Web 共用 `127.0.0.1:8765`。运行数据放在 `%LOCALAPPDATA%\GWAPDebug`；
 本地模型直接放入 `models/` 或通过 `MODEL_ROOTS` 指定，不需要先运行固定模型下载脚本。
@@ -410,7 +425,7 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
   → Agentic Search 编排知识/领域 GraphRAG/记忆/代码图谱/Commit 图谱
   → BM25 + RRF + Dense Embedding + 可选 Reranker 统一排序
   → platform 模式：受控 Qwen/GLM/OpenAI-Compatible LLM 综合分析与 evidence_id 校验
-    或 external 模式：Evidence Bundle → Claude Code / OpenCode 最终推理
+    或 external 模式：Evidence Bundle → Claude Code / OpenCode / CodeArts 最终推理
   → 结构化诊断 JSON / 外部 Agent 可追溯诊断
   → HTML / PDF / Word 报告
 ```

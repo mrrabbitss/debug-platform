@@ -1,2 +1,3 @@
 $ErrorActionPreference = 'Stop'
-gwap start @args
+& (Join-Path $PSScriptRoot 'gwap.ps1') start @args
+exit $LASTEXITCODE

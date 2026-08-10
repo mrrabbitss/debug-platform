@@ -1,5 +1,9 @@
 # vNext 在新电脑上的 OpenCode 安装、实测与并行运行指南
 
+> 如果目标客户端是华为 CodeArts/CodeAgent 或公司内部的 OpenCode 魔改版，请优先使用
+> [CodeAgent Skill 导入与兼容探测指南](codeagent-compatibility.md)。该指南提供命名空间化的一键安装、
+> Skill zip、CodeArts 原生/Claude 兼容 MCP schema 和端口/工具名探针。
+
 本文用于在一台新的 Windows 11 电脑上，从零拉取并验证 Agent Runtime vNext。目标是：
 
 - 只使用分支 `codex/agent-runtime-vnext-opencode`；

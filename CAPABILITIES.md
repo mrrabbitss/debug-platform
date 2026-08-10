@@ -95,18 +95,21 @@
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| Claude Code / OpenCode Skill | `AVAILABLE` | `.claude/skills/gw-ap-debug`；Evidence-first，MCP 优先、CLI fallback |
+| Claude Code / OpenCode / CodeArts Skill | `AVAILABLE` | `.claude/skills/gw-ap-debug` 为源；CodeArts 安装到 `.codeartsdoer/skills/gw-ap-debug`；Evidence-first，MCP 优先、独立 Python CLI fallback |
 | 薄 MCP Tool 层 | `AVAILABLE` | 12 个高价值工具，复用既有 Tool Registry/FastAPI，不复制 Parser/RAG/Graph |
 | OpenCode MCP 配置 | `AVAILABLE` | 使用 OpenCode 原生 `mcp.<server>` schema；生成的独立配置需通过 `OPENCODE_CONFIG` 加载或合并进 `opencode.json` |
 | OpenCode CLI 合成数据 E2E | `AVAILABLE` | `scripts/test_opencode_integration.bat` 隔离验证 Skill、真实 LLM、MCP 六步工具链、证据引用与 Runtime 持久化 |
 | vNext 新电脑隔离部署 | `AVAILABLE` | `docs/new-pc-vnext-opencode-setup.md` 固定已验证 OpenCode V1 版本，使用独立仓库、Python、数据、端口、MCP 名和 XDG 配置，不覆盖 main |
+| CodeArts/CodeAgent 脚本化安装 | `AVAILABLE` | `scripts/setup_codeagent_vnext.bat` 使用独立 `%LOCALAPPDATA%\GWAPDebugVNext`、8766、项目 Skill 和命名空间化 MCP；支持 CodeArts 原生/Claude 兼容与 OpenCode V1/V2 schema |
+| CodeAgent 兼容探针 | `AVAILABLE` | `scripts/probe_codeagent_compatibility.bat` 脱敏检查命令、Skill 路径、配置 schema、Runtime 端口、stdio MCP 握手、12 个原始工具名和客户端连接状态 |
+| CodeAgent Skill zip | `AVAILABLE` | `scripts/package_codeagent_skill.bat` 生成不含机器路径、凭据和运行数据的标准 Skill 导入包 |
 | `gwap` CLI | `AVAILABLE` | Runtime、模型、Case、日志、Evidence、Workspace、诊断、报告的稳定 JSON CLI |
-| External Agent Mode | `AVAILABLE` | 跳过平台 Chat LLM diagnosis synthesis/chat/patch，最终推理由 Claude/OpenCode 负责 |
-| External Agent 结论回写 | `PLANNED` | 最终结论当前保留在 Claude/OpenCode 会话；尚无工具将其提交为平台 `AnalysisRun` |
+| External Agent Mode | `AVAILABLE` | 跳过平台 Chat LLM diagnosis synthesis/chat/patch，最终推理由 Claude/OpenCode/CodeAgent 负责 |
+| External Agent 结论回写 | `PLANNED` | 最终结论当前保留在 Claude/OpenCode/CodeAgent 会话；尚无工具将其提交为平台 `AnalysisRun` |
 | External Evidence Bundle | `AVAILABLE` | 有界聚合日志、Knowledge、Domain/Code/Commit Graph、Memory 和检索轨迹 |
 | 同机 Workspace Attach | `AVAILABLE` | read-only 引用真实源码，复用现有 Code/Commit Graph；非 local 鉴权必须配置 `WORKSPACE_ROOTS` |
 | 单端口 Optional Web | `AVAILABLE` | production build 由 FastAPI 在 `127.0.0.1:8765/ui/` 提供，Vite 仅开发时需要 |
-| Agent Runtime Win11 安装 | `LIMITED` | 单实例安装可用；默认 `%LOCALAPPDATA%\GWAPDebug`、全局 Skill 名和 MCP 名尚未命名空间化，不应与已有 main 安装并行执行安装器 |
+| 旧通用 Agent Runtime Win11 安装 | `LIMITED` | `install_agent_runtime.bat` 仍是 `%LOCALAPPDATA%\GWAPDebug` 单实例入口，不应与 main 并行覆盖；vNext/CodeAgent 并行场景改用命名空间化 setup 脚本 |
 
 ### 2.7 安全、权限与部署
 

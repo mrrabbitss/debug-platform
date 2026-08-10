@@ -6,10 +6,31 @@ Latest focused Agent Runtime vNext validation: 2026-08-10 on Windows. The detail
 machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
 `AGENT_RUNTIME_VNEXT_VALIDATION.md`.
 
+## CodeAgent/OpenCode compatibility follow-up
+
+- Portable Skill packaging, isolated Runtime setup/start/stop and compatibility
+  probe scripts: PASS under Windows PowerShell 5.1.
+- The generated OpenCode project configuration reached `FULL_SKILL_MCP` with
+  OpenCode 1.18.15: project Skill discovered, Runtime healthy, MCP shown as
+  connected, stdio `initialize`/`tools/list` handshake successful and all 12
+  required `debug_*` tools present.
+- Real OpenCode 1.18.15 + `opencode/deepseek-v4-flash-free` end-to-end
+  diagnosis: PASS. The model loaded the Skill, invoked six diagnostic MCP tools
+  and cited real `EVT-*` evidence in its conclusion.
+- The same setup script emits either Huawei CodeArts native `mcp` or
+  Claude-compatible `mcpServers` configuration and installs the project Skill
+  under `.codeartsdoer/skills`. Those schemas and the CLI fallback were
+  contract-tested locally, but the proprietary company CodeAgent executable and
+  its authenticated model were unavailable on this machine. Final client/model
+  acceptance therefore remains a target-machine test.
+- MCP uses stdio and has no TCP port. The separate GW/AP Runtime data plane uses
+  loopback port 8766 by default; the agent application's own serve/UI port is
+  not used for this integration.
+
 ## Agent Runtime vNext follow-up
 
 - Focused Agent Runtime, CLI/MCP and startup tests: PASS, 39 passed.
-- Complete backend regression: PASS, 172 passed / 1 skipped / 0 failed.
+- Complete backend regression: PASS, 173 passed / 1 skipped / 0 failed.
 - Backend line coverage: 75.46%, above the enforced 75% quality gate.
 - Repository Harness: PASS, 13/13 checks and 25 Workflow/OpenAPI operations.
 - Architecture and PowerShell/JSON syntax gates: PASS.
@@ -28,7 +49,7 @@ machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
 - Unified `scripts\validate_all.bat Full`: all 19 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 172 passed and 1 external-service test skipped locally.
+- Backend tests: 173 passed and 1 external-service test skipped locally.
 - Backend line coverage: 75.46%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
@@ -53,7 +74,7 @@ machine/human-readable record is in `AGENT_RUNTIME_VNEXT_VALIDATION.json` and
   `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260810-111013-full\summary.json`.
+`artifacts\validation\20260810-122707-full\summary.json`.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,

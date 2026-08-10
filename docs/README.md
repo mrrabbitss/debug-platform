@@ -6,8 +6,9 @@
 
 ## 架构与演进
 
-- [Agent Skill Runtime：Claude Code / OpenCode、薄 MCP 与 Optional Web](agent-skill-runtime.md)
+- [Agent Skill Runtime：Claude Code / OpenCode / CodeArts、薄 MCP 与 Optional Web](agent-skill-runtime.md)
 - [vNext 在新电脑上的 OpenCode 安装、实测与并行运行指南](new-pc-vnext-opencode-setup.md)
+- [华为 CodeArts/CodeAgent 的 Skill 导入、兼容探测与脚本化运行](codeagent-compatibility.md)
 - [项目结构、技术栈、优缺点和迭代历程](project-architecture-and-evolution.md)
 - [模型网关、Embedding/Reranker 与分层知识库](model-and-knowledge-configuration.md)
 - [质量评测、Agent 轨迹与有界执行](quality-harness-and-agent-runtime.md)

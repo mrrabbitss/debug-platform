@@ -18,9 +18,20 @@ log_check_result*.txt
 local_doctor_result*.txt
 hf_model_access_report*.txt
 .local_dependency_stamp
+/artifacts/validation/
 /artifacts/
 .agent-runtime/
 .DS_Store
 
 # Agent integration generated for the current machine
 /.mcp.json
+
+# Huawei CodeArts/CodeAgent project integration generated for the current machine
+/.codeartsdoer/
+
+# Other agent-client project integrations generated for the current machine
+/.opencode/skills/gw-ap-debug/
+/opencode.json
+/opencode.jsonc
+/.agents/skills/gw-ap-debug/
+/.claude/skills/gw-ap-debug/runtime-config.json

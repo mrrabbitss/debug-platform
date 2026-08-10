@@ -327,7 +327,7 @@ async def _augment_with_llm(case: Case, result: dict, evidence: list[dict]) -> d
         result["analysis_engine"] = "rule+agentic-evidence-external"
         result.setdefault("warnings", []).append(
             "External Agent Mode: platform Chat LLM synthesis was skipped. "
-            "Use the evidence bundle from Claude Code/OpenCode for final reasoning."
+            "Use the evidence bundle from Claude Code/OpenCode/CodeArts for final reasoning."
         )
         return result
     provider = get_llm_provider()
@@ -594,7 +594,7 @@ async def chat_about_case(case_id: str, question: str) -> tuple[str, list[dict]]
         answer = (
             "External Agent Mode 已启用：平台没有调用第二个 Chat LLM。"
             f"当前确定性根因候选：{hypothesis_text}。"
-            "请由 Claude Code/OpenCode 使用 evidence-bundle 与当前工作区继续回答和验证。"
+            "请由 Claude Code/OpenCode/CodeArts 使用 evidence-bundle 与当前工作区继续回答和验证。"
         )
     else:
         provider = get_llm_provider()

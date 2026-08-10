@@ -1,0 +1,19 @@
+{
+  "mcp": {
+    "gw-ap-debug-vnext": {
+      "type": "local",
+      "command": [
+        "C:\\Users\\USERNAME\\AppData\\Local\\GWAPDebugVNext\\venv\\Scripts\\python.exe",
+        "-m",
+        "app.agent_runtime.mcp_server"
+      ],
+      "environment": {
+        "PYTHONPATH": "D:\\GWAP\\debugplatform-vnext\\backend",
+        "GWAP_RUNTIME_URL": "http://127.0.0.1:8766",
+        "GWAP_AGENT_ROLE": "ENGINEER"
+      },
+      "enabled": true,
+      "timeout": 100000
+    }
+  }
+}

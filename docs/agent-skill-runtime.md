@@ -1,13 +1,13 @@
-# Agent Skill Runtime：Claude Code / OpenCode、薄 MCP 与 Optional Web
+# Agent Skill Runtime：Claude Code / OpenCode / CodeArts、薄 MCP 与 Optional Web
 
 本文档描述在现有 GW/AP Debug Platform 之上新增的 Agent Runtime。它不是第二套诊断平台，
 而是把当前 FastAPI、Parser、RAG、Domain/Code/Commit Graph、Memory、Job、Report 和安全能力
-暴露给 Claude Code / OpenCode 的一层受控适配。
+暴露给 Claude Code / OpenCode / 华为 CodeArts/CodeAgent 的一层受控适配。
 
 ## 1. 目标形态
 
 ```text
-Claude Code / OpenCode
+Claude Code / OpenCode / CodeArts
         │
         ├── .claude/skills/gw-ap-debug/SKILL.md
         │       procedural knowledge / evidence rules
@@ -35,7 +35,7 @@ Claude Code / OpenCode
 - **Skill**：告诉 Coding Agent 什么时候用哪些工具、怎样引用 Evidence、怎样避免提示注入；
 - **MCP / CLI**：只做受控工具调用和输入输出适配，不复制领域逻辑；
 - **FastAPI Runtime**：继续是 Parser、RAG、Graph、Memory、Job、Report 的唯一实现；
-- **Claude Code / OpenCode**：External Agent Mode 下负责最终根因推理、读取真实工作区、编辑和测试代码；
+- **Claude Code / OpenCode / CodeArts**：External Agent Mode 下负责最终根因推理、读取真实工作区、编辑和测试代码；
 - **Web UI**：只在大日志浏览、时间线、图谱、Agent Trace、知识治理、模型设置和报告查看时按需使用。
 
 ## 2. External Agent Mode 与“双 LLM”规避
@@ -62,15 +62,15 @@ Parser / RAG / Graph / Memory / Reranker
           ↓
 compact Evidence Bundle
           ↓
-Claude Code / OpenCode
+Claude Code / OpenCode / CodeArts
           ↓
 root cause → code read/edit → test → git diff
 ```
 
 `debug_diagnose` 只会把平台侧确定性规则与证据准备记录为
 `deterministic / rule+agentic-evidence / external-evidence-v1`，不会把尚未实际调用的
-Claude Code/OpenCode 或 Qwen/GLM Profile 错记成最终诊断模型。Coding Agent 的最终结论当前
-保留在 Claude Code/OpenCode 会话中；本版本尚未提供把该结论提交为平台 `AnalysisRun` 的工具。
+Claude Code/OpenCode/CodeArts 或 Qwen/GLM Profile 错记成最终诊断模型。Coding Agent 的最终结论当前
+保留在外部 Coding Agent 会话中；本版本尚未提供把该结论提交为平台 `AnalysisRun` 的工具。
 
 External Mode **不等于禁用所有模型**。Embedding 与 Reranker 属于检索层，可以继续使用；
 如果配置的是经过批准的 API Profile，仍受现有 endpoint policy 和 egress audit 约束。
@@ -143,6 +143,18 @@ Agent Runtime 默认：
 原 `scripts\start_local.bat` 的 `8000 + 5173` 开发模式仍保留，用于前后端开发，不与 Agent
 Runtime 的单端口生产形态冲突。
 
+如果目标是华为 CodeArts/CodeAgent，或需要让 vNext 与 main 并行运行，不要使用上面的旧单实例
+安装器。改用：
+
+```bat
+scripts\setup_codeagent_vnext.bat -AgentCommand codearts
+scripts\probe_codeagent_compatibility.bat -AgentCommand codearts -Strict
+```
+
+该入口使用 `%LOCALAPPDATA%\GWAPDebugVNext`、端口 `8766`、项目级 `.codeartsdoer/skills` 和
+命名空间化 MCP 配置。具体 schema 选择、Skill-only fallback、端口/工具名判定和 zip 导入见
+[CodeAgent 兼容指南](codeagent-compatibility.md)。
+
 ## 4. Skill
 
 项目级 Skill 位于：
@@ -154,6 +166,10 @@ Runtime 的单端口生产形态冲突。
 ├── scripts/
 └── assets/
 ```
+
+CodeArts 项目级安装目标是 `.codeartsdoer/skills/gw-ap-debug/`。安装器同时写入
+`runtime-config.json`，Skill 内的 `scripts/gwap.ps1` 因而可以直接定位独立 Python 和 Runtime，
+不要求 `gwap` 已加入全局 PATH。
 
 主要行为：
 
@@ -200,6 +216,10 @@ MCP 不重新实现 RAG/Parser/Graph，只复用同一 `ToolRegistry` 并通过 
 WRITE tool 必须显式传 `confirm_write=true`。MCP 的角色、超时和 Tool Schema 复用现有 Agent
 Tool Registry，不维护第二套权限定义。
 
+MCP 本身使用 stdio，没有 TCP 端口；`GWAP_RUNTIME_URL` 才是 MCP/CLI 到 FastAPI 数据面的
+HTTP 地址。客户端可能把配置名作为前缀并归一化连字符，因此应按 `debug_*` 原始名称或后缀匹配，
+而不是把完整展示名当成稳定 API。
+
 Claude Code 项目配置参考 `agent-integrations/claude.mcp.example.json`；安装器会生成包含当前机器
 Python 绝对路径的 `.mcp.json`。OpenCode 参考 `agent-integrations/opencode.mcp.example.json`；
 `scripts/configure_agent_integrations.ps1` 会生成带绝对 Python 路径的
@@ -228,6 +248,11 @@ scripts\test_opencode_integration.bat -PythonExe D:\path\to\venv\Scripts\python.
 该测试只使用 `sample_data` 合成日志/源码，在临时端口、临时 SQLite 与临时 OpenCode/XDG
 配置中运行；它显式禁用 shell、编辑、子 Agent、Web 和外部目录工具，验证结束后停止精确
 Runtime PID 并删除临时数据，不读取或覆盖个人 OpenCode 配置。
+
+CodeArts 原生和 Claude 兼容配置示例分别见
+`agent-integrations/codearts.native.mcp.example.json` 与
+`agent-integrations/codearts.claude.mcp.example.json`。实际机器优先由
+`setup_codeagent_vnext.bat` 生成，不要手工复制示例中的占位路径。
 
 ## 6. CLI fallback
 
@@ -299,7 +324,7 @@ safe directory walk
 
 ## 8. Workspace Attach
 
-同一台 Win11 上运行 Claude/OpenCode 时，无需重新压缩上传整个源码：
+同一台 Win11 上运行 Claude/OpenCode/CodeArts 时，无需重新压缩上传整个源码：
 
 ```bat
 gwap workspace-attach CASE_xxx D:\src\gateway

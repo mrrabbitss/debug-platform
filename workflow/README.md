@@ -3,7 +3,7 @@
 `skill.yaml` 是允许 Agent 调用的最小 API 白名单；`openapi.yaml` 只描述这份白名单，
 不替代 FastAPI 服务生成的完整 `/openapi.json`。
 
-`workflow/` 是 **Runtime Machine Contract**；Claude Code/OpenCode 的 procedural skill 位于
+`workflow/` 是 **Runtime Machine Contract**；Claude Code/OpenCode/CodeArts 的 procedural skill 位于
 `.claude/skills/gw-ap-debug/`，薄 MCP/CLI 位于 `backend/app/agent_runtime/`。Skill 不复制
 OpenAPI，MCP 不复制 Parser/RAG/Graph 领域实现。External Agent Mode 下最终推理由 Coding Agent
 负责，Runtime 只提供受控工具与 Evidence。
