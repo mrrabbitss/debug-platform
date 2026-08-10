@@ -1,0 +1,212 @@
+{
+    "schema_version":  1,
+    "generated_at":  "2026-08-10T15:59:26.5334417+08:00",
+    "status":  "DIRECT_MCP_OK_CLIENT_CONFIG_NOT_ACTIVE",
+    "expected_server_name":  "gw-ap-debug-vnext",
+    "project_root":  "%PROJECT_ROOT%",
+    "runtime_url":  "http://127.0.0.1:8766",
+    "commands":  {
+                     "nga":  {
+                                 "found":  true,
+                                 "command_type":  "Application",
+                                 "alias_target":  null,
+                                 "file_name":  "nga.cmd",
+                                 "extension":  ".cmd",
+                                 "file_version":  "",
+                                 "product_version":  "",
+                                 "discovery_method":  "requested"
+                             },
+                     "codeagent_exe":  {
+                                           "found":  true,
+                                           "command_type":  "Application",
+                                           "alias_target":  null,
+                                           "file_name":  "codeagent.exe",
+                                           "extension":  ".exe",
+                                           "file_version":  "1.3.13",
+                                           "product_version":  "1.3.13",
+                                           "discovery_method":  "nga-root-bin"
+                                       }
+                 },
+    "probes":  {
+                   "nga":  {
+                               "attempted":  true,
+                               "status":  "PORTABLE_ASSETS_READY_RUNTIME_NOT_CONFIRMED",
+                               "client_family":  "CodeArts",
+                               "client":  {
+                                              "version_exit_code":  0,
+                                              "version_timed_out":  false,
+                                              "version_text":  "1.2602.13-IN.1",
+                                              "help_exit_code":  0,
+                                              "help_timed_out":  false,
+                                              "mcp_list_exit_code":  0,
+                                              "mcp_list_timed_out":  false,
+                                              "supports_run":  true,
+                                              "supports_mcp_command":  true,
+                                              "expected_server_visible":  false,
+                                              "expected_server_connected":  false
+                                          },
+                               "config_checks":  [
+                                                     {
+                                                         "kind":  "codearts-project-native",
+                                                         "exists":  true,
+                                                         "schema":  "codearts-or-opencode-v1",
+                                                         "contains_expected_server":  true,
+                                                         "parse_error":  ""
+                                                     }
+                                                 ],
+                               "runtime":  [
+                                               {
+                                                   "url":  "http://127.0.0.1:8765",
+                                                   "healthy":  false,
+                                                   "agent_runtime_endpoint":  false,
+                                                   "agent_mode":  null,
+                                                   "error":  "No GW/AP Debug health response."
+                                               },
+                                               {
+                                                   "url":  "http://127.0.0.1:8766",
+                                                   "healthy":  false,
+                                                   "agent_runtime_endpoint":  false,
+                                                   "agent_mode":  null,
+                                                   "error":  "No GW/AP Debug health response."
+                                               }
+                                           ],
+                               "mcp_handshake":  {
+                                                     "attempted":  true,
+                                                     "passed":  true,
+                                                     "server_name":  "gw-ap-debug",
+                                                     "protocol_version":  "2025-06-18",
+                                                     "tool_count":  12,
+                                                     "tool_names":  [
+                                                                        "debug_attach_workspace",
+                                                                        "debug_code_context",
+                                                                        "debug_create_case",
+                                                                        "debug_diagnose",
+                                                                        "debug_evidence_bundle",
+                                                                        "debug_generate_report",
+                                                                        "debug_ingest",
+                                                                        "debug_inspect",
+                                                                        "debug_open_ui",
+                                                                        "debug_search",
+                                                                        "debug_status",
+                                                                        "debug_wait_job"
+                                                                    ],
+                                                     "missing_required_tools":  [
+
+                                                                                ],
+                                                     "error":  ""
+                                                 },
+                               "recommendations":  [
+                                                       "Start the isolated vNext Runtime and verify its /api/v1/health endpoint.",
+                                                       "Use Skill + CLI fallback now, or configure one supported MCP schema and rerun this probe."
+                                                   ]
+                           },
+                   "codeagent_exe":  {
+                                         "attempted":  true,
+                                         "status":  "PORTABLE_ASSETS_READY_RUNTIME_NOT_CONFIRMED",
+                                         "client_family":  "CodeArts",
+                                         "client":  {
+                                                        "version_exit_code":  0,
+                                                        "version_timed_out":  false,
+                                                        "version_text":  "1.2602.13-IN.1",
+                                                        "help_exit_code":  0,
+                                                        "help_timed_out":  false,
+                                                        "mcp_list_exit_code":  0,
+                                                        "mcp_list_timed_out":  false,
+                                                        "supports_run":  true,
+                                                        "supports_mcp_command":  true,
+                                                        "expected_server_visible":  false,
+                                                        "expected_server_connected":  false
+                                                    },
+                                         "config_checks":  [
+                                                               {
+                                                                   "kind":  "codearts-project-native",
+                                                                   "exists":  true,
+                                                                   "schema":  "codearts-or-opencode-v1",
+                                                                   "contains_expected_server":  true,
+                                                                   "parse_error":  ""
+                                                               }
+                                                           ],
+                                         "runtime":  [
+                                                         {
+                                                             "url":  "http://127.0.0.1:8765",
+                                                             "healthy":  false,
+                                                             "agent_runtime_endpoint":  false,
+                                                             "agent_mode":  null,
+                                                             "error":  "No GW/AP Debug health response."
+                                                         },
+                                                         {
+                                                             "url":  "http://127.0.0.1:8766",
+                                                             "healthy":  false,
+                                                             "agent_runtime_endpoint":  false,
+                                                             "agent_mode":  null,
+                                                             "error":  "No GW/AP Debug health response."
+                                                         }
+                                                     ],
+                                         "mcp_handshake":  {
+                                                               "attempted":  true,
+                                                               "passed":  true,
+                                                               "server_name":  "gw-ap-debug",
+                                                               "protocol_version":  "2025-06-18",
+                                                               "tool_count":  12,
+                                                               "tool_names":  [
+                                                                                  "debug_attach_workspace",
+                                                                                  "debug_code_context",
+                                                                                  "debug_create_case",
+                                                                                  "debug_diagnose",
+                                                                                  "debug_evidence_bundle",
+                                                                                  "debug_generate_report",
+                                                                                  "debug_ingest",
+                                                                                  "debug_inspect",
+                                                                                  "debug_open_ui",
+                                                                                  "debug_search",
+                                                                                  "debug_status",
+                                                                                  "debug_wait_job"
+                                                                              ],
+                                                               "missing_required_tools":  [
+
+                                                                                          ],
+                                                               "error":  ""
+                                                           },
+                                         "recommendations":  [
+                                                                 "Start the isolated vNext Runtime and verify its /api/v1/health endpoint.",
+                                                                 "Use Skill + CLI fallback now, or configure one supported MCP schema and rerun this probe."
+                                                             ]
+                                     }
+               },
+    "nga_debug":  {
+                      "attempted":  true,
+                      "debug_config":  {
+                                           "exit_code":  0,
+                                           "timed_out":  false,
+                                           "contains_expected_server":  false,
+                                           "contains_mcp_servers":  false,
+                                           "contains_mcp_root":  true,
+                                           "output_length":  29628
+                                       },
+                      "debug_paths":  {
+                                          "exit_code":  0,
+                                          "timed_out":  false,
+                                          "sanitized_output_file":  "nga-debug-paths-sanitized.txt",
+                                          "contains_codeartsdoer":  false,
+                                          "contains_opencode":  true
+                                      }
+                  },
+    "findings":  [
+                     "The GW/AP MCP server passed a direct stdio initialize/tools-list handshake.",
+                     "The MCP server works but neither tested client path confirms the configured server.",
+                     "nga debug config does not contain gw-ap-debug-vnext; inspect the effective config root or schema.",
+                     "Share only the shareable JSON/TXT files after reviewing them; raw probe reports are local-only."
+                 ],
+    "privacy":  {
+                    "shareable_files":  [
+                                            "codeagent-diagnostics-shareable.json",
+                                            "codeagent-diagnostics-shareable.txt",
+                                            "nga-debug-paths-sanitized.txt"
+                                        ],
+                    "local_only_files":  [
+                                             "nga-probe.json",
+                                             "codeagent-exe-probe.json"
+                                         ],
+                    "warning":  "Do not share full configs, environment dumps, credentials, internal endpoints, or raw logs."
+                }
+}

@@ -1,0 +1,16 @@
+GW/AP CodeAgent Diagnostic Summary
+status=DIRECT_MCP_OK_CLIENT_CONFIG_NOT_ACTIVE
+nga_found=True
+codeagent_exe_found=True
+codeagent_discovery=nga-root-bin
+direct_mcp_passed=True
+known_config_contains_server=True
+nga_server_connected=False
+codeagent_exe_server_connected=False
+nga_debug_config_contains_server=False
+
+Findings:
+- The GW/AP MCP server passed a direct stdio initialize/tools-list handshake.
+- The MCP server works but neither tested client path confirms the configured server.
+- nga debug config does not contain gw-ap-debug-vnext; inspect the effective config root or schema.
+- Share only the shareable JSON/TXT files after reviewing them; raw probe reports are local-only.

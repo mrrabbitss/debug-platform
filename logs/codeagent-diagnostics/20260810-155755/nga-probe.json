@@ -1,0 +1,256 @@
+{
+    "generated_at":  "2026-08-10T15:58:06.3929060+08:00",
+    "status":  "PORTABLE_ASSETS_READY_RUNTIME_NOT_CONFIRMED",
+    "project_root":  "D:\\GWAP\\debugplatform-vnext",
+    "expected_server_name":  "gw-ap-debug-vnext",
+    "client_family":  "CodeArts",
+    "transport_map":  {
+                          "mcp_transport":  "stdio",
+                          "mcp_tcp_port":  null,
+                          "runtime_http_url":  "http://127.0.0.1:8766",
+                          "agent_serve_port_is_separate":  true
+                      },
+    "clients":  [
+                    {
+                        "requested_name":  "D:\\CodeAgentCLI\\nga.cmd",
+                        "executable":  "D:\\CodeAgentCLI\\nga.cmd",
+                        "version":  {
+                                        "arguments":  [
+                                                          "--version"
+                                                      ],
+                                        "exit_code":  0,
+                                        "timed_out":  false,
+                                        "stdout":  "1.2602.13-IN.1\n",
+                                        "stderr":  ""
+                                    },
+                        "help":  {
+                                     "arguments":  [
+                                                       "help"
+                                                   ],
+                                     "exit_code":  0,
+                                     "timed_out":  false,
+                                     "stdout":  "\n\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m  \u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m  \u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m  \u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m   \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m   \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m  \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m    \u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\n\u001b[90m鈻?[0m\u001b[90m鈻?[0m      \u001b[90m鈻?[0m\u001b[90m鈻?[0m    \u001b[90m鈻?[0m\u001b[90m鈻?[0m \u001b[90m鈻?[0m\u001b[90m鈻?[0m   \u001b[90m鈻?[0m\u001b[90m鈻?[0m \u001b[90m鈻?[0m\u001b[90m鈻?[0m       \u001b[0m鈻?[0m\u001b[0m鈻?[0m   \u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m       \u001b[0m鈻?[0m\u001b[0m鈻?[0m      \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m   \u001b[0m鈻?[0m\u001b[0m鈻?[0m    \u001b[0m鈻?[0m\u001b[0m鈻?[0m\n\u001b[90m鈻?[0m\u001b[90m鈻?[0m      \u001b[90m鈻?[0m\u001b[90m鈻?[0m    \u001b[90m鈻?[0m\u001b[90m鈻?[0m \u001b[90m鈻?[0m\u001b[90m鈻?[0m   \u001b[90m鈻?[0m\u001b[90m鈻?[0m \u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m    \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m   \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m   \u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m  \u001b[0m鈻?[0m\u001b[0m鈻?[0m    \u001b[0m鈻?[0m\u001b[0m鈻?[0m\n\u001b[90m鈻?[0m\u001b[90m鈻?[0m      \u001b[90m鈻?[0m\u001b[90m鈻?[0m    \u001b[90m鈻?[0m\u001b[90m鈻?[0m \u001b[90m鈻?[0m\u001b[90m鈻?[0m   \u001b[90m鈻?[0m\u001b[90m鈻?[0m \u001b[90m鈻?[0m\u001b[90m鈻?[0m       \u001b[0m鈻?[0m\u001b[0m鈻?[0m   \u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m    \u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m      \u001b[0m鈻?[0m\u001b[0m鈻?[0m  \u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m    \u001b[0m鈻?[0m\u001b[0m鈻?[0m\n\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m  \u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m  \u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m  \u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m\u001b[90m鈻?[0m  \u001b[0m鈻?[0m\u001b[0m鈻?[0m   \u001b[0m鈻?[0m\u001b[0m鈻?[0m  \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m  \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m \u001b[0m鈻?[0m\u001b[0m鈻?[0m   \u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m\u001b[0m鈻?[0m    \u001b[0m鈻?[0m\u001b[0m鈻?[0m\n\nCommands:\n  nga/ngagent completion           generate shell completion script\n  nga/ngagent acp                  start ACP (Agent Client Protocol) server\n  nga/ngagent mcp                  manage MCP (Model Context Protocol) servers\n  nga/ngagent [project]            start opencode tui                                      [default]\n  nga/ngagent attach \u003curl\u003e         attach to a running opencode server\n  nga/ngagent run [message..]      run opencode with a message\n  nga/ngagent debug                debugging and troubleshooting tools\n  nga/ngagent providers            manage AI providers and credentials               [aliases: auth]\n  nga/ngagent agent                manage agents\n  nga/ngagent uninstall            uninstall opencode and remove all related files\n  nga/ngagent serve                starts a headless opencode server\n  nga/ngagent models [provider]    list all available models\n  nga/ngagent model                manage custom model configurations\n  nga/ngagent provider             鏀寔瀵瑰叏灞€/椤圭洰绾х殑provider杩涜澧炲垹鏀规煡\n  nga/ngagent stats                show token usage and cost statistics\n  nga/ngagent export [sessionID]   export session data as JSON (default) or Markdown\n  nga/ngagent import \u003cfile\u003e        import session data from JSON file or URL\n  nga/ngagent session              manage sessions\n  nga/ngagent db                   database tools\n  nga/ngagent hooks                manage hooks\n  nga/ngagent privacy              show privacy policy\n  nga/ngagent docs                 show documentation\n  nga/ngagent skill                manage skills\n  nga/ngagent command              manage commands\n  nga/ngagent extensions           manage extensions                                  [aliases: ext]\n  nga/ngagent directory            manage workspace directories                       [aliases: dir]\n  nga/ngagent metrics [sessionID]  show session metrics\n  nga/ngage\n\u003ctruncated\u003e",
+                                     "stderr":  ""
+                                 },
+                        "mcp_list":  {
+                                         "arguments":  [
+                                                           "mcp",
+                                                           "list"
+                                                       ],
+                                         "exit_code":  0,
+                                         "timed_out":  false,
+                                         "stdout":  "\u001b[90mT\u001b[39m  MCP Servers\n\u001b[?25l\u001b[90m|\u001b[39m\n\u001b[32mo\u001b[39m  Loading MCP configurations...\n\u001b[?25h\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m\n\u001b[90m|\u001b[39m  [Global MCP]\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m  鈼?codebase-mcp \u001b[90mdisabled\n\u001b[90m|\u001b[39m      \u001b[90mD:\\CodeAgentCLI\\uv\\uvx.exe --index-url https://mirrors.tools.huawei.com/pypi/simple --allow-insecure-host mirrors.tools.huawei.com --from D:\\CodeAgentCLI\\mcp\\codebase_mcp-0.0.14.tar.gz codebase-mcp stdio\n\u001b[90m|\u001b[39m      location: C:\\Users\\b50062801\\.config\\opencode\\opencode.json\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m  鈼?codebase-mcp-plus \u001b[90mdisabled\n\u001b[90m|\u001b[39m      \u001b[90mD:\\CodeAgentCLI\\node-v24.12.0\\node.exe D:\\CodeAgentCLI\\mcp\\codebase-ts-mcp-server-1.0.18\\package\\dist\\index.js\n\u001b[90m|\u001b[39m      location: C:\\Users\\b50062801\\.config\\opencode\\opencode.json\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m  鈼?requirement-mcp-server \u001b[90mdisabled\n\u001b[90m|\u001b[39m      \u001b[90mD:\\CodeAgentCLI\\uv\\uvx.exe --index-url https://mirrors.tools.huawei.com/pypi/simple --allow-insecure-host mirrors.tools.huawei.com --allow-insecure-host cmc.centralrepo.rnd.huawei.com --allow-insecure-host cmc.cloudartifact.gamma.dragon.tools.huawei.com --from D:\\CodeAgentCLI\\mcp\\requirement_mcp_server-1.0.7.tar.gz requirement-mcp\n\u001b[90m|\u001b[39m      location: C:\\Users\\b50062801\\.config\\opencode\\opencode.json\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m  鈼?dts-mcp-server \u001b[90mdisabled\n\u001b[90m|\u001b[39m      \u001b[90mD:\\CodeAgentCLI\\uv\\uvx.exe --index-url https://mirrors.tools.huawei.com/pypi/simple --allow-insecure-host mirrors.tools.huawei.com --allow-insecure-host cmc.centralrepo.rnd.huawei.com --allow-insecure-host cmc.cloudartifact.gamma.dragon.tools.huawei.com --from D:\\CodeAgentCLI\\mcp\\dts_mcp_server-1.0.6.tar.gz dts-mcp\n\u001b[90m|\u001b[39m      location: C:\\Users\\b50062801\\.config\\opencode\\opencode.json\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m  鈼?w3_search_tool \u001b[90mdisabled\n\u001b[90m|\u001b[39m      \u001b[90mhttp://remote-mcp.rnd.huawei.com/remote-mcp/mcp/w3_search_tool\n\u001b[90m|\u001b[39m      location: C:\\Users\\b50062801\\.config\\opencode\\opencode.json\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m  Total: 5 server(s)\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m    - Project: 0\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m    - Global: 5\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m    - Project Extension: 0\n\u001b[90m|\u001b[39m\n\u001b[34m鈥?[39m    - Global Extension: 0\n\u001b[90m|\u001b[39m\n\u001b[90m鈥?[39m  \n\n",
+                                         "stderr":  "\u001b[0m\r\n"
+                                     },
+                        "supports_run":  true,
+                        "supports_mcp_command":  true,
+                        "expected_server_visible":  false,
+                        "expected_server_connected":  false
+                    }
+                ],
+    "skills":  [
+                   {
+                       "client":  "codearts",
+                       "scope":  "project",
+                       "path":  "D:\\GWAP\\debugplatform-vnext\\.codeartsdoer\\skills\\gw-ap-debug\\SKILL.md",
+                       "exists":  true,
+                       "valid_frontmatter":  true,
+                       "cli_fallback_present":  true
+                   },
+                   {
+                       "client":  "codearts",
+                       "scope":  "user",
+                       "path":  "C:\\Users\\b50062801\\.codeartsdoer\\skills\\gw-ap-debug\\SKILL.md",
+                       "exists":  false,
+                       "valid_frontmatter":  false,
+                       "cli_fallback_present":  false
+                   },
+                   {
+                       "client":  "opencode",
+                       "scope":  "project",
+                       "path":  "D:\\GWAP\\debugplatform-vnext\\.opencode\\skills\\gw-ap-debug\\SKILL.md",
+                       "exists":  false,
+                       "valid_frontmatter":  false,
+                       "cli_fallback_present":  false
+                   },
+                   {
+                       "client":  "claude-compatible",
+                       "scope":  "project",
+                       "path":  "D:\\GWAP\\debugplatform-vnext\\.claude\\skills\\gw-ap-debug\\SKILL.md",
+                       "exists":  true,
+                       "valid_frontmatter":  true,
+                       "cli_fallback_present":  true
+                   },
+                   {
+                       "client":  "agent-compatible",
+                       "scope":  "project",
+                       "path":  "D:\\GWAP\\debugplatform-vnext\\.agents\\skills\\gw-ap-debug\\SKILL.md",
+                       "exists":  false,
+                       "valid_frontmatter":  false,
+                       "cli_fallback_present":  false
+                   }
+               ],
+    "configs":  [
+                    {
+                        "path":  "D:\\GWAP\\debugplatform-vnext\\.codeartsdoer\\codearts_cli.json",
+                        "kind":  "codearts-project-native",
+                        "exists":  true,
+                        "schema":  "codearts-or-opencode-v1",
+                        "server_names":  [
+                                             "gw-ap-debug-vnext"
+                                         ],
+                        "contains_expected_server":  true,
+                        "loopback_runtime_urls":  [
+                                                      "http://127.0.0.1:8766"
+                                                  ],
+                        "parse_error":  null
+                    },
+                    {
+                        "path":  "D:\\GWAP\\debugplatform-vnext\\.codeartsdoer\\codearts_cli.jsonc",
+                        "kind":  "codearts-project-native-jsonc",
+                        "exists":  false,
+                        "schema":  "missing",
+                        "server_names":  [
+
+                                         ],
+                        "contains_expected_server":  false,
+                        "loopback_runtime_urls":  [
+
+                                                  ],
+                        "parse_error":  null
+                    },
+                    {
+                        "path":  "D:\\GWAP\\debugplatform-vnext\\.codeartsdoer\\mcp\\mcp_settings.json",
+                        "kind":  "codearts-project-claude",
+                        "exists":  false,
+                        "schema":  "missing",
+                        "server_names":  [
+
+                                         ],
+                        "contains_expected_server":  false,
+                        "loopback_runtime_urls":  [
+
+                                                  ],
+                        "parse_error":  null
+                    },
+                    {
+                        "path":  "C:\\Users\\b50062801\\.codeartsdoer\\codearts_cli.json",
+                        "kind":  "codearts-user-native",
+                        "exists":  false,
+                        "schema":  "missing",
+                        "server_names":  [
+
+                                         ],
+                        "contains_expected_server":  false,
+                        "loopback_runtime_urls":  [
+
+                                                  ],
+                        "parse_error":  null
+                    },
+                    {
+                        "path":  "C:\\Users\\b50062801\\.codeartsdoer\\codearts_cli.jsonc",
+                        "kind":  "codearts-user-native-jsonc",
+                        "exists":  false,
+                        "schema":  "missing",
+                        "server_names":  [
+
+                                         ],
+                        "contains_expected_server":  false,
+                        "loopback_runtime_urls":  [
+
+                                                  ],
+                        "parse_error":  null
+                    },
+                    {
+                        "path":  "D:\\GWAP\\debugplatform-vnext\\opencode.json",
+                        "kind":  "opencode-project",
+                        "exists":  false,
+                        "schema":  "missing",
+                        "server_names":  [
+
+                                         ],
+                        "contains_expected_server":  false,
+                        "loopback_runtime_urls":  [
+
+                                                  ],
+                        "parse_error":  null
+                    },
+                    {
+                        "path":  "D:\\GWAP\\debugplatform-vnext\\opencode.jsonc",
+                        "kind":  "opencode-project-jsonc",
+                        "exists":  false,
+                        "schema":  "missing",
+                        "server_names":  [
+
+                                         ],
+                        "contains_expected_server":  false,
+                        "loopback_runtime_urls":  [
+
+                                                  ],
+                        "parse_error":  null
+                    },
+                    {
+                        "path":  "D:\\GWAP\\debugplatform-vnext\\.mcp.json",
+                        "kind":  "claude-project",
+                        "exists":  false,
+                        "schema":  "missing",
+                        "server_names":  [
+
+                                         ],
+                        "contains_expected_server":  false,
+                        "loopback_runtime_urls":  [
+
+                                                  ],
+                        "parse_error":  null
+                    }
+                ],
+    "runtime":  [
+                    {
+                        "url":  "http://127.0.0.1:8765",
+                        "healthy":  false,
+                        "agent_runtime_endpoint":  false,
+                        "agent_mode":  null,
+                        "error":  "No GW/AP Debug health response."
+                    },
+                    {
+                        "url":  "http://127.0.0.1:8766",
+                        "healthy":  false,
+                        "agent_runtime_endpoint":  false,
+                        "agent_mode":  null,
+                        "error":  "No GW/AP Debug health response."
+                    }
+                ],
+    "mcp_handshake":  {
+                          "attempted":  true,
+                          "passed":  true,
+                          "server_name":  "gw-ap-debug",
+                          "server_version":  "0.5.0",
+                          "protocol_version":  "2025-06-18",
+                          "transport":  "stdio",
+                          "tcp_port":  null,
+                          "tool_count":  12,
+                          "tool_names":  [
+                                             "debug_attach_workspace",
+                                             "debug_code_context",
+                                             "debug_create_case",
+                                             "debug_diagnose",
+                                             "debug_evidence_bundle",
+                                             "debug_generate_report",
+                                             "debug_ingest",
+                                             "debug_inspect",
+                                             "debug_open_ui",
+                                             "debug_search",
+                                             "debug_status",
+                                             "debug_wait_job"
+                                         ],
+                          "missing_required_tools":  [
+
+                                                     ],
+                          "error":  null
+                      },
+    "tool_matching_rule":  "Match exact raw debug_* names or their suffix after a client-added/normalized server prefix.",
+    "recommendations":  [
+                            "Start the isolated vNext Runtime and verify its /api/v1/health endpoint.",
+                            "Use Skill + CLI fallback now, or configure one supported MCP schema and rerun this probe."
+                        ]
+}

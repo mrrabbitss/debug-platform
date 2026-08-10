@@ -1,0 +1,11 @@
+home       %USERPROFILE%
+data       %USERPROFILE%\.local\share\opencode
+bin        %USERPROFILE%\.local\share\opencode\bin
+log        %USERPROFILE%\.local\share\opencode\log
+cache      %USERPROFILE%\.cache\opencode
+config     %USERPROFILE%\.config\opencode
+state      %USERPROFILE%\.local\state\opencode
+extensions %USERPROFILE%\.config\opencode\extensions
+db         %USERPROFILE%\.local\share\opencode\db
+codeagent  %USERPROFILE%\.config\opencode
+
