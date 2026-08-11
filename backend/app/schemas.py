@@ -17,6 +17,7 @@ class CaseCreate(BaseModel):
     description: str = ""
     reproduction_steps: str | None = None
     issue_time: str | None = None
+    model_egress_approved: bool = False
 
 
 class CaseUpdate(BaseModel):
@@ -28,6 +29,7 @@ class CaseUpdate(BaseModel):
     reproduction_steps: str | None = None
     issue_time: str | None = None
     severity: str | None = None
+    model_egress_approved: bool | None = None
 
 
 class CaseOut(ORMModel):
@@ -42,6 +44,7 @@ class CaseOut(ORMModel):
     issue_time: str | None
     status: str
     severity: str
+    model_egress_approved: bool
     owner_id: str | None
     created_at: datetime
     updated_at: datetime
@@ -325,6 +328,7 @@ class AnalysisOut(ORMModel):
     provider: str
     model: str
     model_profile_id: str | None
+    agent_run_id: str | None
     model_config_json: str
     prompt_version: str
     result_json: str
@@ -378,6 +382,81 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     citations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ChatSubmission(BaseModel):
+    message_id: str
+    agent_run_id: str
+    job: JobOut
+
+
+class ConversationMessageOut(ORMModel):
+    id: str
+    case_id: str
+    role: str
+    content: str
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    status: str
+    job_id: str | None = None
+    agent_run_id: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+
+
+class LogTriageSubmission(BaseModel):
+    triage_run_id: str
+    agent_run_id: str
+    job: JobOut
+
+
+class LogTriageOut(BaseModel):
+    id: str
+    case_id: str
+    artifact_id: str
+    parse_run_id: str | None
+    agent_run_id: str | None
+    status: str
+    issue_snapshot: str
+    model_profile_id: str | None
+    model_name: str | None
+    method_coverage: dict[str, Any] = Field(default_factory=dict)
+    plan: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    error_message: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class LogEvidenceItem(BaseModel):
+    id: str
+    evidence_id: str
+    bucket: Literal["LLM_RELEVANT", "METHOD_REQUIRED", "OTHER"]
+    relevance_score: float
+    source_file: str
+    line_start: int
+    line_end: int
+    timestamp: str | None = None
+    level: str | None = None
+    module: str | None = None
+    event_code: str | None = None
+    message: str
+    occurrence_count: int = 1
+    pattern_id: str | None = None
+    pattern_text: str | None = None
+    match_kind: str | None = None
+    reason: str | None = None
+    method_document_id: str | None = None
+    method_version: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LogEvidencePage(BaseModel):
+    triage_run_id: str
+    bucket: Literal["LLM_RELEVANT", "METHOD_REQUIRED", "OTHER"]
+    total: int
+    offset: int
+    limit: int
+    items: list[LogEvidenceItem]
 
 
 class AgenticSearchRequest(BaseModel):

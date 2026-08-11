@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: GW/AP Debug Platform Workflow API
-  version: 0.4.0
+  version: 0.5.0
 servers:
   - url: http://localhost:8000/api/v1
 paths:
@@ -67,6 +67,62 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Analysis job }
+  /cases/{case_id}/artifacts/{artifact_id}/triage:
+    post:
+      operationId: planLogTriage
+      description: Starts background LLM planning followed by local three-bucket log scanning.
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: artifact_id
+          required: true
+          schema: { type: string }
+      responses:
+        '202': { description: Log triage and trace job accepted }
+        '409': { description: Parse or model-egress approval prerequisite is missing }
+  /cases/{case_id}/log-triage/{triage_run_id}:
+    get:
+      operationId: getLogTriage
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: triage_run_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Method coverage, validated plan and bucket summary }
+  /cases/{case_id}/log-triage/{triage_run_id}/evidence:
+    get:
+      operationId: listLogTriageEvidence
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: triage_run_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: bucket
+          required: true
+          schema:
+            type: string
+            enum: [LLM_RELEVANT, METHOD_REQUIRED, OTHER]
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200': { description: Ranked and paginated log evidence }
   /cases/{case_id}/chat:
     post:
       operationId: askAboutCase
@@ -85,7 +141,33 @@ paths:
               properties:
                 question: { type: string }
       responses:
-        '200': { description: Evidence-grounded answer }
+        '202': { description: Recoverable background chat job accepted }
+  /cases/{case_id}/conversations:
+    get:
+      operationId: listCaseConversation
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Persisted queued, running, completed or failed messages }
+  /cases/{case_id}/agent-runs/{run_id}:
+    get:
+      operationId: getCaseAgentRun
+      description: Returns a case-scoped redacted planning trace for authorized case members.
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: run_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Ordered redacted planning trace }
+        '404': { description: Run not found in this case }
   /cases/{case_id}/analyses/{analysis_id}/report/preview:
     get:
       operationId: previewDiagnosisReport

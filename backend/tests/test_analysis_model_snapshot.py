@@ -56,7 +56,7 @@ def test_analysis_records_safe_model_configuration_snapshot(tmp_path: Path, monk
         assert run is not None
         assert run.status == "COMPLETED"
         assert run.model_profile_id == "MODEL-qwen"
-        assert run.prompt_version == "v2-evidence-validated"
+        assert run.prompt_version == "v3-multiround-evidence"
         snapshot = json_loads(run.model_config_json, {})
         assert snapshot["profile_name"] == "Qwen production"
         assert snapshot["base_url"] == "https://model.example.com/v1"

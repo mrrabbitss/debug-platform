@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.agent_runs import router as agent_runs_router
+from app.api.diagnostics import router as diagnostics_router
 from app.api.jobs import router as jobs_router
 from app.api.knowledge import router as knowledge_router
 from app.api.knowledge_governance import router as knowledge_governance_router
@@ -28,11 +29,11 @@ from app.models import (
 )
 from app.schemas import (
     AgenticSearchRequest, AnalysisOut, ArtifactOut, CaseCreate,
-    CaseMemberUpdate, CaseOut, CaseUpdate, ChatRequest, ChatResponse, JobOut,
+    CaseMemberUpdate, CaseOut, CaseUpdate, JobOut,
 )
 from app.services.access_control import accessible_case_clause, case_permission
 from app.services.agentic_search import agentic_search
-from app.services.diagnosis import analyze_case_job, chat_about_case
+from app.services.diagnosis import analyze_case_job, prepare_analysis_run
 from app.services.events import active_log_event_clause
 from app.services.jobs import job_runner
 from app.services.memory import (
@@ -46,6 +47,7 @@ from app.services.text_files import read_text_range, search_text_lines
 
 router = APIRouter()
 router.include_router(agent_runs_router)
+router.include_router(diagnostics_router)
 router.include_router(jobs_router)
 router.include_router(knowledge_router)
 router.include_router(knowledge_governance_router)
@@ -57,7 +59,14 @@ router.include_router(system_router)
 Db = Annotated[Session, Depends(get_db)]
 
 job_runner.register("parse_artifact", parse_artifact_job, ("case_id", "artifact_id"), cancellable=True)
-job_runner.register("analyze_case", analyze_case_job, ("case_id",), cancellable=True)
+job_runner.register(
+    "analyze_case",
+    analyze_case_job,
+    ("case_id", "analysis_run_id", "agent_run_id"),
+    cancellable=True,
+    max_attempts=1,
+    timeout_seconds=30 * 60,
+)
 
 
 @router.post("/cases", response_model=CaseOut)
@@ -511,10 +520,34 @@ def search_artifact_content(
 
 
 @router.post("/cases/{case_id}/analyses", response_model=JobOut)
-def analyze_case(case_id: str, db: Db) -> Job:
-    if not db.get(Case, case_id):
+def analyze_case(case_id: str, request: Request, db: Db) -> Job:
+    case = db.get(Case, case_id)
+    if not case:
         raise HTTPException(404, "Case not found")
-    return job_runner.submit(db, "analyze_case", analyze_case_job, case_id, input_data={"case_id": case_id})
+    principal = getattr(request.state, "principal", {}) or {}
+    analysis_run, agent_run = prepare_analysis_run(
+        db,
+        case=case,
+        created_by=str(principal.get("id") or "local-user"),
+    )
+    db.commit()
+    return job_runner.submit(
+        db,
+        "analyze_case",
+        analyze_case_job,
+        case_id,
+        analysis_run.id,
+        agent_run.id,
+        input_data={
+            "case_id": case_id,
+            "analysis_run_id": analysis_run.id,
+            "agent_run_id": agent_run.id,
+        },
+        deduplicate=False,
+        max_attempts=1,
+        timeout_seconds=30 * 60,
+        resource_limits={"max_input_bytes": 16 * 1024},
+    )
 
 
 @router.get("/cases/{case_id}/analyses", response_model=list[AnalysisOut])
@@ -528,14 +561,6 @@ def get_analysis(analysis_id: str, db: Db) -> AnalysisRun:
     if not run:
         raise HTTPException(404, "Analysis not found")
     return run
-
-
-@router.post("/cases/{case_id}/chat", response_model=ChatResponse)
-async def case_chat(case_id: str, payload: ChatRequest, db: Db) -> ChatResponse:
-    if not db.get(Case, case_id):
-        raise HTTPException(404, "Case not found")
-    answer, citations = await chat_about_case(case_id, payload.question)
-    return ChatResponse(answer=answer, citations=citations)
 
 
 @router.post("/cases/{case_id}/agentic-search")

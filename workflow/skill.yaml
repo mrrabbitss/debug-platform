@@ -1,5 +1,5 @@
 name: gw-ap-debug-assistant
-version: 0.4.0
+version: 0.5.0
 description: Upload and diagnose GW/AP collectDebuginfo through the internal Debug Platform API.
 entrypoints:
   create_case:
@@ -26,12 +26,27 @@ entrypoints:
   parse:
     method: POST
     path: /api/v1/cases/{case_id}/artifacts/{artifact_id}/parse
+  plan_log_triage:
+    method: POST
+    path: /api/v1/cases/{case_id}/artifacts/{artifact_id}/triage
+  get_log_triage:
+    method: GET
+    path: /api/v1/cases/{case_id}/log-triage/{triage_run_id}
+  list_log_triage_evidence:
+    method: GET
+    path: /api/v1/cases/{case_id}/log-triage/{triage_run_id}/evidence
   diagnose:
     method: POST
     path: /api/v1/cases/{case_id}/analyses
   chat:
     method: POST
     path: /api/v1/cases/{case_id}/chat
+  list_case_conversation:
+    method: GET
+    path: /api/v1/cases/{case_id}/conversations
+  get_case_agent_run:
+    method: GET
+    path: /api/v1/cases/{case_id}/agent-runs/{run_id}
   report:
     method: GET
     path: /api/v1/cases/{case_id}/analyses/{analysis_id}/report/preview
@@ -68,3 +83,4 @@ constraints:
   - Knowledge curation confirmation may create only a DRAFT; human review and approval are required before publication.
   - Agent tools are read-only by default; every write-capable tool requires explicit human approval.
   - Replay uses only a redacted content-safe payload and must not write memory or publish knowledge.
+  - LLM log planning sends case context and approved method documents only; raw log scanning remains local.

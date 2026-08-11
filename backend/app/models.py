@@ -47,6 +47,7 @@ class Case(Base):
     issue_time: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="DRAFT", index=True)
     severity: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    model_egress_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     owner_id: Mapped[str | None] = mapped_column(
         ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -693,6 +694,9 @@ class AnalysisRun(Base):
     provider: Mapped[str] = mapped_column(String(64), default="mock")
     model: Mapped[str] = mapped_column(String(512), default="rule-engine")
     model_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     model_config_json: Mapped[str] = mapped_column(Text, default="{}")
     prompt_version: Mapped[str] = mapped_column(String(32), default="v2-evidence-validated")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -926,6 +930,14 @@ class ConversationMessage(Base):
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
     citations_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(32), default="COMPLETED", index=True)
+    job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -970,3 +982,6 @@ class AuditEvent(Base):
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     details_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+from app import diagnostic_models as _diagnostic_models  # noqa: E402, F401

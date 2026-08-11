@@ -3,6 +3,9 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
+import CaseChatPanel from '../components/diagnosis/CaseChatPanel.vue'
+import LogTriagePanel from '../components/diagnosis/LogTriagePanel.vue'
+import PlanningTracePanel from '../components/diagnosis/PlanningTracePanel.vue'
 import type {
   Analysis,
   Artifact,
@@ -40,8 +43,6 @@ const jobTimer = ref<number | null>(null)
 const eventFilter = reactive({ level: '', module: '', search: '' })
 const diagnosis = ref<any>({})
 const reportHtml = ref('')
-const chatQuestion = ref('')
-const chatMessages = ref<{role:string, content:string, citations?:any[]}[]>([])
 const selectedEvent = ref<LogEvent | null>(null)
 const fileManifest = ref<any>({})
 const rawLog = ref('')
@@ -66,6 +67,7 @@ const memberDirectory = ref<UserDirectoryEntry[]>([])
 const memberForm = reactive({ user_id: '', permission: 'VIEWER' as 'EDITOR' | 'VIEWER' })
 
 const latestAnalysis = computed(() => analyses.value.find(item => item.status === 'COMPLETED'))
+const latestAnalysisWithTrace = computed(() => analyses.value.find(item => item.agent_run_id))
 const canEditCase = computed(() => {
   if (!principal.value || principal.value.role === 'VIEWER') return false
   return ['OWNER', 'EDITOR', 'SHARED'].includes(caseAccess.value?.permission || '')
@@ -245,8 +247,25 @@ async function deleteArtifact(artifact: Artifact) {
 }
 
 async function analyze() {
-  const { data } = await api.post(`/cases/${caseId}/analyses`)
-  watchJob(data)
+  try {
+    const { data } = await api.post(`/cases/${caseId}/analyses`)
+    await loadAll()
+    watchJob(data)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '综合诊断启动失败')
+  }
+}
+
+async function updateModelEgress(value: boolean) {
+  if (!caseInfo.value) return
+  try {
+    const { data } = await api.patch(`/cases/${caseId}`, { model_egress_approved: value })
+    caseInfo.value = data
+    ElMessage.success(value ? '已授权模型读取问题描述与脱敏证据' : '已关闭模型出站授权')
+  } catch (error: any) {
+    if (caseInfo.value) caseInfo.value.model_egress_approved = !value
+    ElMessage.error(error?.response?.data?.detail || error?.message || '模型授权更新失败')
+  }
 }
 
 function watchJob(job: Job) {
@@ -375,6 +394,11 @@ async function openTimelineSource(item: any) {
   await loadRawLog(item.source_file, Math.max(1, Number(item.line_start || 1) - 20))
 }
 
+async function openTriageSource(payload: { artifactId: string, sourceFile: string, line: number }) {
+  await loadManifest(payload.artifactId)
+  await loadRawLog(payload.sourceFile, Math.max(1, payload.line - 20))
+}
+
 async function loadReportPreview(analysisId: string) {
   reportHtml.value = (await api.get(`/cases/${caseId}/analyses/${analysisId}/report/preview`)).data
 }
@@ -389,15 +413,6 @@ async function exportReport(format: string) {
   anchor.download = `GW_AP_Diagnosis_${caseId}.${format}`
   anchor.click()
   URL.revokeObjectURL(url)
-}
-
-async function ask() {
-  const question = chatQuestion.value.trim()
-  if (!question) return
-  chatMessages.value.push({ role: 'user', content: question })
-  chatQuestion.value = ''
-  const { data } = await api.post(`/cases/${caseId}/chat`, { question })
-  chatMessages.value.push({ role: 'assistant', content: data.answer, citations: data.citations })
 }
 
 async function uploadRepo() {
@@ -484,6 +499,21 @@ onBeforeUnmount(() => {
           <div class="stat-card"><div class="muted">知识增强</div><strong style="font-size:28px">{{ diagnosis.retrieved_knowledge?.length || 0 }}</strong></div>
         </div>
         <h3 class="section-title">问题现象</h3><p>{{ caseInfo.description || '未填写' }}</p>
+        <el-card shadow="never" style="margin:14px 0">
+          <div class="toolbar">
+            <div style="margin-right:auto">
+              <strong>模型出站授权</strong>
+              <div class="muted">开启后，系统可将问题描述、已发布方法文档和脱敏证据发送到当前 Chat 模型；原始日志正文仍由本机扫描。</div>
+            </div>
+            <el-switch
+              v-model="caseInfo.model_egress_approved"
+              :disabled="!canEditCase"
+              active-text="已授权"
+              inactive-text="未授权"
+              @change="(value:string | number | boolean) => updateModelEgress(value === true)"
+            />
+          </div>
+        </el-card>
         <template v-if="canManageMembers">
           <h3 class="section-title">案例成员与权限</h3>
           <el-card shadow="never" style="margin-bottom:16px">
@@ -576,6 +606,16 @@ onBeforeUnmount(() => {
         </el-row>
       </el-tab-pane>
 
+      <el-tab-pane label="智能日志筛查" name="triage">
+        <LogTriagePanel
+          :case-id="caseId"
+          :artifacts="artifacts"
+          :can-edit="canEditCase"
+          :model-egress-approved="caseInfo.model_egress_approved"
+          @open-source="openTriageSource"
+        />
+      </el-tab-pane>
+
       <el-tab-pane label="事件与时间线" name="events">
         <el-tabs v-model="eventView">
           <el-tab-pane label="事件列表" name="table" />
@@ -645,6 +685,14 @@ onBeforeUnmount(() => {
       </el-tab-pane>
 
       <el-tab-pane label="综合诊断" name="diagnosis">
+        <PlanningTracePanel
+          v-if="latestAnalysisWithTrace?.agent_run_id"
+          :case-id="caseId"
+          :run-id="latestAnalysisWithTrace.agent_run_id"
+          operation="comprehensive_diagnosis"
+          title="综合诊断多轮 LLM Planning 轨迹"
+          style="margin-bottom:14px"
+        />
         <el-empty v-if="!latestAnalysis" description="请先完成日志解析并启动综合诊断" />
         <template v-else>
           <el-alert type="info" :closable="false" :title="diagnosis.summary || '诊断完成'" />
@@ -664,13 +712,11 @@ onBeforeUnmount(() => {
       </el-tab-pane>
 
       <el-tab-pane label="交互问答" name="chat">
-        <div style="height:540px;overflow:auto;border:1px solid #e5e7eb;padding:16px;background:#fff">
-          <div v-for="(msg,index) in chatMessages" :key="index" :style="{textAlign:msg.role==='user'?'right':'left',marginBottom:'16px'}">
-            <div :style="{display:'inline-block',maxWidth:'80%',padding:'10px 14px',borderRadius:'8px',background:msg.role==='user'?'#dbeafe':'#f3f4f6',textAlign:'left'}">{{ msg.content }}</div>
-            <div v-if="msg.citations?.length" class="muted" style="font-size:12px">引用：{{ msg.citations.map(x => x.evidence_id).join('、') }}</div>
-          </div>
-        </div>
-        <div class="toolbar" style="margin-top:12px"><el-input v-model="chatQuestion" type="textarea" :rows="2" :disabled="!canEditCase" placeholder="例如：为什么认为是 hostapd 问题？还缺少哪些证据？" @keyup.ctrl.enter="ask"/><el-button type="primary" :disabled="!canEditCase" @click="ask">发送</el-button></div>
+        <CaseChatPanel
+          :case-id="caseId"
+          :can-edit="canEditCase"
+          :model-egress-approved="caseInfo.model_egress_approved"
+        />
       </el-tab-pane>
 
       <el-tab-pane label="代码仓库" name="code">

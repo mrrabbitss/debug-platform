@@ -130,7 +130,10 @@ scripts\enable_private_model_endpoints.bat
 - OpenAI-Compatible Base URL；
 - API Key；
 - 可选模型代理 URL，留空表示该 Profile 直连；
-- Temperature 和超时。
+- Temperature 和超时；
+- 可选“启用 Thinking”和 `max_tokens`。GLM-5.1/5.2 开启后发送
+  `thinking: {"type": "enabled"}`，`max_tokens=0` 表示沿用端点默认值，长诊断可按批准的
+  模型配额填写例如 `65536`。
 
 保存后先点击“测试”，成功后点击“切换使用”。系统允许保存多套 Qwen、GLM 或内部兼容网关配置，但同一时间只有一个诊断模型处于激活状态。已有 `.env` 中的 `LLM_*` 配置会在首次升级启动时导入为一个模型配置，作为兼容路径。
 
@@ -143,7 +146,7 @@ Profile 明确直连；历史 `MODEL-chat-env` 环境变量 Profile 仍保留读
 跳过吊销检查不能解决“不受信任的签发机构”。公司中间人代理的根证书仍必须进入系统
 信任源，或由管理员通过 `SSL_CERT_FILE` 提供受控 CA bundle。禁止使用 `verify=false`。
 
-诊断结果不是直接信任模型返回值：后端会检查固定 JSON 结构、置信度范围以及每个事实/假设引用的 `evidence_id`。如果模型引用不存在的证据、返回非法 JSON 或调用失败，诊断会保留规则与 RAG 的确定性结果并记录警告。历史诊断还会保存当时模型名称、配置 ID、Base URL 和非密钥参数快照，API Key 永远不会进入该快照。
+诊断结果不是直接信任模型返回值：后端会检查固定 JSON 结构、方法/Pattern ID、置信度范围以及每个事实/假设引用的 `evidence_id`。综合诊断在同一后台任务和同一异步事件循环中执行两至三轮规划，避免异步 HTTP 客户端跨事件循环复用造成第二轮 `APIConnectionError`。如果模型引用不存在的证据、返回非法 JSON 或调用失败，诊断会保留规则与 RAG 的确定性结果并记录警告。历史诊断还会保存当时模型名称、配置 ID、Base URL 和非密钥参数快照，API Key 永远不会进入该快照。
 
 ## 5. 本地 BGE Embedding
 

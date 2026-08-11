@@ -7,30 +7,34 @@ Last validated: 2026-08-11 on Windows 11.
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 150 passed and 1 external-service test skipped locally.
-- Backend line coverage: 77.38%, above the enforced 75% quality gate.
+- Backend tests: 163 passed and 1 external-service test skipped locally.
+- Backend line coverage: 77.36%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
-- Browser E2E: 2 complete Edge scenarios passed in an isolated runtime. They
+- Browser E2E: 3 complete Edge scenarios passed in an isolated runtime. They
   covered TXT, HTML, DOCX and PDF upload/preview, draft generation,
   conversational correction, human confirmation, trace inspection, safe replay,
-  and encrypted Chat proxy configuration/clearing without credential exposure.
+  encrypted Chat proxy configuration/clearing without credential exposure, and
+  extensionless Huawei log upload, full-text three-bucket LLM triage, two-round
+  comprehensive diagnosis planning, explicit stop reason and recoverable case chat.
   Browser console errors and warnings: zero.
 - Repository Harness: all 13 contracts passed across 19 required files, 14
-  Markdown files, dependency-update targets and 19 allowlisted Workflow operations.
-- Architecture checks: 72 Python files and 11 Vue files passed file-size,
+  tracked Markdown files, dependency-update targets and 24 allowlisted Workflow
+  operations. The local rerun also checked two explicitly ignored private
+  reference documents without adding them to Git.
+- Architecture checks: 79 Python files and 14 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest
-  measured Python cyclomatic complexity was 47, below the limit of 50.
+  measured Python cyclomatic complexity was 45, below the limit of 50.
 - Backend dependency consistency, lock synchronization, Ruff and Python
   compilation: passed.
 - Vue TypeScript check, production Vite build and VS Code extension TypeScript
   compile: passed.
 - Python, frontend and VS Code extension dependency audits: no known vulnerabilities.
-- Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0013.
+- Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0014.
 - Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260810-203057-full\summary.json`.
+`artifacts\validation\20260811-191352-full\summary.json`.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,
@@ -70,12 +74,18 @@ Run it independently with `scripts\run_golden_evals.bat`. Golden thresholds in
   processes down. Run it with `scripts\run_browser_e2e.bat`.
 - Fake model fixtures cover chat, embedding, reranking, timeout, rate-limit,
   malformed-response and interrupted-response behavior without external keys.
+- Log planning, comprehensive diagnosis and case chat append live trace stages
+  while their background jobs are running. Safe metadata includes method IDs,
+  versions, planning rounds and stop reasons, but excludes method/log bodies.
 
 ## Agentic execution status
 
-The production Agentic Search path remains the deterministic, explainable
-retrieval baseline. The repository now also contains a bounded typed-agent
-runtime with:
+The production general-purpose Agentic Search path remains the deterministic,
+explainable retrieval baseline. Comprehensive diagnosis now adds a narrowly
+bounded two-to-three-round LLM planner over that baseline; it validates complete
+method coverage, permits only bounded read-only retrieval queries, runs all model
+rounds on one event loop and falls back deterministically. The repository also
+contains a bounded typed-agent runtime with:
 
 - a typed Tool Registry and per-role allowlists;
 - read-only-by-default tools and explicit approval for writes;
@@ -94,6 +104,13 @@ human review feedback into a rule, test, document or evaluation case.
 - Extensionless upload normalization to `.txt` and Huawei collectDebuginfo detection;
 - streaming parse, sparse line index, arbitrary-line reads, event pagination,
   facets, timeline data and event-to-source navigation;
+- case-authorized LLM log planning that reads every applicable method, scans the
+  complete extracted text locally, keeps command-output-only matches and presents
+  LLM-relevant, method-required and other-event buckets with source lines;
+- multi-round comprehensive diagnosis with live planning trace, validated method/
+  Pattern/evidence IDs, full method content for synthesis and deterministic fallback;
+- persistent asynchronous case chat with refresh recovery, cancellation, explicit
+  failure state and no long-lived browser request;
 - atomic parser, graph, vector and report publication with rollback-safe failures;
 - layered knowledge taxonomy, editing, vector reindexing and hybrid retrieval;
 - GW, AP, GENERAL (通用) and legacy OTHER knowledge applicability, with GENERAL
@@ -103,7 +120,8 @@ human review feedback into a rule, test, document or evaluation case.
 - Code Graph, Commit Graph, three-class memory and Agentic Search integration;
 - encrypted model credentials and per-profile Chat proxy URLs, endpoint policy,
   certificate-chain/hostname verification with proxy-mode revocation checking
-  disabled, egress audit and local/API model switching;
+  disabled, GLM-5.1/5.2 thinking/max-token options, egress audit and local/API
+  model switching;
 - idempotent, secret-safe Win11 opt-in that persists
   `MODEL_ALLOW_PRIVATE_ENDPOINTS=true` in the Git-ignored local `.env` without
   weakening the default configuration committed to the repository;

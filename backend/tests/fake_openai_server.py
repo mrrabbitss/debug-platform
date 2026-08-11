@@ -93,6 +93,121 @@ def _mapped_response(template: dict[str, Any], user_text: str) -> str:
     return rendered
 
 
+def _structured_user_payload(user_text: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(user_text)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _diagnostic_response(payload: dict[str, Any]) -> str | None:
+    methods = payload.get("mandatory_method_documents")
+    if not isinstance(methods, list):
+        methods = []
+    method_ids = [
+        str(item.get("id"))
+        for item in methods
+        if isinstance(item, dict) and item.get("id")
+    ]
+
+    patterns = payload.get("compiled_patterns")
+    if isinstance(patterns, list):
+        selected = [
+            str(item.get("id"))
+            for item in patterns
+            if isinstance(item, dict)
+            and item.get("id")
+            and "authentication failed" in str(item.get("text") or "").casefold()
+        ]
+        return json.dumps({
+            "read_document_ids": method_ids,
+            "selected_pattern_ids": selected[:20],
+            "additional_keywords": [{
+                "keyword": "authentication failed",
+                "reason": "Synthetic issue description points to authentication failure",
+                "relevance": 0.96,
+            }],
+            "hypotheses": ["Authentication configuration mismatch"],
+            "screening_steps": [
+                "Read every applicable synthetic method",
+                "Scan the complete local log and rank matching evidence",
+            ],
+            "missing_information": [],
+            "stop_conditions": ["All method patterns have been scanned"],
+            "rationale": "Deterministic fake response for browser validation",
+        }, ensure_ascii=False)
+
+    if "round" in payload and "ranked_log_evidence" in payload:
+        round_number = max(1, int(payload.get("round") or 1))
+        checks = [{
+            "check_id": f"synthetic-check-{round_number}-{index}",
+            "method_document_id": document_id,
+            "description": "Verify the method against ranked synthetic evidence",
+            "evidence_needed": "A matching evidence ID or an explicit evidence gap",
+            "completion_rule": "Record support, contradiction, or missing evidence",
+        } for index, document_id in enumerate(method_ids, start=1)]
+        return json.dumps({
+            "read_document_ids": method_ids,
+            "hypotheses": ["Synthetic shared-key mismatch"],
+            "checks": checks,
+            "search_queries": [],
+            "evidence_gaps": [],
+            "continue_analysis": round_number < 2,
+            "stop_reason": (
+                "MORE_EVIDENCE_NEEDED" if round_number < 2 else "ENOUGH_EVIDENCE"
+            ),
+        }, ensure_ascii=False)
+
+    evidence = payload.get("evidence")
+    if "deterministic_result" in payload and isinstance(evidence, list):
+        evidence_ids = [
+            str(item.get("evidence_id"))
+            for item in evidence
+            if isinstance(item, dict) and item.get("evidence_id")
+        ]
+        evidence_id = evidence_ids[0] if evidence_ids else "SYNTHETIC-EVIDENCE"
+        return json.dumps({
+            "summary": "Synthetic evidence-constrained comprehensive diagnosis completed.",
+            "confirmed_facts": [{
+                "statement": "The synthetic log contains an authentication failure signal.",
+                "evidence_ids": [evidence_id],
+            }],
+            "hypotheses": [{
+                "rank": 1,
+                "title": "Synthetic shared-key mismatch",
+                "description": "The ranked evidence supports checking authentication configuration.",
+                "supporting_evidence": [evidence_id],
+                "contradicting_evidence": [],
+                "confidence_score": 0.82,
+                "confidence_level": "HIGH",
+                "priority": "P1",
+                "needs_human_review": True,
+            }],
+            "recommended_actions": [{
+                "priority": "P1",
+                "action": "Compare the configured shared key with the approved baseline.",
+                "reason": "Authentication evidence is present.",
+                "expected_result": "The mismatch is confirmed or excluded.",
+            }],
+            "missing_information": [],
+            "suspected_modules": ["AUTH"],
+            "limitations": ["Synthetic browser fixture only."],
+        }, ensure_ascii=False)
+
+    if "question" in payload and "conversation_history" in payload:
+        evidence = payload.get("evidence")
+        evidence_id = next((
+            str(item.get("evidence_id"))
+            for item in evidence if isinstance(item, dict) and item.get("evidence_id")
+        ), "SYNTHETIC-EVIDENCE") if isinstance(evidence, list) else "SYNTHETIC-EVIDENCE"
+        return (
+            "Synthetic asynchronous answer completed. The current hypothesis remains "
+            f"subject to human verification; evidence_id={evidence_id}."
+        )
+    return None
+
+
 def create_app(*, timeout_seconds: float = 2.0) -> FastAPI:
     app = FastAPI(title="GW/AP Golden Fake OpenAI", version="1.0")
 
@@ -140,7 +255,10 @@ def create_app(*, timeout_seconds: float = 2.0) -> FastAPI:
         elif "E2E_CORRECTION_ADD_PEER_REVIEW" in user_text:
             content = _mapped_response(RESPONSES["refined"], user_text)
         else:
-            content = _mapped_response(RESPONSES["initial"], user_text)
+            structured = _structured_user_payload(user_text)
+            content = (
+                _diagnostic_response(structured) if structured is not None else None
+            ) or _mapped_response(RESPONSES["initial"], user_text)
         now = int(time.time())
         return JSONResponse({
             "id": f"chatcmpl-golden-{now}",
