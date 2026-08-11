@@ -1,0 +1,10 @@
+PS D:\GWAP\debugplatform-vnext> $py = Join-Path $env:LOCALAPPDATA 'GWAPDebugVNext\venv\Scripts\python.exe'
+PS D:\GWAP\debugplatform-vnext> $url = 'http://127.0.0.1:8766/api/v1/health'
+PS D:\GWAP\debugplatform-vnext> & $py -c "import os; ks=('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY'); print({k:('set' if os.getenv(k) else 'unset') for k in ks}); print('loopback_in_no_proxy=', any(x in (os.getenv('NO_PROXY') or '') for x in ('127.0.0.1','localhost')))"
+{'HTTP_PROXY': 'unset', 'HTTPS_PROXY': 'unset', 'ALL_PROXY': 'unset', 'NO_PROXY': 'unset'}
+loopback_in_no_proxy= False
+PS D:\GWAP\debugplatform-vnext> & $py -c "import httpx; u='$url'; r=httpx.get(u,timeout=10); print('trust_env=True:',r.status_code,r.headers.get('server'),r.text[:160])"
+trust_env=True: 504 None <!doctype html><html xmlns="http://www.w3.org/1999/xhtml"><head><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta http-equiv="Content-Type" content="te
+PS D:\GWAP\debugplatform-vnext> & $py -c "import httpx; u='$url'; r=httpx.get(u,timeout=10,trust_env=False); print('trust_env=False:',r.status_code,r.headers.get('server'),r.text[:160])"
+trust_env=False: 200 uvicorn {"status":"ok"}
+PS D:\GWAP\debugplatform-vnext>
