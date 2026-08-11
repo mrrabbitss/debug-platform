@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import CurationSourcePreviewDialog from '../components/curation/CurationSourcePreviewDialog.vue'
 import { useKnowledgeCurationPresentation } from '../composables/useKnowledgeCurationPresentation'
+import { knowledgeDeviceTypeOptions } from '../constants/knowledge'
 import {
   confirmKnowledgeCuration,
   createKnowledgeCuration,
@@ -609,7 +610,7 @@ onBeforeUnmount(clearPoll)
           </el-select>
         </el-form-item>
         <div class="form-grid">
-          <el-form-item label="设备类型"><el-select v-model="createForm.device_type" clearable><el-option label="GW" value="GW"/><el-option label="AP" value="AP"/><el-option label="其他" value="OTHER"/></el-select></el-form-item>
+          <el-form-item label="设备类型"><el-select v-model="createForm.device_type" clearable><el-option v-for="item in knowledgeDeviceTypeOptions" :key="item.value" :label="item.label" :value="item.value"/></el-select></el-form-item>
           <el-form-item label="模块"><el-input v-model="createForm.module" placeholder="WLAN/WAN/PON/OMCI" /></el-form-item>
           <el-form-item label="设备型号"><el-input v-model="createForm.device_model" /></el-form-item>
           <el-form-item label="固件范围"><el-input v-model="createForm.firmware_range" /></el-form-item>

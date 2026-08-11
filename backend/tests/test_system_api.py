@@ -69,11 +69,13 @@ def test_model_and_layered_knowledge_api_round_trip(tmp_path: Path, monkeypatch)
             "title": "AP authentication fault tree",
             "source_type": "fault_tree",
             "category_id": "KCAT-history-fault-tree",
+            "device_type": "GENERAL",
             "content": "# Symptom\nAuthentication fails.\n\n# Solution\nCheck EAP logs.",
         })
         assert created.status_code == 200, created.text
         document_id = created.json()["id"]
         assert created.json()["category_name"] == "故障树"
+        assert created.json()["device_type"] == "GENERAL"
         assert created.json()["chunk_count"] == 2
 
         updated = client.patch(f"/api/v1/knowledge/{document_id}", json={

@@ -130,6 +130,14 @@ scripts\doctor_local.bat
 
 它会检查 Win11、Python/Node/npm 版本、依赖指纹、后端导入、数据目录写权限和 8000/5173 端口，并在仓库根目录生成 `local_doctor_result.txt`。该报告不读取 `.env` 的值、API Key、数据库正文或日志正文。
 
+公司网络中的模型网关或代理只能解析到私网地址、并且无法逐个维护主机白名单时，可主动运行一次：
+
+```bat
+scripts\enable_private_model_endpoints.bat
+```
+
+脚本会把 `MODEL_ALLOW_PRIVATE_ENDPOINTS=true` 幂等写入本机 Git 忽略的 `.env`；不会向终端输出其中的 API Key。配置在后续每次启动中持续生效，无需重复运行。执行后必须关闭已有的 `GW-AP Backend` 窗口，再运行 `scripts\start_local.bat`。该开关不会放行回环、链路本地、云元数据地址，也不会绕过 `APP_ENV=prod` 的精确白名单要求。
+
 需要做完整但不污染现有数据库的启动冒烟测试时，可运行：
 
 ```bat
@@ -397,7 +405,7 @@ MODEL_ENDPOINT_ALLOWLIST=model-gateway.corp.example,.approved-models.corp.exampl
 MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 ```
 
-白名单中的端点可以使用内网 HTTP（仍建议优先 HTTPS）。私网、本机或单标签代理主机也应加入同一白名单；`APP_ENV=prod` 时所有 API 模型端点和模型代理都必须在白名单内。不要为了省事开启整个私网，优先逐个列出批准的网关和代理主机。
+白名单中的端点可以使用内网 HTTP（仍建议优先 HTTPS）。私网、本机或单标签代理主机优先加入同一白名单；受控公司开发电脑无法枚举地址时，可显式运行 `scripts\enable_private_model_endpoints.bat`。`APP_ENV=prod` 时所有 API 模型端点和模型代理仍必须在白名单内。回环代理必须单独加入白名单。
 
 ## 6. 核心数据流
 
