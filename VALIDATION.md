@@ -11,7 +11,9 @@ Last validated: 2026-08-11 on Windows 11.
 - Backend line coverage: 77.36%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
-- Browser E2E: 3 complete Edge scenarios passed in an isolated runtime. They
+- Browser E2E: 3 complete Edge scenarios passed in an isolated runtime. The
+  same 3 scenarios also passed against Playwright's CI-version bundled Chromium
+  after verifying lazy, sandbox-preserving report preview loading. They
   covered TXT, HTML, DOCX and PDF upload/preview, draft generation,
   conversational correction, human confirmation, trace inspection, safe replay,
   encrypted Chat proxy configuration/clearing without credential exposure, and
@@ -34,7 +36,7 @@ Last validated: 2026-08-11 on Windows 11.
 - Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260811-191352-full\summary.json`.
+`artifacts\validation\20260811-193955-full\summary.json`.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,

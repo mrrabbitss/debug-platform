@@ -43,6 +43,7 @@ const jobTimer = ref<number | null>(null)
 const eventFilter = reactive({ level: '', module: '', search: '' })
 const diagnosis = ref<any>({})
 const reportHtml = ref('')
+const reportPreviewAnalysisId = ref('')
 const selectedEvent = ref<LogEvent | null>(null)
 const fileManifest = ref<any>({})
 const rawLog = ref('')
@@ -100,7 +101,10 @@ async function loadAll() {
   repositories.value = repoRes.data
   if (latestAnalysis.value) {
     diagnosis.value = JSON.parse(latestAnalysis.value.result_json || '{}')
-    await loadReportPreview(latestAnalysis.value.id)
+    if (activeTab.value === 'report') await loadReportPreview(latestAnalysis.value.id)
+  } else {
+    reportHtml.value = ''
+    reportPreviewAnalysisId.value = ''
   }
   await loadAccessContext()
   await loadEvents()
@@ -400,7 +404,20 @@ async function openTriageSource(payload: { artifactId: string, sourceFile: strin
 }
 
 async function loadReportPreview(analysisId: string) {
+  if (reportPreviewAnalysisId.value === analysisId && reportHtml.value) return
   reportHtml.value = (await api.get(`/cases/${caseId}/analyses/${analysisId}/report/preview`)).data
+  reportPreviewAnalysisId.value = analysisId
+}
+
+async function handleTabChange(name: string | number) {
+  if (String(name) !== 'report' || !latestAnalysis.value) return
+  try {
+    await loadReportPreview(latestAnalysis.value.id)
+  } catch (error: any) {
+    reportHtml.value = ''
+    reportPreviewAnalysisId.value = ''
+    ElMessage.error(error?.response?.data?.detail || error?.message || '诊断报告预览加载失败')
+  }
 }
 
 async function exportReport(format: string) {
@@ -490,7 +507,7 @@ onBeforeUnmount(() => {
       </div>
     </el-alert>
 
-    <el-tabs v-model="activeTab" type="border-card">
+    <el-tabs v-model="activeTab" type="border-card" @tab-change="handleTabChange">
       <el-tab-pane label="案例概览" name="overview">
         <div class="card-grid">
           <div class="stat-card"><div class="muted">关键事件</div><strong style="font-size:28px">{{ eventStats.total }}</strong></div>
@@ -751,7 +768,7 @@ onBeforeUnmount(() => {
 
       <el-tab-pane label="诊断报告" name="report">
         <div class="toolbar"><el-button type="primary" :disabled="!canEditCase" @click="exportReport('pdf')">导出 PDF</el-button><el-button :disabled="!canEditCase" @click="exportReport('docx')">导出 Word</el-button><el-button :disabled="!canEditCase" @click="exportReport('html')">导出 HTML</el-button></div>
-        <iframe v-if="reportHtml" :srcdoc="reportHtml" sandbox="" style="width:100%;height:720px;border:1px solid #d1d5db;background:white" />
+        <iframe v-if="activeTab === 'report' && reportHtml" :srcdoc="reportHtml" sandbox="" style="width:100%;height:720px;border:1px solid #d1d5db;background:white" />
         <el-empty v-else description="暂无报告" />
       </el-tab-pane>
     </el-tabs>
