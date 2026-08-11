@@ -3,7 +3,7 @@
 > 本文件是项目功能范围的唯一总账（Single Source of Truth）。
 > 新需求、在研能力、已交付能力、约束和冲突处理都必须同步更新本文件，防止跨迭代遗忘或重复建设。
 
-最后更新：2026-08-05
+最后更新：2026-08-11
 
 工程执行、验证、评测和 Agent 护栏的状态与优先级单独维护在
 [Harness Engineering 路线与状态总账](HARNESS_ENGINEERING.md)。本文件只判断业务能力是否
@@ -33,6 +33,7 @@
 | SQLite 备份恢复 | `AVAILABLE` | `scripts/backup_local.bat`、`restore_local.bat` | 带清单、哈希校验和回滚保留 |
 | 本地模型网络检测 | `AVAILABLE` | `scripts/check_hf_model_access.bat` | 检查镜像、CLI 和 curl 回退并生成脱敏报告 |
 | 本地模型安装 | `AVAILABLE` | `scripts/install_local_models.bat` | BGE Embedding、Qwen3 Reranker，支持断点续传和哈希校验 |
+| 私网模型端点显式启用 | `AVAILABLE` | `scripts/enable_private_model_endpoints.bat` | 主动运行一次后幂等写入本机 Git 忽略的 `.env`，后续启动持续生效且不输出密钥 |
 
 ### 2.2 日志接入与解析
 
@@ -67,6 +68,7 @@
 | --- | --- | --- |
 | 树形分类 | `AVAILABLE` | 诊断规则、历史问题、参考资料，可增加和修改分类 |
 | 文档 CRUD | `AVAILABLE` | 新增、后台上传、查看、修改和删除；发布/归档必须走审核状态机 |
+| 知识设备适用范围 | `AVAILABLE` | 支持 GW、AP、通用和其他；通用知识可被 GW/AP 检索，旧 `OTHER` 数据保持兼容 |
 | Markdown 分块 | `AVAILABLE` | 按标题和段落切分，超长单段继续分片并限制 chunk 大小 |
 | 自动向量索引 | `AVAILABLE` | 文档变更后更新活动 generation；全量重建失败保留上一版 |
 | 故障案例结构化 Markdown | `AVAILABLE` | 错误形式、日志分析、错误定位、解决方案、验证结果 |

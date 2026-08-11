@@ -1,6 +1,72 @@
 import json
+import os
+import subprocess
+
+import pytest
 
 from app.core.config import PROJECT_ROOT
+
+
+def test_private_endpoint_opt_in_has_a_persistent_idempotent_launcher() -> None:
+    batch = (PROJECT_ROOT / "scripts" / "enable_private_model_endpoints.bat").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "scripts" / "enable_private_model_endpoints.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "-ExecutionPolicy Bypass" in batch
+    assert "MODEL_ALLOW_PRIVATE_ENDPOINTS=true" in script
+    assert 'Join-Path $repositoryRoot ".env"' in script
+    assert "Move-Item -LiteralPath $temporaryPath" in script
+    assert "API_KEY" not in script
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 5.1 integration is Windows-specific")
+def test_private_endpoint_opt_in_preserves_env_secrets_and_is_idempotent(tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "API_KEY=do-not-print\n"
+        "# MODEL_ALLOW_PRIVATE_ENDPOINTS=false\n"
+        "MODEL_ALLOW_PRIVATE_ENDPOINTS=false\n"
+        "MODEL_ALLOW_PRIVATE_ENDPOINTS=false\n",
+        encoding="utf-8",
+    )
+    command = [
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(PROJECT_ROOT / "scripts" / "enable_private_model_endpoints.ps1"),
+        "-EnvPath",
+        str(env_path),
+    ]
+
+    first = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert first.returncode == 0, first.stderr
+    content = env_path.read_text(encoding="utf-8")
+    assert "API_KEY=do-not-print" in content
+    assert "# MODEL_ALLOW_PRIVATE_ENDPOINTS=false" in content
+    assert [
+        line for line in content.splitlines()
+        if line.startswith("MODEL_ALLOW_PRIVATE_ENDPOINTS=")
+    ] == ["MODEL_ALLOW_PRIVATE_ENDPOINTS=true"]
+    assert "do-not-print" not in first.stdout
+
+    first_bytes = env_path.read_bytes()
+    second = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert second.returncode == 0, second.stderr
+    assert env_path.read_bytes() == first_bytes
+
+    new_env_path = tmp_path / "new-workstation.env"
+    new_command = [*command[:-1], str(new_env_path)]
+    created = subprocess.run(new_command, check=False, capture_output=True, text=True)
+    assert created.returncode == 0, created.stderr
+    created_content = new_env_path.read_text(encoding="utf-8")
+    assert "MODEL_ALLOW_PRIVATE_ENDPOINTS=true" in created_content
+    assert "MODEL_ALLOW_PRIVATE_ENDPOINTS=false" not in created_content
 
 
 def test_windows_startup_is_local_only_and_rejects_foreign_backend() -> None:

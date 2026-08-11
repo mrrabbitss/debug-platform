@@ -52,12 +52,12 @@ HTTPS 和后端鉴权。
 - 仅支持 `http://` 和 `https://`，不允许 URL 内嵌账号密码、查询串或片段；
 - 云元数据、链路本地、未授权的回环/私网地址会被拒绝；
 - HTTP、回环地址以及 `APP_ENV=prod` 下的所有 API 地址必须显式加入 `MODEL_ENDPOINT_ALLOWLIST`；
-- 内网主机较多时可临时设置 `MODEL_ALLOW_PRIVATE_ENDPOINTS=true`，但回环和危险系统地址仍受限制，生产环境优先维护精确白名单。
+- 内网主机较多时可显式设置 `MODEL_ALLOW_PRIVATE_ENDPOINTS=true`，但回环和危险系统地址仍受限制，生产环境仍要求精确白名单。
 
 Chat 模型代理执行相同的危险地址和生产白名单策略。代理 URL 仅支持 `http://` 或
 `https://`，可以包含认证信息，但不能包含路径、查询串或片段；返回给前端的提示会移除
-用户名和密码。私网、本机和单标签代理主机必须加入 `MODEL_ENDPOINT_ALLOWLIST`，推荐把
-模型端点和代理主机都逐项列入，而不是允许整个私网。
+用户名和密码。私网和单标签代理主机应优先加入 `MODEL_ENDPOINT_ALLOWLIST`；受控开发环境
+无法枚举时可显式启用私网地址。本机/回环代理仍必须精确加入白名单。
 
 示例：
 
@@ -65,6 +65,16 @@ Chat 模型代理执行相同的危险地址和生产白名单策略。代理 UR
 MODEL_ENDPOINT_ALLOWLIST=model-gateway.corp.example,.approved-models.corp.example
 MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 ```
+
+受控公司 Win11 电脑确认需要允许私网模型/代理地址时，可运行一次：
+
+```bat
+scripts\enable_private_model_endpoints.bat
+```
+
+脚本只把 `MODEL_ALLOW_PRIVATE_ENDPOINTS=true` 持久写入本机 Git 忽略的 `.env`，重复运行
+不会产生重复配置，也不会输出 `.env` 内容或密钥。后续启动无需再次设置；执行后必须完全
+关闭并重启后端。该开关不放行回环、链路本地、云元数据地址，也不绕过生产白名单。
 
 ## 3. 知识分类层次
 
@@ -103,6 +113,10 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=false
 - 使用模板维护结构化故障案例并检查必需章节；
 - 从故障案例或错误分析 Skill 提炼可追溯的分析方法；
 - 删除正文、分块和对应向量。
+
+知识文档的“设备类型”是适用范围元数据，不是左侧分类树。可选值为 `GW`、`AP`、
+`通用` 和 `其他`；新建跨产品知识时应选择“通用”。`GENERAL` 通用文档会参与 GW 和 AP
+案例检索，历史 `OTHER` 文档继续按共享知识处理，避免升级后丢失召回。
 
 内置分类不能删除，但可以在其下继续增加公司自己的层次。
 

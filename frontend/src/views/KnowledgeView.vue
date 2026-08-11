@@ -3,6 +3,10 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
+import {
+  knowledgeDeviceTypeLabel,
+  knowledgeDeviceTypeOptions
+} from '../constants/knowledge'
 import type {
   Job,
   KnowledgeCategory,
@@ -508,7 +512,7 @@ onMounted(load)
           <el-table-column prop="title" label="标题" min-width="240" show-overflow-tooltip />
           <el-table-column label="分类" width="150"><template #default="scope">{{ scope.row.category_name || '未分类' }}</template></el-table-column>
           <el-table-column label="知识类型" width="150"><template #default="scope">{{ sourceTypeLabel(scope.row.source_type) }}</template></el-table-column>
-          <el-table-column prop="device_type" label="设备" width="80" />
+          <el-table-column label="设备" width="80"><template #default="scope">{{ knowledgeDeviceTypeLabel(scope.row.device_type) }}</template></el-table-column>
           <el-table-column prop="module" label="模块" width="100" />
           <el-table-column label="可信级别" width="100"><template #default="scope"><el-tag :type="scope.row.trust_level === 'HIGH' ? 'success' : scope.row.trust_level === 'LOW' ? 'warning' : 'info'">{{ scope.row.trust_level }}</el-tag></template></el-table-column>
           <el-table-column label="审核状态" width="105">
@@ -606,7 +610,7 @@ onMounted(load)
         <el-form-item label="所属分类"><el-tree-select v-model="documentForm.category_id" :data="categoryTree" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly clearable style="width:100%" /></el-form-item>
         <el-form-item label="知识类型"><el-select v-model="documentForm.source_type" style="width:100%"><el-option v-for="item in sourceTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
         <div class="form-grid">
-          <el-form-item label="设备类型"><el-select v-model="documentForm.device_type" clearable><el-option label="GW" value="GW"/><el-option label="AP" value="AP"/><el-option label="其他" value="OTHER"/></el-select></el-form-item>
+          <el-form-item label="设备类型"><el-select v-model="documentForm.device_type" clearable><el-option v-for="item in knowledgeDeviceTypeOptions" :key="item.value" :label="item.label" :value="item.value"/></el-select></el-form-item>
           <el-form-item label="模块"><el-input v-model="documentForm.module" placeholder="WLAN/WAN/PON/OMCI" /></el-form-item>
           <el-form-item label="设备型号"><el-input v-model="documentForm.device_model" /></el-form-item>
           <el-form-item label="固件范围"><el-input v-model="documentForm.firmware_range" /></el-form-item>
@@ -651,7 +655,7 @@ onMounted(load)
         <el-form-item label="文件"><input type="file" accept=".txt,.md,.log,.json" @change="(event:any) => file = event.target.files?.[0] || null" /></el-form-item>
         <el-form-item label="所属分类"><el-tree-select v-model="uploadForm.category_id" :data="categoryTree" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly clearable style="width:100%" /></el-form-item>
         <el-form-item label="知识类型"><el-select v-model="uploadForm.source_type" style="width:100%"><el-option v-for="item in sourceTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
-        <el-form-item label="设备类型"><el-select v-model="uploadForm.device_type" clearable><el-option label="GW" value="GW"/><el-option label="AP" value="AP"/></el-select></el-form-item>
+        <el-form-item label="设备类型"><el-select v-model="uploadForm.device_type" clearable><el-option v-for="item in knowledgeDeviceTypeOptions" :key="item.value" :label="item.label" :value="item.value"/></el-select></el-form-item>
         <el-form-item label="模块"><el-input v-model="uploadForm.module" placeholder="WLAN/WAN/PON/OMCI" /></el-form-item>
         <el-form-item label="可信级别"><el-select v-model="uploadForm.trust_level"><el-option label="高" value="HIGH"/><el-option label="中" value="MEDIUM"/><el-option label="低" value="LOW"/></el-select></el-form-item>
       </el-form>

@@ -22,10 +22,23 @@ from app.services.retrieval_models import (
 
 
 TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.:/-]*|[\u4e00-\u9fff]{1,4}|-?\d+")
+GENERAL_KNOWLEDGE_DEVICE_TYPES = frozenset({"GENERAL", "OTHER"})
 
 
 def tokenize(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_PATTERN.findall(text)]
+
+
+def knowledge_matches_device_type(
+    document_device_type: str | None,
+    requested_device_type: str | None,
+) -> bool:
+    """Keep shared knowledge available to every concrete device type."""
+    if not requested_device_type or not document_device_type:
+        return True
+    document_scope = document_device_type.strip().upper()
+    requested_scope = requested_device_type.strip().upper()
+    return document_scope == requested_scope or document_scope in GENERAL_KNOWLEDGE_DEVICE_TYPES
 
 
 @dataclass
@@ -154,7 +167,7 @@ class LocalHybridRetriever:
 
         docs: list[dict[str, Any]] = []
         for chunk, document in rows:
-            if device_type and document.device_type and document.device_type not in {device_type, "OTHER"}:
+            if not knowledge_matches_device_type(document.device_type, device_type):
                 continue
             if module and document.module and document.module.upper() != module.upper():
                 # Soft filter: retain protocol/history documents without a module restriction.

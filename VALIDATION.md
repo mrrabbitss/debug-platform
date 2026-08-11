@@ -1,14 +1,14 @@
 # Validation Record
 
-Last validated: 2026-08-10 on Windows 11.
+Last validated: 2026-08-11 on Windows 11.
 
 ## Current local regression result
 
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 145 passed and 1 external-service test skipped locally.
-- Backend line coverage: 77.37%, above the enforced 75% quality gate.
+- Backend tests: 150 passed and 1 external-service test skipped locally.
+- Backend line coverage: 77.38%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
 - Browser E2E: 2 complete Edge scenarios passed in an isolated runtime. They
@@ -30,7 +30,7 @@ Last validated: 2026-08-10 on Windows 11.
 - Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260810-191640-full\summary.json`.
+`artifacts\validation\20260810-203057-full\summary.json`.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,
@@ -96,12 +96,17 @@ human review feedback into a rule, test, document or evaluation case.
   facets, timeline data and event-to-source navigation;
 - atomic parser, graph, vector and report publication with rollback-safe failures;
 - layered knowledge taxonomy, editing, vector reindexing and hybrid retrieval;
+- GW, AP, GENERAL (通用) and legacy OTHER knowledge applicability, with GENERAL
+  documents eligible for both GW and AP retrieval;
 - persistent LLM-assisted folder curation with TXT/MD/HTML/DOCX/PDF extraction,
   source citations, immutable revisions, correction chat and human-confirmed drafts;
 - Code Graph, Commit Graph, three-class memory and Agentic Search integration;
 - encrypted model credentials and per-profile Chat proxy URLs, endpoint policy,
   certificate-chain/hostname verification with proxy-mode revocation checking
   disabled, egress audit and local/API model switching;
+- idempotent, secret-safe Win11 opt-in that persists
+  `MODEL_ALLOW_PRIVATE_ENDPOINTS=true` in the Git-ignored local `.env` without
+  weakening the default configuration committed to the repository;
 - case ownership/membership, role enforcement, token lifecycle and storage cleanup;
 - backup verification, Docker/Compose definitions and runtime health/readiness checks.
 
