@@ -88,6 +88,9 @@ class OpenAICompatibleProvider(LLMProvider):
         self.proxy_configured = bool(proxy_url)
         self.certificate_revocation_check_skipped = bool(proxy_url)
         self.temperature = float(config.get("temperature", settings.llm_temperature))
+        configured_max_tokens = int(config.get("max_tokens") or 0)
+        self.max_tokens = configured_max_tokens if configured_max_tokens > 0 else None
+        self.thinking_enabled = bool(config.get("thinking_enabled", False))
         timeout_seconds = float(config.get("timeout_seconds", settings.llm_timeout_seconds))
         self.last_usage: dict[str, int | None] = {}
         self.last_duration_ms = 0
@@ -149,6 +152,12 @@ class OpenAICompatibleProvider(LLMProvider):
     ) -> dict[str, Any]:
         started = perf_counter()
         try:
+            request_options: dict[str, Any] = {}
+            max_tokens = getattr(self, "max_tokens", None)
+            if max_tokens:
+                request_options["max_tokens"] = max_tokens
+            if getattr(self, "thinking_enabled", False):
+                request_options["extra_body"] = {"thinking": {"type": "enabled"}}
             response = await self.client.chat.completions.create(
                 model=self.model_name,
                 temperature=self.temperature,
@@ -156,6 +165,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     {"role": "system", "content": system + "\n只输出合法 JSON，不要使用 Markdown 代码块。"},
                     {"role": "user", "content": user},
                 ],
+                **request_options,
             )
             content = response.choices[0].message.content or "{}"
         except Exception as exc:
@@ -199,10 +209,17 @@ class OpenAICompatibleProvider(LLMProvider):
     async def generate_text(self, system: str, user: str, purpose: str = "case_assistance") -> str:
         started = perf_counter()
         try:
+            request_options: dict[str, Any] = {}
+            max_tokens = getattr(self, "max_tokens", None)
+            if max_tokens:
+                request_options["max_tokens"] = max_tokens
+            if getattr(self, "thinking_enabled", False):
+                request_options["extra_body"] = {"thinking": {"type": "enabled"}}
             response = await self.client.chat.completions.create(
                 model=self.model_name,
                 temperature=self.temperature,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                **request_options,
             )
             content = response.choices[0].message.content or ""
         except Exception as exc:

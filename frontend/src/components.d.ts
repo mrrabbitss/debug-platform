@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    CaseChatPanel: typeof import('./components/diagnosis/CaseChatPanel.vue')['default']
     CurationSourcePreviewDialog: typeof import('./components/curation/CurationSourcePreviewDialog.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']
@@ -55,6 +56,8 @@ declare module 'vue' {
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     ElTree: typeof import('element-plus/es')['ElTree']
     ElTreeSelect: typeof import('element-plus/es')['ElTreeSelect']
+    LogTriagePanel: typeof import('./components/diagnosis/LogTriagePanel.vue')['default']
+    PlanningTracePanel: typeof import('./components/diagnosis/PlanningTracePanel.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
   }

@@ -89,6 +89,7 @@ def replay_agent_run(run_id: str, request: Request, db: Db) -> dict[str, Any]:
         execution_mode="replay",
         replay_of_run_id=run.id,
         created_by=str(principal.get("id") or "admin"),
+        joint_diagnostic_scope=bool(payload.get("joint_diagnostic_scope", False)),
     )
     record_audit_event(
         "agent.run.replay",

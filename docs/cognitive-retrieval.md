@@ -225,7 +225,44 @@ Embedding 或 Reranker 使用 API Profile 时，候选知识、记忆或源码�
 Hashing/BGE 与本地 Qwen Reranker。系统审计只记录端点来源、用途、条目数、字符数、
 耗时和结果，不记录请求正文。
 
-## 8. API
+## 8. LLM 日志规划与综合诊断
+
+案例页“智能日志筛查”不再把所有结构化事件直接当成同等重要。已解析日志的处理顺序是：
+
+1. 将 GW 主设备和 AP 从设备视为一个诊断域，加载知识库中 `ACTIVE + active=true` 的 GW、AP、通用故障树、分析方法、日志规则和历史案例；
+2. 如果项目根目录存在 Git 忽略的 `故障树.md`、`日志分析.md`，把它们作为本机只读方法一并加载；
+3. 将每份完整方法和编译后的日志 Pattern 发送给当前 Chat 模型，要求模型回报全部已读文档 ID、相关 Pattern ID、追加字面量关键词、假设、检查步骤和停止条件；
+4. 后端验证文档/Pattern ID，验证失败或模型不可用时回退到确定性规划；
+5. 在本机逐行扫描完整提取文本，不只扫描 Parser 已结构化的事件；
+6. 发布三层证据：`LLM_RELEVANT`、`METHOD_REQUIRED`、`OTHER`。
+
+第一层包含模型结合问题描述选择的 Pattern 和追加关键词；第二层包含所有适用方法中没有进入
+第一层的 Pattern，因此模型不能让必查规则消失；第三层是未命中前两层的结构化事件。前两层会
+按规范化消息聚类，但保留原始文件、首末行号、出现次数、方法版本、Pattern 和排序理由。没有被
+Parser 识别成事件的命令输出也能出现在前两层；第三层只对结构化事件分页。
+
+原始日志全文不会发送到 Chat 模型。模型只规划“本机要查什么”，完整扫描和命中内容保留在本机。
+真实 API Profile 还要求案例明确开启“模型出站授权”。方法正文仅用于当次推理，Agent 轨迹保存
+文档 ID、版本、哈希和轮次，不保存正文；分析快照同样省略方法正文。
+
+上传日志时可标记 `GW/AP/UNKNOWN` 和 `PRIMARY/SECONDARY/UNKNOWN`。历史日志未标记时按案例设备
+类型回退，GW 默认主设备、AP 默认从设备。三层证据、事件列表、时间线和综合诊断 evidence 都保留
+来源设备/角色；多个日志包按包均衡取候选，避免一个超大日志吞掉另一侧的诊断上下文。
+
+“综合诊断”会在确定性检索基线之后执行至少两轮、最多八轮 LLM Planning。每轮都会重新提供全部
+GW/AP 联合方法、三层日志证据、以前轮次和检索观察，并要求每个检查引用有效方法 ID。Planner 每轮最多
+产生四个去重检索 query；证据足够、达到轮次上限、校验失败、取消或预算耗尽都会产生明确停止原因。
+最终合成仍只能引用系统提供的 evidence ID，非法引用会回退到确定性结果。
+
+“交互问答”返回 `202 Accepted` 和持久化 Job。前端轮询消息/Job、可取消，并在刷新页面后恢复等待；
+模型、检索或超时错误会保存在本轮消息和轨迹中，不再表现为浏览器长请求无回复。
+
+问答页可以切换“修订诊断与报告”。模型基于最新诊断、完整联合方法和有效证据生成完整结构化草稿，
+后端重新校验 Schema 和 evidence ID。草稿不会直接覆盖历史；工程师预览并确认后，只有在原诊断仍是
+案例最新版本时才创建新的 `AnalysisRun`。报告始终由选中诊断结构确定性渲染，因此新版诊断和报告
+同步变化，而已经导出的旧报告继续保留审计价值。
+
+## 9. API
 
 ```text
 GET  /api/v1/knowledge/templates/fault-case
@@ -243,6 +280,18 @@ GET  /api/v1/repositories/{repository_id}/commit-graph
 
 POST /api/v1/cases/{case_id}/agentic-search
 GET  /api/v1/cases/{case_id}/memories
+POST /api/v1/cases/{case_id}/artifacts/{artifact_id}/triage
+GET  /api/v1/cases/{case_id}/log-triage
+GET  /api/v1/cases/{case_id}/log-triage/{triage_run_id}
+GET  /api/v1/cases/{case_id}/log-triage/{triage_run_id}/evidence
+POST /api/v1/cases/{case_id}/analyses
+POST /api/v1/cases/{case_id}/chat
+GET  /api/v1/cases/{case_id}/conversations
+GET  /api/v1/cases/{case_id}/analysis-revisions
+GET  /api/v1/cases/{case_id}/analysis-revisions/{revision_id}
+POST /api/v1/cases/{case_id}/analysis-revisions/{revision_id}/apply
+POST /api/v1/cases/{case_id}/analysis-revisions/{revision_id}/reject
+GET  /api/v1/cases/{case_id}/agent-runs/{run_id}
 GET  /api/v1/system/retrieval
 ```
 
@@ -270,7 +319,7 @@ Agentic Search 示例：
 }
 ```
 
-## 9. 验证
+## 10. 验证
 
 基础验证命令：
 
@@ -288,7 +337,11 @@ npm.cmd run build
 - 真实临时 Git 仓的 Commit、Unicode 路径和 Git Bundle 导入；
 - 三类记忆生成、去重、脱敏、案例隔离和复用计数；
 - Agentic Search 计划、知识/记忆融合、Dense、Reranker 回退和失败记忆；
-- Alembic `0008` 新建数据库、旧数据库升级、generation 回滚和报告版本唯一性。
+- 完整日志文本扫描、方法 Pattern 编译、三层聚类、原始行号和结构化事件回退；
+- 方法文档强制阅读、至少两轮综合规划、证据 ID 校验和确定性回退；
+- 持久化异步问答、任务恢复和增量 Agent 轨迹；
+- Playwright 合成日志上传、三层 UI、两轮诊断、后台问答与浏览器控制台零错误；
+- Alembic `0001`～`0015` 新建数据库、旧数据库升级、generation 回滚、报告版本唯一性、诊断规划和修订审核状态。
 
 真实企业源码和日志仍应在内部环境建立经过脱敏的 Golden Corpus，用 Recall、MRR、
 NDCG、多跳路径准确率和工程师复核结果持续评估。

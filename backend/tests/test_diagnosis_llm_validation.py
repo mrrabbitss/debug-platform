@@ -89,7 +89,12 @@ def test_llm_cannot_cite_fabricated_evidence(monkeypatch) -> None:
     baseline = _baseline()
 
     result = asyncio.run(diagnosis._augment_with_llm(
-        Case(id="CASE-llm", title="LLM validation", description=""),
+        Case(
+            id="CASE-llm",
+            title="LLM validation",
+            description="",
+            model_egress_approved=True,
+        ),
         baseline,
         [{"evidence_id": "EVT-1", "content": "authentication failed"}],
     ))
@@ -106,7 +111,12 @@ def test_validated_llm_result_preserves_case_scoped_baseline_data(monkeypatch) -
     baseline = _baseline()
 
     result = asyncio.run(diagnosis._augment_with_llm(
-        Case(id="CASE-llm", title="LLM validation", description=""),
+        Case(
+            id="CASE-llm",
+            title="LLM validation",
+            description="",
+            model_egress_approved=True,
+        ),
         baseline,
         [{"evidence_id": "EVT-1", "content": "authentication failed"}],
     ))

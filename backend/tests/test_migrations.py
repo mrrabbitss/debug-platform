@@ -37,15 +37,19 @@ def test_migrations_create_fresh_database_and_are_idempotent(tmp_path: Path) -> 
         "knowledge_curation_sessions", "knowledge_curation_source_files",
         "knowledge_curation_revisions", "knowledge_curation_messages",
         "agent_runs", "agent_trace_events",
+        "log_triage_runs", "log_evidence_matches", "log_evidence_occurrences",
+        "analysis_revisions",
     }.issubset(table_names)
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0013"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0015"
     analysis_column_info = {item["name"]: item for item in inspect(engine).get_columns("analysis_runs")}
     event_indexes = {item["name"] for item in inspect(engine).get_indexes("log_events")}
     model_indexes = {item["name"] for item in inspect(engine).get_indexes("model_profiles")}
     assert "ix_log_events_case_time" in event_indexes
     assert "uq_model_profiles_active_task" in model_indexes
-    assert {"model_profile_id", "model_config_json"}.issubset(analysis_column_info)
+    assert {"model_profile_id", "model_config_json", "agent_run_id"}.issubset(
+        analysis_column_info
+    )
     assert analysis_column_info["model"]["type"].length == 512
     artifact_columns = {item["name"] for item in inspect(engine).get_columns("artifacts")}
     job_columns = {item["name"] for item in inspect(engine).get_columns("jobs")}
@@ -57,8 +61,11 @@ def test_migrations_create_fresh_database_and_are_idempotent(tmp_path: Path) -> 
     }.issubset(job_columns)
     case_columns = {item["name"] for item in inspect(engine).get_columns("cases")}
     event_columns = {item["name"] for item in inspect(engine).get_columns("log_events")}
-    assert "active_parse_run_id" in artifact_columns
+    assert {
+        "active_parse_run_id", "source_device_type", "source_device_role",
+    }.issubset(artifact_columns)
     assert "owner_id" in case_columns
+    assert "model_egress_approved" in case_columns
     assert "parse_run_id" in event_columns
     repository_columns = {item["name"] for item in inspect(engine).get_columns("repositories")}
     assert {
@@ -170,7 +177,7 @@ def test_migrations_adopt_legacy_create_all_database_without_data_loss(tmp_path:
             "SELECT parse_run_id FROM log_events WHERE id = 'EVT-legacy'"
         ))
     assert title == "legacy case"
-    assert version == "0013"
+    assert version == "0015"
     assert active_run_id == "ART-legacy"
     assert event_run_id == "ART-legacy"
     engine.dispose()

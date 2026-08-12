@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from sqlalchemy import delete, insert, or_, select
@@ -19,6 +20,7 @@ TEXT_SUFFIXES = {
     ".log", ".txt", ".out", ".err", ".trace", ".conf", ".cfg", ".json", ".jsonl", ".xml",
     ".ini", ".status", ".info", ".dump", "",
 }
+logger = logging.getLogger(__name__)
 
 # Keep transactions large enough to avoid excessive SQLite fsync overhead on
 # Windows, while still publishing progress and cancellation checkpoints often.
@@ -201,6 +203,33 @@ def _parse_artifact_impl(ctx: JobContext, case_id: str, artifact_id: str, parse_
     if parse_error:
         ctx.update(95, parse_error)
         raise ValueError(parse_error)
+    if case.model_egress_approved:
+        try:
+            from app.services.log_triage import submit_log_triage
+
+            with SessionLocal() as db:
+                current_case = db.get(Case, case_id)
+                current_artifact = db.get(Artifact, artifact_id)
+                if current_case and current_artifact:
+                    triage, _, triage_job = submit_log_triage(
+                        db,
+                        case=current_case,
+                        artifact=current_artifact,
+                        created_by="parse-artifact-auto",
+                        deduplicate=True,
+                    )
+                    metadata = json_loads(current_artifact.metadata_json, {})
+                    metadata["latest_log_triage_run_id"] = triage.id
+                    metadata["latest_log_triage_job_id"] = triage_job.id
+                    current_artifact.metadata_json = json_dumps(metadata)
+                    db.commit()
+        except Exception:  # noqa: BLE001
+            # Parsing is already a valid atomic generation. Planning can be
+            # retried explicitly without invalidating that parse result.
+            logger.exception(
+                "Unable to schedule automatic log planning for artifact %s",
+                artifact_id,
+            )
     return job_result
 
 

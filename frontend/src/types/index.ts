@@ -10,6 +10,7 @@ export interface CaseItem {
   issue_time?: string
   status: string
   severity: string
+  model_egress_approved: boolean
   owner_id?: string
   created_at: string
   updated_at: string
@@ -86,6 +87,8 @@ export interface Artifact {
   sha256: string
   size_bytes: number
   status: string
+  source_device_type: 'GW' | 'AP' | 'UNKNOWN'
+  source_device_role: 'PRIMARY' | 'SECONDARY' | 'UNKNOWN'
   metadata_json: string
   created_at: string
 }
@@ -128,6 +131,8 @@ export interface LogEvent {
   raw_text: string
   entities: Record<string, string>
   confidence: number
+  source_device_type: 'GW' | 'AP' | 'UNKNOWN'
+  source_device_role: 'PRIMARY' | 'SECONDARY' | 'UNKNOWN'
 }
 
 export interface Analysis {
@@ -137,6 +142,7 @@ export interface Analysis {
   provider: string
   model: string
   model_profile_id?: string
+  agent_run_id?: string
   model_config_json: string
   prompt_version: string
   result_json: string
@@ -246,6 +252,7 @@ export interface KnowledgeCurationMessage {
   citations: string[]
   draft_version?: number
   model_profile_id?: string
+  agent_run_id?: string
   created_by?: string
   created_at: string
 }
@@ -395,4 +402,93 @@ export interface AgentRun {
   started_at: string
   completed_at?: string
   events?: AgentTraceEvent[]
+}
+
+export type LogEvidenceBucket = 'LLM_RELEVANT' | 'METHOD_REQUIRED' | 'OTHER'
+
+export interface LogTriageRun {
+  id: string
+  case_id: string
+  artifact_id: string
+  parse_run_id?: string
+  agent_run_id?: string
+  status: string
+  issue_snapshot: string
+  model_profile_id?: string
+  model_name?: string
+  method_coverage: Record<string, any>
+  plan: Record<string, any>
+  summary: Record<string, any>
+  error_message?: string
+  created_at: string
+  completed_at?: string
+}
+
+export interface LogEvidenceItem {
+  id: string
+  evidence_id: string
+  bucket: LogEvidenceBucket
+  relevance_score: number
+  source_file: string
+  line_start: number
+  line_end: number
+  timestamp?: string
+  level?: string
+  module?: string
+  event_code?: string
+  message: string
+  occurrence_count: number
+  pattern_id?: string
+  pattern_text?: string
+  match_kind?: string
+  reason?: string
+  method_document_id?: string
+  method_version?: number
+  metadata: Record<string, any>
+}
+
+export interface LogEvidencePage {
+  triage_run_id: string
+  bucket: LogEvidenceBucket
+  total: number
+  offset: number
+  limit: number
+  items: LogEvidenceItem[]
+}
+
+export interface ConversationMessage {
+  id: string
+  case_id: string
+  role: 'user' | 'assistant'
+  content: string
+  citations: Array<Record<string, any>>
+  status: string
+  job_id?: string
+  agent_run_id?: string
+  error_message?: string
+  created_at: string
+}
+
+export interface AnalysisRevision {
+  id: string
+  case_id: string
+  source_analysis_id: string
+  applied_analysis_id?: string
+  source_message_id?: string
+  job_id?: string
+  agent_run_id?: string
+  status: 'QUEUED' | 'RUNNING' | 'DRAFT' | 'APPLIED' | 'REJECTED' | 'FAILED' | 'CANCELLED'
+  instruction: string
+  proposed_result: Record<string, any>
+  change_summary: string
+  validation: Record<string, any>
+  model_profile_id?: string
+  model_name?: string
+  error_message?: string
+  created_by?: string
+  reviewed_by?: string
+  review_comment?: string
+  created_at: string
+  updated_at: string
+  reviewed_at?: string
 }

@@ -9,11 +9,13 @@ from app.api import agent_runs
 from app.core.db import Base, configure_sqlite_engine, get_db
 from app.models import AgentRun, AgentTraceEvent, Case
 from app.services.agent_trace import (
+    _event_metadata,
     agent_run_to_dict,
     record_agent_run,
     sanitize_model_config,
     sanitize_replay_payload,
 )
+from app.services.agent_trace_runtime import append_live_trace, create_live_agent_run
 
 
 def _factory(tmp_path: Path):
@@ -118,6 +120,70 @@ def test_unsafe_replay_text_is_hash_only_and_model_secrets_are_removed() -> None
         "password": "bad",
         "nested": {"api_key": "bad", "mode": "local"},
     }) == {"nested": {"mode": "local"}}
+
+
+def test_planning_trace_keeps_safe_progress_metadata_without_document_content() -> None:
+    assert _event_metadata({
+        "stage": "read_method_document",
+        "metadata": {
+            "document_id": "LOCALDOC-safe-id",
+            "version": 3,
+            "role": "FAULT_TREE",
+            "round": 2,
+            "stop_reason": "ENOUGH_EVIDENCE",
+            "title": "private title",
+            "content": "private method body",
+        },
+    }) == {
+        "document_id": "LOCALDOC-safe-id",
+        "version": 3,
+        "role": "FAULT_TREE",
+        "round": 2,
+        "stop_reason": "ENOUGH_EVIDENCE",
+    }
+
+
+def test_live_trace_allocates_unique_sequences_without_intermediate_commit(
+    tmp_path: Path,
+) -> None:
+    engine, factory = _factory(tmp_path)
+    with factory() as db:
+        db.add(Case(id="CASE-live-trace", title="Trace", device_type="AP"))
+        db.flush()
+        run = create_live_agent_run(
+            db,
+            operation="log_triage_planning",
+            case_id="CASE-live-trace",
+            resource_type="log_triage",
+            resource_id="LTRIAGE-test",
+            input_summary={"case_id": "CASE-live-trace"},
+        )
+        append_live_trace(
+            db,
+            run.id,
+            stage="load_methods",
+            status="COMPLETED",
+            commit=False,
+        )
+        append_live_trace(
+            db,
+            run.id,
+            stage="read_method",
+            status="COMPLETED",
+            commit=False,
+        )
+        db.commit()
+        events = list(db.scalars(
+            select(AgentTraceEvent)
+            .where(AgentTraceEvent.run_id == run.id)
+            .order_by(AgentTraceEvent.sequence)
+        ).all())
+
+    assert [(event.sequence, event.stage) for event in events] == [
+        (1, "load_methods"),
+        (2, "read_method"),
+    ]
+    engine.dispose()
 
 
 def test_admin_can_inspect_and_read_only_replay_agent_run(

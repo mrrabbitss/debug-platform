@@ -38,14 +38,23 @@ SAFE_EVENT_METADATA_KEYS = {
     "backend",
     "candidate_count",
     "circuit_state",
+    "document_id",
+    "error_type",
     "fallback",
     "model",
     "model_profile_id",
+    "planner_mode",
+    "planner_stop_reason",
     "provider",
     "reason",
     "returned",
+    "returned_count",
+    "role",
+    "round",
     "selected_modules",
+    "stop_reason",
     "tool_permission",
+    "version",
 }
 
 

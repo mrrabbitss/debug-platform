@@ -16,6 +16,7 @@ from app.services.agentic.planner import build_search_plan
 from app.services.agent_trace import record_agent_run
 from app.services.code_graph import search_code_graph
 from app.services.commit_graph import search_commits, symbols_for_commit_paths
+from app.services.diagnostic_scope import knowledge_matches_joint_diagnostic_scope
 from app.services.knowledge_graph import (
     domain_graph_candidates,
     domain_graph_status,
@@ -37,13 +38,14 @@ def _knowledge_candidates(
     case_id: str,
     device_type: str | None,
     limit: int,
+    joint_diagnostic_scope: bool = False,
 ) -> list[dict[str, Any]]:
     hits = retriever.search(
         query,
         db=db,
         case_id=case_id,
         device_type=device_type,
-        top_k=limit,
+        top_k=limit * 2 if joint_diagnostic_scope else limit,
         include_code_symbols=False,
         apply_models=False,
     )
@@ -58,7 +60,13 @@ def _knowledge_candidates(
             "paths": [],
         }
         for hit in hits
-    ]
+        if (
+            not joint_diagnostic_scope
+            or knowledge_matches_joint_diagnostic_scope(
+                str(hit.metadata.get("device_type") or "") or None
+            )
+        )
+    ][:limit]
 
 
 def _memory_candidates(
@@ -235,6 +243,7 @@ def agentic_search(
     execution_mode: str = "deterministic",
     replay_of_run_id: str | None = None,
     created_by: str | None = None,
+    joint_diagnostic_scope: bool = False,
 ) -> dict[str, Any]:
     from app.models import Case
 
@@ -278,8 +287,9 @@ def agentic_search(
                     db,
                     query,
                     case_id=case_id,
-                    device_type=case.device_type,
+                    device_type=None if joint_diagnostic_scope else case.device_type,
                     limit=per_module_limit,
+                    joint_diagnostic_scope=joint_diagnostic_scope,
                 )
                 paths: list[dict[str, Any]] = []
             elif module == "domain_graph":
@@ -426,6 +436,9 @@ def agentic_search(
             },
             "fused_candidates": len(fused),
             "returned": len(final_results),
+            "knowledge_scope": (
+                "GW_AP_JOINT" if joint_diagnostic_scope else case.device_type
+            ),
         },
     }
     active_profiles = [
@@ -446,6 +459,7 @@ def agentic_search(
             "top_k": top_k,
             "max_hops": max_hops,
             "modules": requested_modules,
+            "joint_diagnostic_scope": joint_diagnostic_scope,
         },
         output_summary={
             "evidence_ids": evidence_ids,
@@ -476,6 +490,7 @@ def agentic_search(
             ],
             "top_k": top_k,
             "max_hops": max_hops,
+            "joint_diagnostic_scope": joint_diagnostic_scope,
         },
         prompt_version="agentic-search-v2",
         replay_of_run_id=replay_of_run_id,
@@ -486,10 +501,10 @@ def agentic_search(
             "max_hops": max_hops,
             "modules": requested_modules,
             "execution_mode": execution_mode,
+            "joint_diagnostic_scope": joint_diagnostic_scope,
         },
         created_by=created_by,
         budget_ms=30_000,
     )
-    result["run_id"] = run.id
-    result["stop_reason"] = stop_reason
+    result.update(run_id=run.id, stop_reason=stop_reason)
     return result

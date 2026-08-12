@@ -22,3 +22,5 @@ hf_model_access_report*.txt
 /artifacts/e2e/
 .agent-runtime/
 .DS_Store
+/故障树.md
+/日志分析.md

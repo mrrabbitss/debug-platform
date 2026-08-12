@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.agent_runs import router as agent_runs_router
+from app.api.diagnostics import router as diagnostics_router
 from app.api.jobs import router as jobs_router
 from app.api.knowledge import router as knowledge_router
 from app.api.knowledge_governance import router as knowledge_governance_router
@@ -28,12 +29,12 @@ from app.models import (
 )
 from app.schemas import (
     AgenticSearchRequest, AnalysisOut, ArtifactOut, CaseCreate,
-    CaseMemberUpdate, CaseOut, CaseUpdate, ChatRequest, ChatResponse, JobOut,
+    CaseMemberUpdate, CaseOut, CaseUpdate, JobOut,
 )
 from app.services.access_control import accessible_case_clause, case_permission
 from app.services.agentic_search import agentic_search
-from app.services.diagnosis import analyze_case_job, chat_about_case
-from app.services.events import active_log_event_clause
+from app.services.diagnosis import analyze_case_job, prepare_analysis_run
+from app.services.events import active_log_event_clause, event_to_dict, timeline_event_to_dict
 from app.services.jobs import job_runner
 from app.services.memory import (
     memory_to_dict,
@@ -46,6 +47,7 @@ from app.services.text_files import read_text_range, search_text_lines
 
 router = APIRouter()
 router.include_router(agent_runs_router)
+router.include_router(diagnostics_router)
 router.include_router(jobs_router)
 router.include_router(knowledge_router)
 router.include_router(knowledge_governance_router)
@@ -57,7 +59,14 @@ router.include_router(system_router)
 Db = Annotated[Session, Depends(get_db)]
 
 job_runner.register("parse_artifact", parse_artifact_job, ("case_id", "artifact_id"), cancellable=True)
-job_runner.register("analyze_case", analyze_case_job, ("case_id",), cancellable=True)
+job_runner.register(
+    "analyze_case",
+    analyze_case_job,
+    ("case_id", "analysis_run_id", "agent_run_id"),
+    cancellable=True,
+    max_attempts=1,
+    timeout_seconds=30 * 60,
+)
 
 
 @router.post("/cases", response_model=CaseOut)
@@ -214,6 +223,8 @@ async def upload_artifact(
     db: Db,
     file: UploadFile = File(...),
     kind: str = Form(default="debug_log"),
+    source_device_type: str = Form(default="UNKNOWN", pattern="^(GW|AP|UNKNOWN)$"),
+    source_device_role: str = Form(default="UNKNOWN", pattern="^(PRIMARY|SECONDARY|UNKNOWN)$"),
 ) -> Artifact:
     case = db.get(Case, case_id)
     if not case:
@@ -233,6 +244,8 @@ async def upload_artifact(
     artifact = Artifact(
         id=artifact_id, case_id=case_id, kind=kind, original_name=stored_name,
         stored_path=storage.storage_key(path), sha256=digest, size_bytes=size, status="UPLOADED",
+        source_device_type=source_device_type,
+        source_device_role=source_device_role,
         metadata_json=json_dumps({
             "uploaded_original_name": uploaded_name,
             "filename_normalized": uploaded_name != stored_name,
@@ -293,17 +306,17 @@ def list_events(
     offset: int = Query(default=0, ge=0),
 ) -> list[dict]:
     query = _filtered_event_query(case_id, level, module, component, search)
-    rows = db.scalars(query.order_by(LogEvent.timestamp_normalized.asc().nullslast(), LogEvent.line_start.asc()).offset(offset).limit(limit)).all()
+    rows = db.execute(
+        query.add_columns(Artifact.source_device_type, Artifact.source_device_role)
+        .order_by(LogEvent.timestamp_normalized.asc().nullslast(), LogEvent.line_start.asc())
+        .offset(offset).limit(limit)
+    ).all()
     return [
-        {
-            "id": row.id, "artifact_id": row.artifact_id,
-            "source_file": row.source_file, "line_start": row.line_start, "line_end": row.line_end,
-            "timestamp_raw": row.timestamp_raw, "timestamp_normalized": row.timestamp_normalized,
-            "level": row.level, "module": row.module, "component": row.component,
-            "event_code": row.event_code, "message": row.message, "raw_text": row.raw_text,
-            "entities": json_loads(row.entities_json, {}), "confidence": row.confidence,
-        }
-        for row in rows
+        event_to_dict(
+            row, source_device_type, source_device_role,
+            entities=json_loads(row.entities_json, {}),
+        )
+        for row, source_device_type, source_device_role in rows
     ]
 
 
@@ -368,8 +381,8 @@ def event_stats(
 
 @router.get("/cases/{case_id}/timeline")
 def timeline(case_id: str, db: Db, limit: int = Query(default=1000, ge=1, le=5000)) -> dict:
-    rows = db.scalars(
-        select(LogEvent)
+    rows = db.execute(
+        select(LogEvent, Artifact.source_device_type, Artifact.source_device_role)
         .join(Artifact, Artifact.id == LogEvent.artifact_id)
         .where(LogEvent.case_id == case_id, active_log_event_clause())
         .order_by(LogEvent.timestamp_normalized.asc().nullslast(), LogEvent.source_file.asc(), LogEvent.line_start.asc())
@@ -383,14 +396,8 @@ def timeline(case_id: str, db: Db, limit: int = Query(default=1000, ge=1, le=500
     ).all())
     return {
         "items": [
-            {
-                "id": row.id, "artifact_id": row.artifact_id,
-                "time": row.timestamp_normalized or row.timestamp_raw,
-                "module": row.module, "component": row.component, "level": row.level,
-                "event_code": row.event_code, "message": row.message,
-                "source_file": row.source_file, "line_start": row.line_start,
-            }
-            for row in rows
+            timeline_event_to_dict(row, source_device_type, source_device_role)
+            for row, source_device_type, source_device_role in rows
         ],
         "module_counts": module_counts,
     }
@@ -511,10 +518,34 @@ def search_artifact_content(
 
 
 @router.post("/cases/{case_id}/analyses", response_model=JobOut)
-def analyze_case(case_id: str, db: Db) -> Job:
-    if not db.get(Case, case_id):
+def analyze_case(case_id: str, request: Request, db: Db) -> Job:
+    case = db.get(Case, case_id)
+    if not case:
         raise HTTPException(404, "Case not found")
-    return job_runner.submit(db, "analyze_case", analyze_case_job, case_id, input_data={"case_id": case_id})
+    principal = getattr(request.state, "principal", {}) or {}
+    analysis_run, agent_run = prepare_analysis_run(
+        db,
+        case=case,
+        created_by=str(principal.get("id") or "local-user"),
+    )
+    db.commit()
+    return job_runner.submit(
+        db,
+        "analyze_case",
+        analyze_case_job,
+        case_id,
+        analysis_run.id,
+        agent_run.id,
+        input_data={
+            "case_id": case_id,
+            "analysis_run_id": analysis_run.id,
+            "agent_run_id": agent_run.id,
+        },
+        deduplicate=False,
+        max_attempts=1,
+        timeout_seconds=30 * 60,
+        resource_limits={"max_input_bytes": 16 * 1024},
+    )
 
 
 @router.get("/cases/{case_id}/analyses", response_model=list[AnalysisOut])
@@ -528,14 +559,6 @@ def get_analysis(analysis_id: str, db: Db) -> AnalysisRun:
     if not run:
         raise HTTPException(404, "Analysis not found")
     return run
-
-
-@router.post("/cases/{case_id}/chat", response_model=ChatResponse)
-async def case_chat(case_id: str, payload: ChatRequest, db: Db) -> ChatResponse:
-    if not db.get(Case, case_id):
-        raise HTTPException(404, "Case not found")
-    answer, citations = await chat_about_case(case_id, payload.question)
-    return ChatResponse(answer=answer, citations=citations)
 
 
 @router.post("/cases/{case_id}/agentic-search")

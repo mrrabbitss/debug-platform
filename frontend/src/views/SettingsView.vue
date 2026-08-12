@@ -31,6 +31,8 @@ const form = reactive({
   clear_proxy_url: false,
   enabled: true,
   temperature: 0.1,
+  thinking_enabled: false,
+  max_tokens: 0,
   timeout_seconds: 120,
   max_retries: 2,
   dimension: undefined as number | undefined,
@@ -113,6 +115,8 @@ function resetForm(task: ModelTask) {
   form.clear_proxy_url = false
   form.enabled = true
   form.temperature = 0.1
+  form.thinking_enabled = false
+  form.max_tokens = 0
   form.timeout_seconds = 120
   form.max_retries = 2
   form.dimension = undefined
@@ -148,6 +152,8 @@ function openEdit(profile: ModelProfile) {
   form.clear_proxy_url = false
   form.enabled = profile.enabled
   form.temperature = Number(profile.config.temperature ?? 0.1)
+  form.thinking_enabled = Boolean(profile.config.thinking_enabled ?? false)
+  form.max_tokens = Number(profile.config.max_tokens ?? 0)
   form.timeout_seconds = Number(profile.config.timeout_seconds ?? 120)
   form.max_retries = Number(profile.config.max_retries ?? 2)
   form.dimension = profile.config.dimension ? Number(profile.config.dimension) : undefined
@@ -161,7 +167,13 @@ function openEdit(profile: ModelProfile) {
 
 function modelConfig() {
   if (form.task_type === 'chat') {
-    return { temperature: form.temperature, timeout_seconds: form.timeout_seconds, max_retries: form.max_retries }
+    return {
+      temperature: form.temperature,
+      thinking_enabled: form.thinking_enabled,
+      max_tokens: form.max_tokens > 0 ? form.max_tokens : undefined,
+      timeout_seconds: form.timeout_seconds,
+      max_retries: form.max_retries
+    }
   }
   if (form.task_type === 'embedding') {
     return {
@@ -413,6 +425,18 @@ onMounted(load)
         </template>
         <template v-if="form.task_type === 'chat'">
           <el-form-item label="Temperature"><el-input-number v-model="form.temperature" :min="0" :max="2" :step="0.1" /></el-form-item>
+          <el-form-item label="Thinking">
+            <div>
+              <el-switch v-model="form.thinking_enabled" active-text="启用" inactive-text="关闭" />
+              <div class="muted">GLM-5.1/5.2 可开启；后端会发送 thinking.type=enabled。其他兼容端点不支持时请关闭。</div>
+            </div>
+          </el-form-item>
+          <el-form-item label="最大输出 Tokens">
+            <div>
+              <el-input-number v-model="form.max_tokens" :min="0" :max="2000000" :step="1024" />
+              <div class="muted">0 表示使用模型默认值；GLM-5.1/5.2 可填写 65536。</div>
+            </div>
+          </el-form-item>
         </template>
         <template v-if="form.task_type === 'embedding'">
           <el-form-item v-if="form.mode === 'api'" label="向量维度"><el-input-number v-model="form.dimension" :min="1" placeholder="留空使用模型默认值" /></el-form-item>

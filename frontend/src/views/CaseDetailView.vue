@@ -3,6 +3,9 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
+import CaseChatPanel from '../components/diagnosis/CaseChatPanel.vue'
+import LogTriagePanel from '../components/diagnosis/LogTriagePanel.vue'
+import PlanningTracePanel from '../components/diagnosis/PlanningTracePanel.vue'
 import type {
   Analysis,
   Artifact,
@@ -33,6 +36,8 @@ const timelineItems = ref<any[]>([])
 const timelineModuleCounts = ref<Record<string, number>>({})
 const activeTab = ref('overview')
 const debugFile = ref<File | null>(null)
+const debugSourceDeviceType = ref<'GW' | 'AP' | 'UNKNOWN'>('UNKNOWN')
+const debugSourceDeviceRole = ref<'PRIMARY' | 'SECONDARY' | 'UNKNOWN'>('UNKNOWN')
 const debugFileInput = ref<HTMLInputElement | null>(null)
 const repoFile = ref<File | null>(null)
 const currentJob = ref<Job | null>(null)
@@ -40,8 +45,7 @@ const jobTimer = ref<number | null>(null)
 const eventFilter = reactive({ level: '', module: '', search: '' })
 const diagnosis = ref<any>({})
 const reportHtml = ref('')
-const chatQuestion = ref('')
-const chatMessages = ref<{role:string, content:string, citations?:any[]}[]>([])
+const reportPreviewAnalysisId = ref('')
 const selectedEvent = ref<LogEvent | null>(null)
 const fileManifest = ref<any>({})
 const rawLog = ref('')
@@ -66,6 +70,7 @@ const memberDirectory = ref<UserDirectoryEntry[]>([])
 const memberForm = reactive({ user_id: '', permission: 'VIEWER' as 'EDITOR' | 'VIEWER' })
 
 const latestAnalysis = computed(() => analyses.value.find(item => item.status === 'COMPLETED'))
+const latestAnalysisWithTrace = computed(() => analyses.value.find(item => item.agent_run_id))
 const canEditCase = computed(() => {
   if (!principal.value || principal.value.role === 'VIEWER') return false
   return ['OWNER', 'EDITOR', 'SHARED'].includes(caseAccess.value?.permission || '')
@@ -98,7 +103,10 @@ async function loadAll() {
   repositories.value = repoRes.data
   if (latestAnalysis.value) {
     diagnosis.value = JSON.parse(latestAnalysis.value.result_json || '{}')
-    await loadReportPreview(latestAnalysis.value.id)
+    if (activeTab.value === 'report') await loadReportPreview(latestAnalysis.value.id)
+  } else {
+    reportHtml.value = ''
+    reportPreviewAnalysisId.value = ''
   }
   await loadAccessContext()
   await loadEvents()
@@ -207,10 +215,14 @@ async function uploadDebug() {
     const data = new FormData()
     data.append('file', debugFile.value)
     data.append('kind', 'debug_log')
+    data.append('source_device_type', debugSourceDeviceType.value)
+    data.append('source_device_role', debugSourceDeviceRole.value)
     const artifact = (await api.post(`/cases/${caseId}/artifacts`, data)).data
     artifacts.value.unshift(artifact)
     const parseJob = (await api.post(`/cases/${caseId}/artifacts/${artifact.id}/parse`)).data
     debugFile.value = null
+    debugSourceDeviceType.value = 'UNKNOWN'
+    debugSourceDeviceRole.value = 'UNKNOWN'
     if (debugFileInput.value) debugFileInput.value.value = ''
     const normalized = artifact.original_name !== selectedName
     ElMessage.success(normalized ? `无后缀文件已按 ${artifact.original_name} 上传，正在解析` : '上传完成，正在按内容识别并解析日志')
@@ -245,8 +257,25 @@ async function deleteArtifact(artifact: Artifact) {
 }
 
 async function analyze() {
-  const { data } = await api.post(`/cases/${caseId}/analyses`)
-  watchJob(data)
+  try {
+    const { data } = await api.post(`/cases/${caseId}/analyses`)
+    await loadAll()
+    watchJob(data)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '综合诊断启动失败')
+  }
+}
+
+async function updateModelEgress(value: boolean) {
+  if (!caseInfo.value) return
+  try {
+    const { data } = await api.patch(`/cases/${caseId}`, { model_egress_approved: value })
+    caseInfo.value = data
+    ElMessage.success(value ? '已授权模型读取问题描述与脱敏证据' : '已关闭模型出站授权')
+  } catch (error: any) {
+    if (caseInfo.value) caseInfo.value.model_egress_approved = !value
+    ElMessage.error(error?.response?.data?.detail || error?.message || '模型授权更新失败')
+  }
 }
 
 function watchJob(job: Job) {
@@ -375,8 +404,26 @@ async function openTimelineSource(item: any) {
   await loadRawLog(item.source_file, Math.max(1, Number(item.line_start || 1) - 20))
 }
 
+async function openTriageSource(payload: { artifactId: string, sourceFile: string, line: number }) {
+  await loadManifest(payload.artifactId)
+  await loadRawLog(payload.sourceFile, Math.max(1, payload.line - 20))
+}
+
 async function loadReportPreview(analysisId: string) {
+  if (reportPreviewAnalysisId.value === analysisId && reportHtml.value) return
   reportHtml.value = (await api.get(`/cases/${caseId}/analyses/${analysisId}/report/preview`)).data
+  reportPreviewAnalysisId.value = analysisId
+}
+
+async function handleTabChange(name: string | number) {
+  if (String(name) !== 'report' || !latestAnalysis.value) return
+  try {
+    await loadReportPreview(latestAnalysis.value.id)
+  } catch (error: any) {
+    reportHtml.value = ''
+    reportPreviewAnalysisId.value = ''
+    ElMessage.error(error?.response?.data?.detail || error?.message || '诊断报告预览加载失败')
+  }
 }
 
 async function exportReport(format: string) {
@@ -389,15 +436,6 @@ async function exportReport(format: string) {
   anchor.download = `GW_AP_Diagnosis_${caseId}.${format}`
   anchor.click()
   URL.revokeObjectURL(url)
-}
-
-async function ask() {
-  const question = chatQuestion.value.trim()
-  if (!question) return
-  chatMessages.value.push({ role: 'user', content: question })
-  chatQuestion.value = ''
-  const { data } = await api.post(`/cases/${caseId}/chat`, { question })
-  chatMessages.value.push({ role: 'assistant', content: data.answer, citations: data.citations })
 }
 
 async function uploadRepo() {
@@ -475,7 +513,7 @@ onBeforeUnmount(() => {
       </div>
     </el-alert>
 
-    <el-tabs v-model="activeTab" type="border-card">
+    <el-tabs v-model="activeTab" type="border-card" @tab-change="handleTabChange">
       <el-tab-pane label="案例概览" name="overview">
         <div class="card-grid">
           <div class="stat-card"><div class="muted">关键事件</div><strong style="font-size:28px">{{ eventStats.total }}</strong></div>
@@ -484,6 +522,21 @@ onBeforeUnmount(() => {
           <div class="stat-card"><div class="muted">知识增强</div><strong style="font-size:28px">{{ diagnosis.retrieved_knowledge?.length || 0 }}</strong></div>
         </div>
         <h3 class="section-title">问题现象</h3><p>{{ caseInfo.description || '未填写' }}</p>
+        <el-card shadow="never" style="margin:14px 0">
+          <div class="toolbar">
+            <div style="margin-right:auto">
+              <strong>模型出站授权</strong>
+              <div class="muted">开启后，系统可将问题描述、已发布方法文档和脱敏证据发送到当前 Chat 模型；原始日志正文仍由本机扫描。</div>
+            </div>
+            <el-switch
+              v-model="caseInfo.model_egress_approved"
+              :disabled="!canEditCase"
+              active-text="已授权"
+              inactive-text="未授权"
+              @change="(value:string | number | boolean) => updateModelEgress(value === true)"
+            />
+          </div>
+        </el-card>
         <template v-if="canManageMembers">
           <h3 class="section-title">案例成员与权限</h3>
           <el-card shadow="never" style="margin-bottom:16px">
@@ -516,12 +569,25 @@ onBeforeUnmount(() => {
         <h3 class="section-title">上传 collectDebuginfo</h3>
         <div class="toolbar">
           <input ref="debugFileInput" type="file" :disabled="!canEditCase" @change="selectDebugFile"/>
+          <el-select v-model="debugSourceDeviceType" style="width:145px" aria-label="日志来源设备">
+            <el-option label="来源未知" value="UNKNOWN" />
+            <el-option label="GW 日志" value="GW" />
+            <el-option label="AP 日志" value="AP" />
+          </el-select>
+          <el-select v-model="debugSourceDeviceRole" style="width:155px" aria-label="日志来源角色">
+            <el-option label="角色未知" value="UNKNOWN" />
+            <el-option label="主设备" value="PRIMARY" />
+            <el-option label="从设备" value="SECONDARY" />
+          </el-select>
           <el-button type="primary" :disabled="!canEditCase" @click="uploadDebug">上传并解析</el-button>
           <span class="muted">支持 ZIP/TAR/TGZ、常见日志和无后缀纯文本 collectDebuginfo；无后缀日志上传时会自动追加 .txt。</span>
         </div>
         <el-table :data="artifacts">
           <el-table-column prop="original_name" label="文件" min-width="260" />
           <el-table-column prop="kind" label="类型" width="130" />
+          <el-table-column label="组网来源" width="150">
+            <template #default="scope">{{ scope.row.source_device_type }} / {{ scope.row.source_device_role }}</template>
+          </el-table-column>
           <el-table-column prop="size_bytes" label="大小(B)" width="120" />
           <el-table-column prop="status" label="状态" width="120" />
           <el-table-column label="操作" width="250">
@@ -576,6 +642,16 @@ onBeforeUnmount(() => {
         </el-row>
       </el-tab-pane>
 
+      <el-tab-pane label="智能日志筛查" name="triage">
+        <LogTriagePanel
+          :case-id="caseId"
+          :artifacts="artifacts"
+          :can-edit="canEditCase"
+          :model-egress-approved="caseInfo.model_egress_approved"
+          @open-source="openTriageSource"
+        />
+      </el-tab-pane>
+
       <el-tab-pane label="事件与时间线" name="events">
         <el-tabs v-model="eventView">
           <el-tab-pane label="事件列表" name="table" />
@@ -593,6 +669,7 @@ onBeforeUnmount(() => {
           <el-table-column prop="timestamp_normalized" label="时间" width="190" />
           <el-table-column prop="level" label="级别" width="90"><template #default="scope"><span :class="`log-${scope.row.level.toLowerCase()}`">{{ scope.row.level }}</span></template></el-table-column>
           <el-table-column prop="module" label="模块" width="100" />
+          <el-table-column label="设备/角色" width="135"><template #default="scope">{{ scope.row.source_device_type }} / {{ scope.row.source_device_role }}</template></el-table-column>
           <el-table-column prop="component" label="组件" width="120" />
           <el-table-column prop="event_code" label="事件码" width="190" />
           <el-table-column prop="message" label="日志内容" min-width="400" show-overflow-tooltip />
@@ -635,7 +712,7 @@ onBeforeUnmount(() => {
               placement="top"
             >
               <el-card shadow="hover" style="cursor:pointer" @click="openTimelineSource(item)">
-                <div class="toolbar" style="margin-bottom:4px"><el-tag size="small">{{ item.level }}</el-tag><strong>{{ item.module }} / {{ item.component }}</strong><span class="mono">{{ item.event_code }}</span></div>
+                <div class="toolbar" style="margin-bottom:4px"><el-tag size="small">{{ item.level }}</el-tag><el-tag size="small" type="info">{{ item.source_device_type }} / {{ item.source_device_role }}</el-tag><strong>{{ item.module }} / {{ item.component }}</strong><span class="mono">{{ item.event_code }}</span></div>
                 <div>{{ item.message }}</div>
                 <div class="muted">{{ item.source_file }}:{{ item.line_start }}</div>
               </el-card>
@@ -645,6 +722,14 @@ onBeforeUnmount(() => {
       </el-tab-pane>
 
       <el-tab-pane label="综合诊断" name="diagnosis">
+        <PlanningTracePanel
+          v-if="latestAnalysisWithTrace?.agent_run_id"
+          :case-id="caseId"
+          :run-id="latestAnalysisWithTrace.agent_run_id"
+          operation="comprehensive_diagnosis"
+          title="综合诊断多轮 LLM Planning 轨迹"
+          style="margin-bottom:14px"
+        />
         <el-empty v-if="!latestAnalysis" description="请先完成日志解析并启动综合诊断" />
         <template v-else>
           <el-alert type="info" :closable="false" :title="diagnosis.summary || '诊断完成'" />
@@ -664,13 +749,13 @@ onBeforeUnmount(() => {
       </el-tab-pane>
 
       <el-tab-pane label="交互问答" name="chat">
-        <div style="height:540px;overflow:auto;border:1px solid #e5e7eb;padding:16px;background:#fff">
-          <div v-for="(msg,index) in chatMessages" :key="index" :style="{textAlign:msg.role==='user'?'right':'left',marginBottom:'16px'}">
-            <div :style="{display:'inline-block',maxWidth:'80%',padding:'10px 14px',borderRadius:'8px',background:msg.role==='user'?'#dbeafe':'#f3f4f6',textAlign:'left'}">{{ msg.content }}</div>
-            <div v-if="msg.citations?.length" class="muted" style="font-size:12px">引用：{{ msg.citations.map(x => x.evidence_id).join('、') }}</div>
-          </div>
-        </div>
-        <div class="toolbar" style="margin-top:12px"><el-input v-model="chatQuestion" type="textarea" :rows="2" :disabled="!canEditCase" placeholder="例如：为什么认为是 hostapd 问题？还缺少哪些证据？" @keyup.ctrl.enter="ask"/><el-button type="primary" :disabled="!canEditCase" @click="ask">发送</el-button></div>
+        <CaseChatPanel
+          :case-id="caseId"
+          :can-edit="canEditCase"
+          :model-egress-approved="caseInfo.model_egress_approved"
+          :latest-analysis-id="latestAnalysis?.id || ''"
+          @analysis-updated="loadAll"
+        />
       </el-tab-pane>
 
       <el-tab-pane label="代码仓库" name="code">
@@ -705,7 +790,7 @@ onBeforeUnmount(() => {
 
       <el-tab-pane label="诊断报告" name="report">
         <div class="toolbar"><el-button type="primary" :disabled="!canEditCase" @click="exportReport('pdf')">导出 PDF</el-button><el-button :disabled="!canEditCase" @click="exportReport('docx')">导出 Word</el-button><el-button :disabled="!canEditCase" @click="exportReport('html')">导出 HTML</el-button></div>
-        <iframe v-if="reportHtml" :srcdoc="reportHtml" sandbox="" style="width:100%;height:720px;border:1px solid #d1d5db;background:white" />
+        <iframe v-if="activeTab === 'report' && reportHtml" class="report-frame" title="诊断报告预览" :srcdoc="reportHtml" sandbox="allow-scripts" style="width:100%;height:720px;border:1px solid #d1d5db;background:white" />
         <el-empty v-else description="暂无报告" />
       </el-tab-pane>
     </el-tabs>
