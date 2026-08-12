@@ -1,14 +1,14 @@
 # Validation Record
 
-Last validated: 2026-08-11 on Windows 11.
+Last validated: 2026-08-12 on Windows 11.
 
 ## Current local regression result
 
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 163 passed and 1 external-service test skipped locally.
-- Backend line coverage: 77.36%, above the enforced 75% quality gate.
+- Backend tests: 168 passed and 1 external-service test skipped locally.
+- Backend line coverage: 76.55%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
 - Browser E2E: 3 complete Edge scenarios passed in an isolated runtime. The
@@ -17,14 +17,17 @@ Last validated: 2026-08-11 on Windows 11.
   covered TXT, HTML, DOCX and PDF upload/preview, draft generation,
   conversational correction, human confirmation, trace inspection, safe replay,
   encrypted Chat proxy configuration/clearing without credential exposure, and
-  extensionless Huawei log upload, full-text three-bucket LLM triage, two-round
-  comprehensive diagnosis planning, explicit stop reason and recoverable case chat.
+  extensionless Huawei log upload, full-text three-bucket LLM triage, bounded
+  two-to-eight-round comprehensive diagnosis planning, explicit stop reason,
+  recoverable case chat, GW/AP joint evidence scope and human-approved diagnosis/
+  report revision. The revised end-to-end diagnosis flow was also rerun against
+  Playwright's bundled Chromium.
   Browser console errors and warnings: zero.
 - Repository Harness: all 13 contracts passed across 19 required files, 14
-  tracked Markdown files, dependency-update targets and 24 allowlisted Workflow
+  tracked Markdown files, dependency-update targets and 28 allowlisted Workflow
   operations. The local rerun also checked two explicitly ignored private
   reference documents without adding them to Git.
-- Architecture checks: 79 Python files and 14 Vue files passed file-size,
+- Architecture checks: 81 Python files and 14 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest
   measured Python cyclomatic complexity was 45, below the limit of 50.
 - Backend dependency consistency, lock synchronization, Ruff and Python
@@ -32,11 +35,11 @@ Last validated: 2026-08-11 on Windows 11.
 - Vue TypeScript check, production Vite build and VS Code extension TypeScript
   compile: passed.
 - Python, frontend and VS Code extension dependency audits: no known vulnerabilities.
-- Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0014.
+- Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0015.
 - Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260811-193955-full\summary.json`.
+`artifacts\validation\20260812-110046-full\summary.json`.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,
@@ -84,7 +87,7 @@ Run it independently with `scripts\run_golden_evals.bat`. Golden thresholds in
 
 The production general-purpose Agentic Search path remains the deterministic,
 explainable retrieval baseline. Comprehensive diagnosis now adds a narrowly
-bounded two-to-three-round LLM planner over that baseline; it validates complete
+bounded two-to-eight-round LLM planner over that baseline; it validates complete
 method coverage, permits only bounded read-only retrieval queries, runs all model
 rounds on one event loop and falls back deterministically. The repository also
 contains a bounded typed-agent runtime with:
@@ -110,9 +113,15 @@ human review feedback into a rule, test, document or evaluation case.
   complete extracted text locally, keeps command-output-only matches and presents
   LLM-relevant, method-required and other-event buckets with source lines;
 - multi-round comprehensive diagnosis with live planning trace, validated method/
-  Pattern/evidence IDs, full method content for synthesis and deterministic fallback;
+  Pattern/evidence IDs, full method content for synthesis, a hard eight-round ceiling
+  and deterministic fallback;
+- joint GW/AP diagnosis that retrieves both device domains plus GENERAL knowledge,
+  retains primary-GW/secondary-AP artifact provenance and balances evidence across
+  uploaded logs before synthesis;
 - persistent asynchronous case chat with refresh recovery, cancellation, explicit
-  failure state and no long-lived browser request;
+  failure state and no long-lived browser request; users can request a diagnosis/
+  report revision, inspect the evidence-constrained DRAFT, and explicitly apply or
+  reject it without overwriting the prior analysis version;
 - atomic parser, graph, vector and report publication with rollback-safe failures;
 - layered knowledge taxonomy, editing, vector reindexing and hybrid retrieval;
 - GW, AP, GENERAL (通用) and legacy OTHER knowledge applicability, with GENERAL

@@ -34,7 +34,7 @@ from app.schemas import (
 from app.services.access_control import accessible_case_clause, case_permission
 from app.services.agentic_search import agentic_search
 from app.services.diagnosis import analyze_case_job, prepare_analysis_run
-from app.services.events import active_log_event_clause
+from app.services.events import active_log_event_clause, event_to_dict, timeline_event_to_dict
 from app.services.jobs import job_runner
 from app.services.memory import (
     memory_to_dict,
@@ -223,6 +223,8 @@ async def upload_artifact(
     db: Db,
     file: UploadFile = File(...),
     kind: str = Form(default="debug_log"),
+    source_device_type: str = Form(default="UNKNOWN", pattern="^(GW|AP|UNKNOWN)$"),
+    source_device_role: str = Form(default="UNKNOWN", pattern="^(PRIMARY|SECONDARY|UNKNOWN)$"),
 ) -> Artifact:
     case = db.get(Case, case_id)
     if not case:
@@ -242,6 +244,8 @@ async def upload_artifact(
     artifact = Artifact(
         id=artifact_id, case_id=case_id, kind=kind, original_name=stored_name,
         stored_path=storage.storage_key(path), sha256=digest, size_bytes=size, status="UPLOADED",
+        source_device_type=source_device_type,
+        source_device_role=source_device_role,
         metadata_json=json_dumps({
             "uploaded_original_name": uploaded_name,
             "filename_normalized": uploaded_name != stored_name,
@@ -302,17 +306,17 @@ def list_events(
     offset: int = Query(default=0, ge=0),
 ) -> list[dict]:
     query = _filtered_event_query(case_id, level, module, component, search)
-    rows = db.scalars(query.order_by(LogEvent.timestamp_normalized.asc().nullslast(), LogEvent.line_start.asc()).offset(offset).limit(limit)).all()
+    rows = db.execute(
+        query.add_columns(Artifact.source_device_type, Artifact.source_device_role)
+        .order_by(LogEvent.timestamp_normalized.asc().nullslast(), LogEvent.line_start.asc())
+        .offset(offset).limit(limit)
+    ).all()
     return [
-        {
-            "id": row.id, "artifact_id": row.artifact_id,
-            "source_file": row.source_file, "line_start": row.line_start, "line_end": row.line_end,
-            "timestamp_raw": row.timestamp_raw, "timestamp_normalized": row.timestamp_normalized,
-            "level": row.level, "module": row.module, "component": row.component,
-            "event_code": row.event_code, "message": row.message, "raw_text": row.raw_text,
-            "entities": json_loads(row.entities_json, {}), "confidence": row.confidence,
-        }
-        for row in rows
+        event_to_dict(
+            row, source_device_type, source_device_role,
+            entities=json_loads(row.entities_json, {}),
+        )
+        for row, source_device_type, source_device_role in rows
     ]
 
 
@@ -377,8 +381,8 @@ def event_stats(
 
 @router.get("/cases/{case_id}/timeline")
 def timeline(case_id: str, db: Db, limit: int = Query(default=1000, ge=1, le=5000)) -> dict:
-    rows = db.scalars(
-        select(LogEvent)
+    rows = db.execute(
+        select(LogEvent, Artifact.source_device_type, Artifact.source_device_role)
         .join(Artifact, Artifact.id == LogEvent.artifact_id)
         .where(LogEvent.case_id == case_id, active_log_event_clause())
         .order_by(LogEvent.timestamp_normalized.asc().nullslast(), LogEvent.source_file.asc(), LogEvent.line_start.asc())
@@ -392,14 +396,8 @@ def timeline(case_id: str, db: Db, limit: int = Query(default=1000, ge=1, le=500
     ).all())
     return {
         "items": [
-            {
-                "id": row.id, "artifact_id": row.artifact_id,
-                "time": row.timestamp_normalized or row.timestamp_raw,
-                "module": row.module, "component": row.component, "level": row.level,
-                "event_code": row.event_code, "message": row.message,
-                "source_file": row.source_file, "line_start": row.line_start,
-            }
-            for row in rows
+            timeline_event_to_dict(row, source_device_type, source_device_role)
+            for row, source_device_type, source_device_role in rows
         ],
         "module_counts": module_counts,
     }

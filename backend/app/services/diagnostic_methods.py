@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Case, KnowledgeDocument
-from app.services.rag import knowledge_matches_device_type
+from app.services.diagnostic_scope import knowledge_matches_joint_diagnostic_scope
 from app.services.text_files import read_text_file
 
 
@@ -113,13 +113,12 @@ def load_applicable_diagnostic_methods(
     ).all())
     result: list[DiagnosticMethodDocument] = []
     for row in rows:
-        if not knowledge_matches_device_type(row.device_type, case.device_type):
+        # A managed WLAN is one diagnostic system: an AP symptom may originate
+        # from its primary GW and a GW symptom may originate from an AP. Keep
+        # ordinary knowledge search device-scoped, but force diagnostic method
+        # coverage across both sides plus shared knowledge.
+        if not knowledge_matches_joint_diagnostic_scope(row.device_type):
             continue
-        if row.device_model and case.device_model:
-            expected = row.device_model.strip().lower()
-            actual = case.device_model.strip().lower()
-            if expected not in actual and actual not in expected:
-                continue
         content = row.content.replace("\r\n", "\n").replace("\r", "\n")
         result.append(DiagnosticMethodDocument(
             id=row.id,
@@ -157,6 +156,14 @@ def load_applicable_diagnostic_methods(
             role=role,
         ))
         known_hashes.add(content_hash)
+    case_scope = str(case.device_type or "").strip().upper()
+    result.sort(key=lambda item: (
+        0 if str(item.device_type or "").strip().upper() == case_scope else
+        1 if str(item.device_type or "").strip().upper() in {"GENERAL", "OTHER", ""} else 2,
+        item.source_type,
+        item.title,
+        item.id,
+    ))
     return result
 
 

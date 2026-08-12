@@ -159,6 +159,47 @@ def _diagnostic_response(payload: dict[str, Any]) -> str | None:
             ),
         }, ensure_ascii=False)
 
+    if "human_revision_instruction" in payload and "current_diagnosis" in payload:
+        current = payload.get("current_diagnosis")
+        revised = dict(current) if isinstance(current, dict) else {}
+        evidence = payload.get("evidence")
+        evidence_id = next((
+            str(item.get("evidence_id"))
+            for item in evidence if isinstance(item, dict) and item.get("evidence_id")
+        ), "SYNTHETIC-EVIDENCE") if isinstance(evidence, list) else "SYNTHETIC-EVIDENCE"
+        revised.update({
+            "summary": "Synthetic human-requested GW/AP joint diagnosis revision.",
+            "confirmed_facts": [{
+                "statement": "The revision remains constrained to synthetic evidence.",
+                "evidence_ids": [evidence_id],
+            }],
+            "hypotheses": [{
+                "rank": 1,
+                "title": "Synthetic cross-device authentication dependency",
+                "description": "The GW/AP relationship must be checked before attribution.",
+                "supporting_evidence": [evidence_id],
+                "contradicting_evidence": [],
+                "confidence_score": 0.76,
+                "confidence_level": "MEDIUM",
+                "priority": "P1",
+                "needs_human_review": True,
+            }],
+            "recommended_actions": [{
+                "priority": "P1",
+                "action": "Compare the primary GW configuration with the secondary AP state.",
+                "reason": "The requested revision requires cross-device verification.",
+                "expected_result": "The dependency is confirmed or excluded.",
+            }],
+            "missing_information": [],
+            "suspected_modules": ["GW", "AP", "AUTH"],
+            "limitations": ["Synthetic revision requires explicit human approval."],
+        })
+        return json.dumps({
+            "change_summary": "Added explicit GW/AP cross-device verification.",
+            "assistant_message": "A diagnosis and report revision draft is ready for human review.",
+            "revised_diagnosis": revised,
+        }, ensure_ascii=False)
+
     evidence = payload.get("evidence")
     if "deterministic_result" in payload and isinstance(evidence, list):
         evidence_ids = [

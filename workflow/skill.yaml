@@ -1,5 +1,5 @@
 name: gw-ap-debug-assistant
-version: 0.5.0
+version: 0.6.0
 description: Upload and diagnose GW/AP collectDebuginfo through the internal Debug Platform API.
 entrypoints:
   create_case:
@@ -44,6 +44,18 @@ entrypoints:
   list_case_conversation:
     method: GET
     path: /api/v1/cases/{case_id}/conversations
+  list_analysis_revisions:
+    method: GET
+    path: /api/v1/cases/{case_id}/analysis-revisions
+  get_analysis_revision:
+    method: GET
+    path: /api/v1/cases/{case_id}/analysis-revisions/{revision_id}
+  apply_analysis_revision:
+    method: POST
+    path: /api/v1/cases/{case_id}/analysis-revisions/{revision_id}/apply
+  reject_analysis_revision:
+    method: POST
+    path: /api/v1/cases/{case_id}/analysis-revisions/{revision_id}/reject
   get_case_agent_run:
     method: GET
     path: /api/v1/cases/{case_id}/agent-runs/{run_id}
@@ -84,3 +96,5 @@ constraints:
   - Agent tools are read-only by default; every write-capable tool requires explicit human approval.
   - Replay uses only a redacted content-safe payload and must not write memory or publish knowledge.
   - LLM log planning sends case context and approved method documents only; raw log scanning remains local.
+  - GW and AP are one diagnostic scope; diagnostic tools must consider both device knowledge and preserve artifact device-role provenance.
+  - Diagnosis/report revisions remain drafts until an authorized human explicitly applies or rejects them; applying creates a new immutable analysis.

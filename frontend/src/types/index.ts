@@ -87,6 +87,8 @@ export interface Artifact {
   sha256: string
   size_bytes: number
   status: string
+  source_device_type: 'GW' | 'AP' | 'UNKNOWN'
+  source_device_role: 'PRIMARY' | 'SECONDARY' | 'UNKNOWN'
   metadata_json: string
   created_at: string
 }
@@ -129,6 +131,8 @@ export interface LogEvent {
   raw_text: string
   entities: Record<string, string>
   confidence: number
+  source_device_type: 'GW' | 'AP' | 'UNKNOWN'
+  source_device_role: 'PRIMARY' | 'SECONDARY' | 'UNKNOWN'
 }
 
 export interface Analysis {
@@ -463,4 +467,28 @@ export interface ConversationMessage {
   agent_run_id?: string
   error_message?: string
   created_at: string
+}
+
+export interface AnalysisRevision {
+  id: string
+  case_id: string
+  source_analysis_id: string
+  applied_analysis_id?: string
+  source_message_id?: string
+  job_id?: string
+  agent_run_id?: string
+  status: 'QUEUED' | 'RUNNING' | 'DRAFT' | 'APPLIED' | 'REJECTED' | 'FAILED' | 'CANCELLED'
+  instruction: string
+  proposed_result: Record<string, any>
+  change_summary: string
+  validation: Record<string, any>
+  model_profile_id?: string
+  model_name?: string
+  error_message?: string
+  created_by?: string
+  reviewed_by?: string
+  review_comment?: string
+  created_at: string
+  updated_at: string
+  reviewed_at?: string
 }

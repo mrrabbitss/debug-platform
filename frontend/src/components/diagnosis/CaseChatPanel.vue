@@ -2,17 +2,21 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../../api/client'
-import type { ConversationMessage, Job } from '../../types'
+import type { AnalysisRevision, ConversationMessage, Job } from '../../types'
 import PlanningTracePanel from './PlanningTracePanel.vue'
 
 const props = defineProps<{
   caseId: string
   canEdit: boolean
   modelEgressApproved: boolean
+  latestAnalysisId: string
 }>()
+const emit = defineEmits<{ analysisUpdated: [] }>()
 
 const messages = ref<ConversationMessage[]>([])
 const question = ref('')
+const intent = ref<'ANSWER' | 'REVISE_DIAGNOSIS'>('ANSWER')
+const revisions = ref<AnalysisRevision[]>([])
 const submitting = ref(false)
 const activeJob = ref<Job | null>(null)
 const activeRunId = ref('')
@@ -23,8 +27,13 @@ const waiting = computed(() => (
 ))
 
 async function loadMessages() {
-  const { data } = await api.get<ConversationMessage[]>(`/cases/${props.caseId}/conversations`)
+  const [messagesResponse, revisionsResponse] = await Promise.all([
+    api.get<ConversationMessage[]>(`/cases/${props.caseId}/conversations`),
+    api.get<AnalysisRevision[]>(`/cases/${props.caseId}/analysis-revisions`)
+  ])
+  const data = messagesResponse.data
   messages.value = data
+  revisions.value = revisionsResponse.data
   const pending = [...data].reverse().find(item => (
     item.role === 'user' && ['QUEUED', 'RUNNING'].includes(item.status) && item.job_id
   ))
@@ -57,8 +66,12 @@ async function pollJob(jobId: string) {
 }
 
 async function loadMessagesWithoutAutopoll() {
-  const { data } = await api.get<ConversationMessage[]>(`/cases/${props.caseId}/conversations`)
-  messages.value = data
+  const [messagesResponse, revisionsResponse] = await Promise.all([
+    api.get<ConversationMessage[]>(`/cases/${props.caseId}/conversations`),
+    api.get<AnalysisRevision[]>(`/cases/${props.caseId}/analysis-revisions`)
+  ])
+  messages.value = messagesResponse.data
+  revisions.value = revisionsResponse.data
 }
 
 async function send() {
@@ -67,7 +80,11 @@ async function send() {
   if (!props.modelEgressApproved) return ElMessage.warning('请先在案例概览确认模型出站授权')
   submitting.value = true
   try {
-    const { data } = await api.post(`/cases/${props.caseId}/chat`, { question: content })
+    const { data } = await api.post(`/cases/${props.caseId}/chat`, {
+      question: content,
+      intent: intent.value,
+      source_analysis_id: intent.value === 'REVISE_DIAGNOSIS' ? props.latestAnalysisId : undefined
+    })
     question.value = ''
     activeJob.value = data.job
     activeRunId.value = data.agent_run_id
@@ -77,6 +94,17 @@ async function send() {
     ElMessage.error(error?.response?.data?.detail || error?.message || '问答提交失败')
   } finally {
     submitting.value = false
+  }
+}
+
+async function reviewRevision(revision: AnalysisRevision, action: 'apply' | 'reject') {
+  try {
+    await api.post(`/cases/${props.caseId}/analysis-revisions/${revision.id}/${action}`, { comment: '' })
+    ElMessage.success(action === 'apply' ? '修订已确认，已生成新版综合诊断和报告数据' : '修订草稿已拒绝')
+    await loadMessagesWithoutAutopoll()
+    if (action === 'apply') emit('analysisUpdated')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '修订审核失败')
   }
 }
 
@@ -127,6 +155,26 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    <el-card v-if="revisions.length" shadow="never" class="revision-list" data-testid="analysis-revisions">
+      <template #header>诊断与报告修订草稿</template>
+      <el-collapse>
+        <el-collapse-item v-for="revision in revisions" :key="revision.id" :name="revision.id">
+          <template #title>
+            <el-tag :type="revision.status === 'DRAFT' ? 'warning' : revision.status === 'APPLIED' ? 'success' : 'info'">{{ revision.status }}</el-tag>
+            <span class="revision-title">{{ revision.change_summary || revision.instruction }}</span>
+          </template>
+          <el-alert type="info" :closable="false" title="该草稿同时修改综合诊断结构和由它生成的诊断报告；确认前不会覆盖现有版本。" />
+          <h4>修订要求</h4><div class="message-content">{{ revision.instruction }}</div>
+          <h4>新版摘要</h4><div class="message-content">{{ revision.proposed_result?.summary || '尚未生成' }}</div>
+          <h4>根因候选</h4>
+          <ul><li v-for="item in revision.proposed_result?.hypotheses || []" :key="item.rank">{{ item.rank }}. {{ item.title }}（{{ item.confidence_level }}）</li></ul>
+          <div v-if="revision.status === 'DRAFT'" class="revision-actions">
+            <el-button type="primary" :disabled="!canEdit" data-testid="apply-analysis-revision" @click="reviewRevision(revision, 'apply')">确认并生成新版</el-button>
+            <el-button type="danger" :disabled="!canEdit" @click="reviewRevision(revision, 'reject')">拒绝草稿</el-button>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+    </el-card>
     <el-progress
       v-if="activeJob && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(activeJob.status)"
       :percentage="activeJob.progress"
@@ -134,12 +182,16 @@ onBeforeUnmount(() => {
       style="margin:12px 0"
     />
     <div class="chat-input">
+      <el-radio-group v-model="intent" :disabled="waiting">
+        <el-radio-button value="ANSWER">证据问答</el-radio-button>
+        <el-radio-button value="REVISE_DIAGNOSIS" :disabled="!latestAnalysisId">修订诊断与报告</el-radio-button>
+      </el-radio-group>
       <el-input
         v-model="question"
         type="textarea"
         :rows="3"
         :disabled="!canEdit || waiting"
-        placeholder="例如：为什么认为这个根因成立？有哪些反证？下一步需要补充什么证据？"
+        :placeholder="intent === 'ANSWER' ? '例如：为什么认为这个根因成立？有哪些反证？' : '例如：把 AP 离线调整为第二根因，并补充 GW 上联异常的反证和验证步骤'"
         @keyup.ctrl.enter="send"
       />
       <el-button type="primary" :loading="submitting" :disabled="!canEdit || waiting" @click="send">发送到后台</el-button>
@@ -149,8 +201,8 @@ onBeforeUnmount(() => {
       v-if="activeRunId"
       :case-id="caseId"
       :run-id="activeRunId"
-      operation="case_chat"
-      title="本轮问答轨迹"
+      :operation="intent === 'REVISE_DIAGNOSIS' ? 'diagnosis_revision' : 'case_chat'"
+      :title="intent === 'REVISE_DIAGNOSIS' ? '本轮诊断修订轨迹' : '本轮问答轨迹'"
       style="margin-top:14px"
     />
   </div>
@@ -165,4 +217,9 @@ onBeforeUnmount(() => {
 .message-content { white-space: pre-wrap; word-break: break-word; }
 .message-meta { color: #64748b; font-size: 12px; margin-top: 5px; }
 .chat-input { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; }
+.chat-input { flex-wrap: wrap; }
+.chat-input .el-textarea { flex: 1 1 520px; }
+.revision-list { margin-top: 12px; }
+.revision-title { margin-left: 8px; }
+.revision-actions { margin-top: 12px; }
 </style>

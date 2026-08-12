@@ -58,6 +58,8 @@ class ArtifactOut(ORMModel):
     sha256: str
     size_bytes: int
     status: str
+    source_device_type: str
+    source_device_role: str
     metadata_json: str
     created_at: datetime
 
@@ -377,6 +379,8 @@ class KnowledgeImportOut(BaseModel):
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=10000)
+    intent: Literal["ANSWER", "REVISE_DIAGNOSIS"] = "ANSWER"
+    source_analysis_id: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -387,6 +391,7 @@ class ChatResponse(BaseModel):
 class ChatSubmission(BaseModel):
     message_id: str
     agent_run_id: str
+    revision_id: str | None = None
     job: JobOut
 
 
@@ -401,6 +406,34 @@ class ConversationMessageOut(ORMModel):
     agent_run_id: str | None = None
     error_message: str | None = None
     created_at: datetime
+
+
+class AnalysisRevisionReview(BaseModel):
+    comment: str = Field(default="", max_length=4000)
+
+
+class AnalysisRevisionOut(BaseModel):
+    id: str
+    case_id: str
+    source_analysis_id: str
+    applied_analysis_id: str | None
+    source_message_id: str | None
+    job_id: str | None
+    agent_run_id: str | None
+    status: str
+    instruction: str
+    proposed_result: dict[str, Any] = Field(default_factory=dict)
+    change_summary: str
+    validation: dict[str, Any] = Field(default_factory=dict)
+    model_profile_id: str | None
+    model_name: str | None
+    error_message: str | None
+    created_by: str | None
+    reviewed_by: str | None
+    review_comment: str | None
+    created_at: datetime
+    updated_at: datetime
+    reviewed_at: datetime | None
 
 
 class LogTriageSubmission(BaseModel):

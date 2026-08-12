@@ -8,9 +8,17 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.utils import json_loads, new_id
-from app.diagnostic_models import LogEvidenceMatch, LogEvidenceOccurrence, LogTriageRun
-from app.models import AgentRun, Artifact, Case, ConversationMessage, LogEvent
+from app.diagnostic_models import (
+    AnalysisRevision,
+    LogEvidenceMatch,
+    LogEvidenceOccurrence,
+    LogTriageRun,
+)
+from app.models import AgentRun, AnalysisRun, Artifact, Case, ConversationMessage, LogEvent
 from app.schemas import (
+    AnalysisOut,
+    AnalysisRevisionOut,
+    AnalysisRevisionReview,
     ChatRequest,
     ChatSubmission,
     ConversationMessageOut,
@@ -18,6 +26,13 @@ from app.schemas import (
     LogTriageOut,
     LogTriageSubmission,
 )
+from app.services.analysis_revision import (
+    analysis_revision_job,
+    analysis_revision_to_dict,
+    apply_analysis_revision,
+    reject_analysis_revision,
+)
+from app.services.audit import record_audit_event
 from app.services.agent_trace import agent_run_to_dict
 from app.services.agent_trace_runtime import create_live_agent_run
 from app.services.case_chat import case_chat_job, conversation_message_to_dict
@@ -42,6 +57,15 @@ job_runner.register(
     cancellable=True,
     max_attempts=1,
     timeout_seconds=15 * 60,
+)
+job_runner.register(
+    "analysis_revision",
+    analysis_revision_job,
+    ("revision_id", "message_id", "agent_run_id"),
+    cancellable=True,
+    max_attempts=1,
+    timeout_seconds=20 * 60,
+    resource_limits={"max_input_bytes": 32 * 1024},
 )
 job_runner.register(
     "log_triage",
@@ -94,6 +118,19 @@ def submit_case_chat(
             409,
             "This case has not approved redacted evidence egress to the active Chat model",
         )
+    source_analysis: AnalysisRun | None = None
+    if payload.intent == "REVISE_DIAGNOSIS":
+        source_analysis = (
+            db.get(AnalysisRun, payload.source_analysis_id)
+            if payload.source_analysis_id else
+            db.scalars(
+                select(AnalysisRun)
+                .where(AnalysisRun.case_id == case_id, AnalysisRun.status == "COMPLETED")
+                .order_by(AnalysisRun.created_at.desc()).limit(1)
+            ).first()
+        )
+        if not source_analysis or source_analysis.case_id != case_id:
+            raise HTTPException(409, "Complete a diagnosis before requesting a revision")
     principal = getattr(request.state, "principal", {}) or {}
     message = ConversationMessage(
         id=new_id("MSG"),
@@ -103,13 +140,19 @@ def submit_case_chat(
         status="QUEUED",
     )
     db.add(message)
+    operation = "diagnosis_revision" if source_analysis else "case_chat"
     run = create_live_agent_run(
         db,
-        operation="case_chat",
+        operation=operation,
         case_id=case_id,
         resource_type="conversation_message",
         resource_id=message.id,
-        input_summary={"case_id": case_id, "question": payload.question},
+        input_summary={
+            "case_id": case_id,
+            "question": payload.question,
+            "intent": payload.intent,
+            "source_analysis_id": source_analysis.id if source_analysis else None,
+        },
         model_profile_id=str(model_info.get("profile_id") or "") or None,
         model_name=str(model_info.get("model") or "") or None,
         model_config={
@@ -119,11 +162,56 @@ def submit_case_chat(
             "config": model_info.get("config", {}),
             "proxy_url_configured": model_info.get("proxy_url_configured", False),
         },
-        prompt_version="case-chat-v3-async-evidence",
+        prompt_version=(
+            "diagnosis-revision-v1-evidence-validated"
+            if source_analysis else "case-chat-v4-joint-evidence"
+        ),
         created_by=str(principal.get("id") or "local-user"),
     )
     message.agent_run_id = run.id
     db.flush()
+    if source_analysis:
+        revision = AnalysisRevision(
+            id=new_id("AREV"),
+            case_id=case_id,
+            source_analysis_id=source_analysis.id,
+            source_message_id=message.id,
+            agent_run_id=run.id,
+            status="QUEUED",
+            instruction=payload.question,
+            model_profile_id=str(model_info.get("profile_id") or "") or None,
+            model_name=str(model_info.get("model") or "") or None,
+            created_by=str(principal.get("id") or "local-user"),
+        )
+        db.add(revision)
+        db.flush()
+        job = job_runner.submit(
+            db,
+            "analysis_revision",
+            analysis_revision_job,
+            revision.id,
+            message.id,
+            run.id,
+            input_data={
+                "case_id": case_id,
+                "revision_id": revision.id,
+                "message_id": message.id,
+                "agent_run_id": run.id,
+            },
+            deduplicate=False,
+            max_attempts=1,
+            timeout_seconds=20 * 60,
+            resource_limits={"max_input_bytes": 32 * 1024},
+        )
+        revision.job_id = job.id
+        message.job_id = job.id
+        db.commit()
+        return {
+            "message_id": message.id,
+            "agent_run_id": run.id,
+            "revision_id": revision.id,
+            "job": job,
+        }
     job = job_runner.submit(
         db,
         "case_chat",
@@ -143,7 +231,115 @@ def submit_case_chat(
     )
     message.job_id = job.id
     db.commit()
-    return {"message_id": message.id, "agent_run_id": run.id, "job": job}
+    return {
+        "message_id": message.id,
+        "agent_run_id": run.id,
+        "revision_id": None,
+        "job": job,
+    }
+
+
+@router.get(
+    "/cases/{case_id}/analysis-revisions",
+    response_model=list[AnalysisRevisionOut],
+)
+def list_analysis_revisions(case_id: str, db: Db) -> list[dict[str, Any]]:
+    if not db.get(Case, case_id):
+        raise HTTPException(404, "Case not found")
+    rows = list(db.scalars(
+        select(AnalysisRevision)
+        .where(AnalysisRevision.case_id == case_id)
+        .order_by(AnalysisRevision.created_at.desc())
+        .limit(100)
+    ).all())
+    return [analysis_revision_to_dict(row) for row in rows]
+
+
+@router.get(
+    "/cases/{case_id}/analysis-revisions/{revision_id}",
+    response_model=AnalysisRevisionOut,
+)
+def get_analysis_revision(
+    case_id: str,
+    revision_id: str,
+    db: Db,
+) -> dict[str, Any]:
+    revision = db.get(AnalysisRevision, revision_id)
+    if not revision or revision.case_id != case_id:
+        raise HTTPException(404, "Diagnosis revision not found")
+    return analysis_revision_to_dict(revision)
+
+
+@router.post(
+    "/cases/{case_id}/analysis-revisions/{revision_id}/apply",
+    response_model=AnalysisOut,
+)
+def approve_analysis_revision(
+    case_id: str,
+    revision_id: str,
+    payload: AnalysisRevisionReview,
+    request: Request,
+    db: Db,
+) -> AnalysisRun:
+    revision = db.get(AnalysisRevision, revision_id)
+    if not revision or revision.case_id != case_id:
+        raise HTTPException(404, "Diagnosis revision not found")
+    principal = getattr(request.state, "principal", {}) or {}
+    reviewer = str(principal.get("id") or "local-user")
+    try:
+        analysis = apply_analysis_revision(
+            db, revision, reviewed_by=reviewer, review_comment=payload.comment,
+        )
+        db.commit()
+        db.refresh(analysis)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    record_audit_event(
+        "diagnosis.revision.apply", actor_id=reviewer,
+        actor_type=str(principal.get("type") or "system"),
+        resource_type="analysis_revision", resource_id=revision.id,
+        case_id=case_id,
+        details={
+            "source_analysis_id": revision.source_analysis_id,
+            "applied_analysis_id": analysis.id,
+        },
+    )
+    return analysis
+
+
+@router.post(
+    "/cases/{case_id}/analysis-revisions/{revision_id}/reject",
+    response_model=AnalysisRevisionOut,
+)
+def reject_analysis_revision_endpoint(
+    case_id: str,
+    revision_id: str,
+    payload: AnalysisRevisionReview,
+    request: Request,
+    db: Db,
+) -> dict[str, Any]:
+    revision = db.get(AnalysisRevision, revision_id)
+    if not revision or revision.case_id != case_id:
+        raise HTTPException(404, "Diagnosis revision not found")
+    principal = getattr(request.state, "principal", {}) or {}
+    reviewer = str(principal.get("id") or "local-user")
+    try:
+        reject_analysis_revision(
+            revision, reviewed_by=reviewer, review_comment=payload.comment,
+        )
+        db.commit()
+        db.refresh(revision)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    record_audit_event(
+        "diagnosis.revision.reject", actor_id=reviewer,
+        actor_type=str(principal.get("type") or "system"),
+        resource_type="analysis_revision", resource_id=revision.id,
+        case_id=case_id,
+    )
+    return analysis_revision_to_dict(revision)
 
 
 @router.get(

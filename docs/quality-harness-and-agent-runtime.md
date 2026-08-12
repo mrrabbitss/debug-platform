@@ -81,7 +81,7 @@ Playwright 场景位于 [knowledge-curation.spec.ts](../frontend/e2e/knowledge-c
 
 - TXT/HTML/DOCX/PDF 文件夹上传、三类文档预览、初稿生成、对话纠错、人工确认只创建 `DRAFT`；
 - 加密 Chat 代理配置和清除，前端/API 不回显代理凭据；
-- 无后缀 Huawei 合成日志上传与解析、自动 LLM 日志规划、完整原文命中、三层证据 UI、至少两轮综合诊断、停止原因、后台案例问答和每阶段轨迹。
+- 无后缀 Huawei 合成日志上传与解析、自动 LLM 日志规划、完整原文命中、三层证据 UI、至少两轮/最多八轮综合诊断、停止原因、后台案例问答、诊断修订草稿/人工确认和每阶段轨迹。
 
 页面异常、请求失败、未捕获异常或浏览器控制台错误都会使测试失败。Fake 服务会根据请求 Schema
 返回带动态方法/evidence ID 的合法响应，因此测试同时阻断“模型编造 ID”或“只跑一轮”的退化。
@@ -136,7 +136,7 @@ Agent 运行使用 `AgentRun + AgentTraceEvent` 保存：
 
 当前通用 Agentic Search 仍以确定性 Planner 为默认安全基线；有界循环执行器已经具备测试和
 Golden 门禁，但尚未默认替换通用检索器。综合诊断是一个范围更窄的例外：它在确定性检索基线之上
-使用两至三轮 LLM Planner，只能产生有界、去重的只读检索 query，所有方法/evidence ID 都经过
+使用两至八轮 LLM Planner，只能产生有界、去重的只读检索 query，所有方法/evidence ID 都经过
 Schema 校验，失败后保留确定性诊断。多轮请求在同一异步事件循环内执行，避免复用 HTTP 客户端时
 跨事件循环导致第二轮 `APIConnectionError`。
 

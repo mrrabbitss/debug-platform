@@ -375,5 +375,30 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
     { timeout: 30_000 }
   )
   await expect(page.getByTestId('planning-trace').filter({ hasText: '本轮问答轨迹' })).toContainText('COMPLETED')
+
+  await page.locator('.el-radio-button').filter({ hasText: '修订诊断与报告' }).click()
+  await page.getByPlaceholder(/把 AP 离线调整为第二根因/).fill(
+    'Add explicit primary GW and secondary AP cross-device verification to the diagnosis and report.'
+  )
+  await page.getByRole('button', { name: '发送到后台' }).click()
+  const revisionPanel = page.getByTestId('analysis-revisions')
+  await expect(revisionPanel).toContainText('Added explicit GW/AP cross-device verification.', {
+    timeout: 30_000
+  })
+  await revisionPanel.locator('.el-collapse-item__header').first().click()
+  await expect(revisionPanel).toContainText('Synthetic human-requested GW/AP joint diagnosis revision.')
+  await revisionPanel.getByTestId('apply-analysis-revision').click()
+  await expect(revisionPanel).toContainText('APPLIED')
+
+  await page.getByRole('tab', { name: '综合诊断' }).click()
+  await expect(page.getByRole('tabpanel', { name: '综合诊断' }).getByText(
+    'Synthetic human-requested GW/AP joint diagnosis revision.'
+  )).toBeVisible()
+  await page.getByRole('tab', { name: '诊断报告' }).click()
+  const reportFrame = page.locator('iframe.report-frame')
+  await expect(reportFrame).toBeVisible()
+  await expect(reportFrame.contentFrame().getByText(
+    'Synthetic human-requested GW/AP joint diagnosis revision.'
+  )).toBeVisible()
   expect(consoleErrors).toEqual([])
 })

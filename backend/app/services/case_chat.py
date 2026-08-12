@@ -104,6 +104,7 @@ async def _generate_case_answer(
             max_hops=2,
             record_memory=False,
             execution_mode="case_chat_retrieval",
+            joint_diagnostic_scope=True,
         )
     citations = [
         {

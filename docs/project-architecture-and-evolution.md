@@ -344,6 +344,7 @@ Python 使用标准 AST，其余语言主要使用正则和花括号扫描，不
 | `RetrievalEvaluationCase` | query、预期证据/根因、模块和 Top-K |
 | `RetrievalEvaluationRun` | 配置快照、逐例结果和聚合指标 |
 | `ConversationMessage` | 案例问答和引用 |
+| `AnalysisRevision` | 交互问答产生的诊断/报告修订草稿、审批状态和版本溯源 |
 | `Report` | 报告版本、格式、路径和哈希 |
 | `AuditEvent` | 操作者、动作、资源、结果和请求上下文 |
 
@@ -358,6 +359,7 @@ erDiagram
     CASE ||--o{ ARTIFACT : contains
     CASE ||--o{ LOG_EVENT : produces
     CASE ||--o{ ANALYSIS_RUN : diagnoses
+    CASE ||--o{ ANALYSIS_REVISION : reviews
     CASE ||--o{ REPOSITORY : links
     CASE ||--o{ CONVERSATION_MESSAGE : chats
     ARTIFACT ||--o{ LOG_EVENT : parsed_into
@@ -379,6 +381,7 @@ erDiagram
     RETRIEVAL_EVALUATION_DATASET ||--o{ RETRIEVAL_EVALUATION_CASE : contains
     RETRIEVAL_EVALUATION_DATASET ||--o{ RETRIEVAL_EVALUATION_RUN : executes
     ANALYSIS_RUN ||--o{ REPORT : exports
+    ANALYSIS_RUN ||--o{ ANALYSIS_REVISION : revised_from
 ```
 
 知识分类与文档当前在数据库中通过关联表维护；上图为便于理解而简化了中间关联表。
@@ -399,7 +402,9 @@ erDiagram
 10. `0010` 大模型案例提炼会话、来源、修订和对话记录；
 11. `0011` Agent 运行与阶段轨迹；
 12. `0012` 后台任务幂等、租约、心跳、超时、资源和 dead-letter 字段；
-13. `0013` Chat 模型逐 Profile 加密代理配置。
+13. `0013` Chat 模型逐 Profile 加密代理配置；
+14. `0014` 持久化 LLM 日志规划、综合诊断规划和交互问答状态；
+15. `0015` GW/AP 日志来源设备/角色溯源，以及需人工审批的诊断与报告修订草稿。
 
 后端启动时会自动执行迁移。生产升级前仍应先备份，并禁止手工修改 `alembic_version`。
 

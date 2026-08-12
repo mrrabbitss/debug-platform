@@ -116,3 +116,50 @@ class LogEvidenceOccurrence(Base):
     relevance_score: Mapped[float] = mapped_column(Float, default=0.0)
     pattern_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AnalysisRevision(Base):
+    __tablename__ = "analysis_revisions"
+    __table_args__ = (
+        Index("ix_analysis_revisions_case_created", "case_id", "created_at"),
+        Index("ix_analysis_revisions_source_status", "source_analysis_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    case_id: Mapped[str] = mapped_column(
+        ForeignKey("cases.id", ondelete="CASCADE"), index=True
+    )
+    source_analysis_id: Mapped[str] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True
+    )
+    applied_analysis_id: Mapped[str | None] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    source_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("conversation_messages.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="QUEUED", index=True)
+    instruction: Mapped[str] = mapped_column(Text)
+    proposed_result_json: Mapped[str] = mapped_column(Text, default="{}")
+    proposed_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    change_summary: Mapped[str] = mapped_column(Text, default="")
+    validation_json: Mapped[str] = mapped_column(Text, default="{}")
+    model_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

@@ -73,7 +73,7 @@ def test_method_compiler_extracts_table_inline_and_template_patterns() -> None:
     assert template.document_version == 3
 
 
-def test_method_catalog_only_loads_published_applicable_documents(
+def test_method_catalog_loads_published_gw_ap_joint_diagnostic_documents(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -125,7 +125,8 @@ def test_method_catalog_only_loads_published_applicable_documents(
         db.commit()
         loaded = load_applicable_diagnostic_methods(db, case)
 
-    assert {item.id for item in loaded} == {"DOC-ap", "DOC-general"}
+    assert {item.id for item in loaded} == {"DOC-ap", "DOC-general", "DOC-gw"}
+    assert [item.id for item in loaded] == ["DOC-ap", "DOC-general", "DOC-gw"]
     engine.dispose()
 
 
@@ -574,6 +575,75 @@ def test_comprehensive_planner_executes_at_least_two_llm_rounds(
     assert result.public_plan["stop_reason"] == "ENOUGH_EVIDENCE"
     assert result.public_plan["method_coverage"]["all_documents_read"] is True
     assert len(result.supplemental_results) == 2
+    engine.dispose()
+
+
+def test_comprehensive_planner_stops_at_eight_round_hard_limit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'planning-eight.db'}")
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(diagnostic_methods, "_LOCAL_METHOD_FILES", {})
+    calls = 0
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+        last_usage = {}
+
+        async def generate_json(self, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return {
+                "read_document_ids": ["DOC-eight"],
+                "hypotheses": [f"hypothesis-{calls}"],
+                "checks": [{
+                    "check_id": f"check-{calls}",
+                    "method_document_id": "DOC-eight",
+                    "description": "Continue bounded verification",
+                    "evidence_needed": "More evidence",
+                    "completion_rule": "Reach hard round budget",
+                }],
+                "search_queries": [],
+                "evidence_gaps": ["More evidence required"],
+                "continue_analysis": True,
+                "stop_reason": "MORE_EVIDENCE_NEEDED",
+            }
+
+    monkeypatch.setattr(diagnostic_planning, "get_llm_provider", lambda: _Provider())
+    with factory() as db:
+        case = Case(
+            id="CASE-eight", title="Eight round planning", device_type="AP",
+            model_egress_approved=True,
+        )
+        db.add_all([
+            case,
+            KnowledgeDocument(
+                id="DOC-eight", title="GW/AP joint method", source_type="fault_tree",
+                device_type="GW", content="# Joint method", active=True,
+                review_status="ACTIVE",
+            ),
+        ])
+        db.flush()
+        run = create_live_agent_run(
+            db, operation="comprehensive_diagnosis", case_id=case.id,
+            resource_type="analysis", resource_id="RUN-eight",
+            input_summary={"case_id": case.id},
+        )
+        db.commit()
+
+    result = diagnostic_planning.run_diagnostic_planning(
+        _JobContext(), case=case, agent_run_id=run.id,
+        baseline_search={"summary": {}, "results": []}, session_factory=factory,
+    )
+
+    assert calls == 8
+    assert len(result.public_plan["rounds"]) == 8
+    assert result.public_plan["stop_reason"] == "MAX_PLANNING_ROUNDS"
+    assert result.public_plan["method_coverage"]["all_documents_read"] is True
     engine.dispose()
 
 

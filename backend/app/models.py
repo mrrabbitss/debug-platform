@@ -81,6 +81,8 @@ class Artifact(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(32), default="UPLOADED")
+    source_device_type: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
+    source_device_role: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     active_parse_run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

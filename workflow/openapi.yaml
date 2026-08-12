@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: GW/AP Debug Platform Workflow API
-  version: 0.5.0
+  version: 0.6.0
 servers:
   - url: http://localhost:8000/api/v1
 paths:
@@ -41,6 +41,8 @@ paths:
               properties:
                 file: { type: string, format: binary }
                 kind: { type: string, default: debug_log }
+                source_device_type: { type: string, enum: [GW, AP, UNKNOWN], default: UNKNOWN }
+                source_device_role: { type: string, enum: [PRIMARY, SECONDARY, UNKNOWN], default: UNKNOWN }
       responses:
         '200': { description: Artifact stored locally }
   /cases/{case_id}/artifacts/{artifact_id}/parse:
@@ -140,6 +142,8 @@ paths:
               required: [question]
               properties:
                 question: { type: string }
+                intent: { type: string, enum: [ANSWER, REVISE_DIAGNOSIS], default: ANSWER }
+                source_analysis_id: { type: string }
       responses:
         '202': { description: Recoverable background chat job accepted }
   /cases/{case_id}/conversations:
@@ -152,6 +156,74 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Persisted queued, running, completed or failed messages }
+  /cases/{case_id}/analysis-revisions:
+    get:
+      operationId: listAnalysisRevisions
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Diagnosis/report revision drafts and review states }
+  /cases/{case_id}/analysis-revisions/{revision_id}:
+    get:
+      operationId: getAnalysisRevision
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: revision_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Evidence-validated revision draft }
+  /cases/{case_id}/analysis-revisions/{revision_id}/apply:
+    post:
+      operationId: applyAnalysisRevision
+      description: Human approval creates a new immutable analysis and report source.
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: revision_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment: { type: string }
+      responses:
+        '200': { description: New approved diagnosis version }
+        '409': { description: Draft state or source-version conflict }
+  /cases/{case_id}/analysis-revisions/{revision_id}/reject:
+    post:
+      operationId: rejectAnalysisRevision
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: revision_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment: { type: string }
+      responses:
+        '200': { description: Revision draft rejected without changing diagnosis }
   /cases/{case_id}/agent-runs/{run_id}:
     get:
       operationId: getCaseAgentRun
