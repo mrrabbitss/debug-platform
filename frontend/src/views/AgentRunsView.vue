@@ -16,6 +16,18 @@ const score = computed(() => {
   return typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '—'
 })
 
+function tokenUsage(run: AgentRun) {
+  const input = Number(run.usage.input_tokens || 0) || (run.events || [])
+    .reduce((sum, event) => sum + Number(event.input_tokens || 0), 0)
+  const output = Number(run.usage.output_tokens || 0) || (run.events || [])
+    .reduce((sum, event) => sum + Number(event.output_tokens || 0), 0)
+  return {
+    input,
+    output,
+    total: Number(run.usage.total_tokens || 0) || input + output
+  }
+}
+
 function errorMessage(error: any, fallback: string) {
   return error?.response?.data?.detail || error?.message || fallback
 }
@@ -129,7 +141,7 @@ onMounted(loadRuns)
           <el-descriptions-item label="评分">{{ score }}</el-descriptions-item>
           <el-descriptions-item label="模型">{{ selected.model_name || '确定性执行器' }}</el-descriptions-item>
           <el-descriptions-item label="Prompt 版本">{{ selected.prompt_version || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="Tokens">{{ selected.usage.total_tokens }}</el-descriptions-item>
+          <el-descriptions-item label="Tokens">{{ tokenUsage(selected).total }}（输入 {{ tokenUsage(selected).input }} / 输出 {{ tokenUsage(selected).output }}）</el-descriptions-item>
           <el-descriptions-item label="输入摘要哈希"><span class="mono">{{ shortHash(selected.input_summary_hash) }}</span></el-descriptions-item>
           <el-descriptions-item label="输出摘要哈希"><span class="mono">{{ shortHash(selected.output_summary_hash) }}</span></el-descriptions-item>
           <el-descriptions-item label="证据数">{{ selected.evidence_ids.length }}</el-descriptions-item>
@@ -140,6 +152,7 @@ onMounted(loadRuns)
           <el-table-column prop="tool_name" label="工具" min-width="160" />
           <el-table-column prop="status" label="状态" width="110" />
           <el-table-column prop="duration_ms" label="耗时(ms)" width="100" />
+          <el-table-column label="Tokens" width="150"><template #default="scope">{{ scope.row.input_tokens }}/{{ scope.row.output_tokens }}</template></el-table-column>
           <el-table-column prop="retry_count" label="重试" width="70" />
           <el-table-column label="证据" min-width="170"><template #default="scope">{{ scope.row.evidence_ids.join(', ') || '—' }}</template></el-table-column>
         </el-table>

@@ -140,6 +140,12 @@ def _diagnostic_response(payload: dict[str, Any]) -> str | None:
 
     if "round" in payload and "ranked_log_evidence" in payload:
         round_number = max(1, int(payload.get("round") or 1))
+        assessments = [{
+            "method_document_id": document_id,
+            "relevance": "POSSIBLY_RELEVANT",
+            "rationale": "Synthetic method remains applicable until evidence excludes it",
+            "matched_signals": ["synthetic issue"],
+        } for document_id in method_ids]
         checks = [{
             "check_id": f"synthetic-check-{round_number}-{index}",
             "method_document_id": document_id,
@@ -149,9 +155,16 @@ def _diagnostic_response(payload: dict[str, Any]) -> str | None:
         } for index, document_id in enumerate(method_ids, start=1)]
         return json.dumps({
             "read_document_ids": method_ids,
+            "method_assessments": assessments,
             "hypotheses": ["Synthetic shared-key mismatch"],
             "checks": checks,
-            "search_queries": [],
+            "search_queries": [{
+                "query_id": f"synthetic-query-{round_number}",
+                "query": f"synthetic diagnostic evidence round {round_number}",
+                "method_document_ids": method_ids,
+                "rationale": "Verify the synthetic method checks",
+                "expected_evidence": "Synthetic support or contradiction",
+            }] if method_ids else [],
             "evidence_gaps": [],
             "continue_analysis": round_number < 2,
             "stop_reason": (

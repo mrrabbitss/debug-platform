@@ -2,14 +2,22 @@ import asyncio
 import re
 from pathlib import Path
 
-from sqlalchemy import create_engine
+import pytest
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
 from app.core.utils import json_dumps, json_loads
 from app.diagnostic_models import LogTriageRun
-from app.models import Artifact, Case, KnowledgeDocument, LogEvent
-from app.services import diagnosis, diagnostic_methods, diagnostic_planning, log_triage
+from app.models import AgentRun, AgentTraceEvent, Artifact, Case, KnowledgeDocument, LogEvent
+from app.services import (
+    diagnosis,
+    diagnostic_methods,
+    diagnostic_planning,
+    diagnostic_planning_contract,
+    log_triage,
+    log_triage_planning,
+)
 from app.services.diagnosis import _evidence_for_persistence
 from app.services.agent_trace_runtime import create_live_agent_run
 from app.services.diagnostic_methods import (
@@ -71,6 +79,31 @@ def test_method_compiler_extracts_table_inline_and_template_patterns() -> None:
     assert re.search(template.regex, "send MID 545 failed for [radio-1]", re.IGNORECASE)
     assert template.document_id == "DOC-method"
     assert template.document_version == 3
+
+
+def test_method_compiler_normalizes_markdown_and_symbolic_placeholders() -> None:
+    document = _method("""# AP offline method
+
+## 日志关键词
+
+| 日志格式 | 说明 |
+| --- | --- |
+| **`SyntheticLeave APInst offline:%u`** | AP 离线 |
+| `RefreshSyntheticTopo APInstId: X link failed` | 链路失败 |
+| `AddSyntheticTopo, APInst: X, Parent: Y` | 拓扑变化 |
+""")
+
+    patterns = compile_diagnostic_patterns([document])
+    texts = {item.text for item in patterns}
+
+    assert "SyntheticLeave APInst offline:%u" in texts
+    assert not any("**" in item or "`" in item or item.startswith("|") for item in texts)
+    leave = next(item for item in patterns if item.text.startswith("SyntheticLeave"))
+    refresh = next(item for item in patterns if item.text.startswith("RefreshSyntheticTopo"))
+    topology = next(item for item in patterns if item.text.startswith("AddSyntheticTopo"))
+    assert re.search(leave.regex, "SyntheticLeave APInst offline:12", re.IGNORECASE)
+    assert re.search(refresh.regex, "RefreshSyntheticTopo APInstId: 12 link failed", re.IGNORECASE)
+    assert re.search(topology.regex, "AddSyntheticTopo, APInst: 12, Parent: 3", re.IGNORECASE)
 
 
 def test_method_catalog_loads_published_gw_ap_joint_diagnostic_documents(
@@ -393,6 +426,248 @@ def test_llm_log_plan_must_attest_every_method_document(monkeypatch) -> None:
     assert plan["read_document_ids"] == ["DOC-1"]
     assert metadata["fallback"] is True
     assert metadata["error_type"] == "ValueError"
+    assert metadata["usage"] == {
+        "prompt_tokens": 200,
+        "completion_tokens": 40,
+        "total_tokens": 240,
+    }
+    assert metadata["duration_ms"] == 10
+    assert metadata["retry_count"] == 1
+
+
+def test_log_plan_falls_back_when_provider_cannot_be_created(monkeypatch) -> None:
+    documents = [_method("## 日志关键词\n- `Heartbeat timeout`", document_id="DOC-provider")]
+    patterns = compile_diagnostic_patterns(documents)
+    case = Case(id="CASE-provider", title="heartbeat", device_type="AP")
+
+    def fail_provider():
+        raise log_triage_planning.LLMError("API key is required")
+
+    monkeypatch.setattr(log_triage, "get_llm_provider", fail_provider)
+    plan, metadata = log_triage._safe_plan(case, documents, patterns)
+
+    assert plan["planner_mode"] == "deterministic_fallback"
+    assert metadata["fallback"] is True
+    assert metadata["error_type"] == "LLMError"
+    assert metadata["usage"] == {}
+
+
+def test_llm_log_plan_corrects_invalid_first_response_and_aggregates_usage() -> None:
+    documents = [_method("## 日志关键词\n- `Synthetic offline marker`", document_id="DOC-retry")]
+    patterns = compile_diagnostic_patterns(documents)
+    case = Case(id="CASE-retry", title="AP频繁离线", device_type="AP")
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+        last_usage: dict[str, int] = {}
+        last_duration_ms = 0
+
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def generate_json(self, _system, user, **_kwargs):
+            self.calls.append(json_loads(user, {}))
+            call_number = len(self.calls)
+            self.last_usage = {
+                "prompt_tokens": 10 + call_number,
+                "completion_tokens": 2 + call_number,
+            }
+            self.last_duration_ms = 4 + call_number
+            return {
+                "read_document_ids": [] if call_number == 1 else ["DOC-retry"],
+                "selected_pattern_ids": [patterns[0].id],
+                "additional_keywords": ["offline"],
+                "screening_steps": ["scan"],
+            }
+
+    provider = _Provider()
+    plan, metadata = asyncio.run(log_triage._plan_with_model(
+        case, documents, patterns, provider=provider,
+    ))
+
+    assert len(provider.calls) == 2
+    assert provider.calls[1]["correction"]["required_read_document_ids"] == ["DOC-retry"]
+    assert plan["planner_mode"] == "llm"
+    assert plan["planning_attempts"] == 2
+    assert metadata["retry_count"] == 1
+    assert metadata["usage"] == {
+        "prompt_tokens": 23,
+        "completion_tokens": 7,
+        "total_tokens": 30,
+    }
+    assert metadata["duration_ms"] == 11
+
+
+def test_llm_log_plan_bounds_and_deduplicates_selected_searchers() -> None:
+    content = "## 日志关键词\n" + "\n".join(
+        f"- `SyntheticOfflineMarker{index:03d}`" for index in range(65)
+    )
+    documents = [_method(content, document_id="DOC-bounded")]
+    patterns = compile_diagnostic_patterns(documents)
+    case = Case(id="CASE-bounded", title="AP频繁离线", device_type="AP")
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+        last_usage = {"prompt_tokens": 90, "completion_tokens": 10}
+        last_duration_ms = 5
+
+        async def generate_json(self, *_args, **_kwargs):
+            return {
+                "read_document_ids": ["DOC-bounded"],
+                "selected_pattern_ids": [item.id for item in patterns],
+                "additional_keywords": [
+                    {
+                        "keyword": f"extra-{index % 35}",
+                        "reason": "synthetic relevance",
+                        "relevance": 0.9,
+                    }
+                    for index in range(40)
+                ],
+                "screening_steps": ["scan"],
+            }
+
+    plan, metadata = asyncio.run(log_triage._plan_with_model(
+        case, documents, patterns, provider=_Provider(),
+    ))
+
+    assert len(patterns) == 65
+    assert len(plan["selected_pattern_ids"]) == log_triage.MAX_LLM_SELECTED_PATTERNS
+    assert plan["selected_pattern_candidate_count"] == 65
+    assert plan["selected_pattern_selection_truncated"] is True
+    assert len(plan["additional_keywords"]) == log_triage.MAX_LLM_ADDITIONAL_KEYWORDS
+    assert plan["additional_keyword_candidate_count"] == 35
+    assert plan["additional_keyword_selection_truncated"] is True
+    assert metadata["usage"]["total_tokens"] == 100
+
+
+def test_glm_shaped_log_plan_is_normalized_before_validation(monkeypatch) -> None:
+    documents = [_method(
+        "## 日志关键词\n- `SyntheticTopo, apInst=[X] Status=[0]`\n"
+        "- `SyntheticLeave APInst offline:%u`",
+        document_id="DOC-glm",
+    )]
+    patterns = compile_diagnostic_patterns(documents)
+    selected = next(item for item in patterns if item.text.startswith("SyntheticTopo,"))
+    case = Case(id="CASE-glm", title="AP频繁离线", device_type="AP")
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+        last_usage = {"prompt_tokens": 27551, "completion_tokens": 3423, "total_tokens": 30974}
+        last_duration_ms = 34260
+
+        async def generate_json(self, *args, **kwargs):
+            return {
+                "read_document_ids": ["DOC-glm"],
+                "selected_pattern_ids": [selected.id],
+                "additional_keywords": ["offline", "Status=[0]"],
+                "plan": "检查拓扑状态、心跳和离线事件。",
+            }
+
+    monkeypatch.setattr(log_triage, "get_llm_provider", lambda: _Provider())
+    plan, metadata = asyncio.run(log_triage._plan_with_model(case, documents, patterns))
+
+    assert plan["planner_mode"] == "llm"
+    assert plan["selected_pattern_ids"] == [selected.id]
+    assert [item["keyword"] for item in plan["additional_keywords"]] == [
+        "offline", "Status=[0]",
+    ]
+    assert plan["screening_steps"] == ["检查拓扑状态、心跳和离线事件。"]
+    assert plan["rationale"] == "检查拓扑状态、心跳和离线事件。"
+    assert metadata["usage"]["total_tokens"] == 30974
+
+
+def test_glm_schema_name_envelope_is_unwrapped_without_retry() -> None:
+    documents = [_method(
+        "## 日志关键词\n- `Synthetic offline marker`",
+        document_id="DOC-envelope",
+    )]
+    patterns = compile_diagnostic_patterns(documents)
+    case = Case(id="CASE-envelope", title="AP频繁离线", device_type="AP")
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+        last_usage = {"prompt_tokens": 21, "completion_tokens": 8}
+        last_duration_ms = 17
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_json(self, *_args, **_kwargs):
+            self.calls += 1
+            return {"log_triage_plan": {
+                "read_document_ids": ["DOC-envelope"],
+                "selected_pattern_ids": [patterns[0].id],
+                "additional_keywords": ["offline"],
+                "screening_steps": ["scan"],
+            }}
+
+    provider = _Provider()
+    plan, metadata = asyncio.run(log_triage._plan_with_model(
+        case, documents, patterns, provider=provider,
+    ))
+
+    assert provider.calls == 1
+    assert plan["selected_pattern_ids"] == [patterns[0].id]
+    assert metadata["retry_count"] == 0
+    assert metadata["usage"]["total_tokens"] == 29
+
+
+def test_ap_offline_fallback_selects_clean_matchable_method_patterns() -> None:
+    documents = [_method("""## 日志关键词
+
+| 日志格式 | 说明 |
+| --- | --- |
+| **`SyntheticLeave APInst offline:%u`** | AP 离线 |
+| `[Abnormal] curTime[%u], iAdvrTimeOut[%d], lastEventTime[%u]` | 心跳超时 |
+| `SyntheticTopo, apInst=[X] Status=[0]` | 拓扑离线 |
+""")]
+    patterns = compile_diagnostic_patterns(documents)
+    case = Case(id="CASE-offline", title="AP频繁离线", description="AP频繁离线", device_type="AP")
+
+    plan = log_triage._deterministic_plan(case, documents, patterns, reason="test")
+    selected = {
+        pattern.id: pattern
+        for pattern in patterns
+        if pattern.id in plan["selected_pattern_ids"]
+    }
+
+    assert selected
+    assert all("|" not in item.text and "**" not in item.text and "`" not in item.text for item in selected.values())
+    samples = [
+        "SyntheticLeave APInst offline:12",
+        "[Abnormal] curTime[1234], iAdvrTimeOut[250], lastEventTime[900]",
+        "SyntheticTopo, apInst=[12] Status=[0]",
+    ]
+    assert all(
+        any(re.search(pattern.regex, sample, re.IGNORECASE) for pattern in selected.values())
+        for sample in samples
+    )
+
+
+def test_compiled_searchers_preserve_model_relevance_order() -> None:
+    documents = [_method(
+        "## 日志关键词\n- `First marker`\n- `Second marker`\n- `Third marker`"
+    )]
+    patterns = compile_diagnostic_patterns(documents)
+    plan = {
+        "selected_pattern_ids": [patterns[2].id, patterns[0].id, patterns[1].id],
+        "additional_keywords": [],
+    }
+
+    searchers = {
+        item["id"]: item for item in log_triage._compiled_searchers(patterns, plan)
+    }
+
+    assert searchers[patterns[2].id]["score"] > searchers[patterns[0].id]["score"]
+    assert searchers[patterns[0].id]["score"] > searchers[patterns[1].id]["score"]
 
 
 def test_glm_planner_receives_complete_method_content(monkeypatch) -> None:
@@ -485,6 +760,12 @@ def test_comprehensive_planner_executes_at_least_two_llm_rounds(
             calls += 1
             return {
                 "read_document_ids": ["DOC-planning"],
+                "method_assessments": [{
+                    "method_document_id": "DOC-planning",
+                    "relevance": "RELEVANT",
+                    "rationale": "The synthetic case matches the method",
+                    "matched_signals": ["synthetic"],
+                }],
                 "hypotheses": [f"hypothesis-{calls}"],
                 "checks": [{
                     "check_id": f"check-{calls}",
@@ -493,7 +774,13 @@ def test_comprehensive_planner_executes_at_least_two_llm_rounds(
                     "evidence_needed": "Synthetic match",
                     "completion_rule": "Evidence is present or absent",
                 }],
-                "search_queries": [f"synthetic query {calls}"],
+                "search_queries": [{
+                    "query_id": f"query-{calls}",
+                    "query": f"synthetic query {calls}",
+                    "method_document_ids": ["DOC-planning"],
+                    "rationale": "Verify the synthetic method",
+                    "expected_evidence": "Synthetic evidence",
+                }],
                 "evidence_gaps": [],
                 "continue_analysis": calls < 2,
                 "stop_reason": "ENOUGH_EVIDENCE" if calls >= 2 else "MORE_EVIDENCE_NEEDED",
@@ -578,6 +865,267 @@ def test_comprehensive_planner_executes_at_least_two_llm_rounds(
     engine.dispose()
 
 
+def test_comprehensive_planner_records_usage_when_round_validation_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'planning-invalid.db'}")
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(diagnostic_methods, "_LOCAL_METHOD_FILES", {})
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+        last_usage = {"prompt_tokens": 31, "completion_tokens": 9, "total_tokens": 40}
+
+        async def generate_json(self, *args, **kwargs):
+            return {"read_document_ids": [], "checks": "not-a-list"}
+
+    monkeypatch.setattr(diagnostic_planning, "get_llm_provider", lambda: _Provider())
+    with factory() as db:
+        case = Case(
+            id="CASE-invalid-plan", title="Invalid round", device_type="AP",
+            model_egress_approved=True,
+        )
+        db.add_all([
+            case,
+            KnowledgeDocument(
+                id="DOC-invalid-plan", title="Joint method", source_type="fault_tree",
+                device_type="GW", content="# Joint method", active=True,
+                review_status="ACTIVE",
+            ),
+        ])
+        db.flush()
+        run = create_live_agent_run(
+            db, operation="comprehensive_diagnosis", case_id=case.id,
+            resource_type="analysis", resource_id="RUN-invalid-plan",
+            input_summary={"case_id": case.id},
+        )
+        db.commit()
+
+    result = diagnostic_planning.run_diagnostic_planning(
+        _JobContext(), case=case, agent_run_id=run.id,
+        baseline_search={"summary": {}, "results": []}, session_factory=factory,
+    )
+
+    with factory() as db:
+        persisted = db.get(AgentRun, run.id)
+        failed = db.scalars(
+            select(AgentTraceEvent).where(
+                AgentTraceEvent.run_id == run.id,
+                AgentTraceEvent.stage == "llm_planning_round_1",
+            )
+        ).one()
+    assert result.public_plan["planner_mode"] == "deterministic_fallback"
+    assert failed.status == "FAILED"
+    assert failed.input_tokens == 62
+    assert failed.output_tokens == 18
+    assert failed.retry_count == 1
+    assert persisted.total_tokens == 80
+    engine.dispose()
+
+
+def test_comprehensive_planner_normalizes_glm_rich_objects_and_retries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'planning-glm-shape.db'}")
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(diagnostic_methods, "_LOCAL_METHOD_FILES", {})
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.last_usage = {}
+            self.last_duration_ms = 0
+
+        async def generate_json(self, _system, user, **_kwargs):
+            payload = json_loads(user, {})
+            self.calls.append(payload)
+            call_number = len(self.calls)
+            self.last_usage = {
+                "prompt_tokens": 100 * call_number,
+                "completion_tokens": 20 * call_number,
+            }
+            self.last_duration_ms = 10 * call_number
+            result = {
+                "read_document_ids": ["DOC-glm-tree"],
+                "hypotheses": [{
+                    "id": "H1",
+                    "description": "AP offline may follow heartbeat timeout",
+                }],
+                "checks": [{
+                    "id": "C1",
+                    "document_id": "DOC-glm-tree",
+                    "description": "Inspect heartbeat and offline transitions",
+                    "expected_evidence": "Matching AP/GW log evidence",
+                    "success_criteria": "Record support, contradiction, or a gap",
+                }],
+                "search_queries": [{
+                    "id": "SQ1",
+                    "query": "AP offline heartbeat timeout topology state",
+                    "document_ids": ["DOC-glm-tree"],
+                    "purpose": "Verify the fault-tree branch",
+                    "expected_result": "Relevant evidence",
+                }],
+                "evidence_gaps": [{"description": "No uploaded log in this test"}],
+                "continue_analysis": False,
+                "stop_reason": "ENOUGH_EVIDENCE",
+            }
+            if call_number == 1:
+                return result
+            result["method_assessments"] = [{
+                "document_id": "DOC-glm-tree",
+                "relevance": "相关",
+                "reason": "The case symptom directly overlaps the fault tree",
+                "signals": [{"text": "AP offline"}],
+            }]
+            return result
+
+    provider = _Provider()
+    with factory() as db:
+        case = Case(
+            id="CASE-glm-shape", title="AP频繁离线", description="AP频繁离线",
+            device_type="AP", model_egress_approved=True,
+        )
+        db.add_all([
+            case,
+            KnowledgeDocument(
+                id="DOC-glm-tree", title="AP offline fault tree",
+                source_type="fault_tree", device_type="GW",
+                content="# AP频繁离线\n\n检查 heartbeat timeout 与拓扑状态。",
+                active=True, review_status="ACTIVE",
+            ),
+        ])
+        db.flush()
+        run = create_live_agent_run(
+            db, operation="comprehensive_diagnosis", case_id=case.id,
+            resource_type="analysis", resource_id="RUN-glm-shape",
+            input_summary={"case_id": case.id},
+        )
+        db.commit()
+
+    monkeypatch.setattr(diagnostic_planning, "get_llm_provider", lambda: provider)
+    monkeypatch.setattr(diagnostic_planning, "agentic_search", lambda *args, **kwargs: {
+        "run_id": "ARUN-glm-search",
+        "plan": {"selected_modules": ["knowledge"]},
+        "summary": {"knowledge_scope": "GW_AP_JOINT"},
+        "results": [],
+        "paths": [],
+    })
+    result = diagnostic_planning.run_diagnostic_planning(
+        _JobContext(), case=case, agent_run_id=run.id,
+        baseline_search={"summary": {}, "results": []}, session_factory=factory,
+    )
+
+    assert len(provider.calls) == 3
+    assert provider.calls[1]["correction"]["symptom_relevant_fault_tree_ids"] == [
+        "DOC-glm-tree",
+    ]
+    first_round = result.public_plan["rounds"][0]
+    assert first_round["planning_attempts"] == 2
+    assert first_round["method_assessments"][0]["relevance"] == "RELEVANT"
+    assert first_round["checks"][0]["method_document_id"] == "DOC-glm-tree"
+    assert first_round["search_queries"][0]["method_document_ids"] == [
+        "DOC-glm-tree",
+    ]
+    assert result.public_plan["search_query_count"] == 1
+    assert result.public_plan["planner_mode"] == "llm_multiround"
+    with factory() as db:
+        first_trace = db.scalars(select(AgentTraceEvent).where(
+            AgentTraceEvent.run_id == run.id,
+            AgentTraceEvent.stage == "llm_planning_round_1",
+        )).one()
+        search_trace = db.scalars(select(AgentTraceEvent).where(
+            AgentTraceEvent.run_id == run.id,
+            AgentTraceEvent.stage == "execute_planned_search",
+        )).one()
+    assert first_trace.retry_count == 1
+    assert first_trace.input_tokens == 300
+    assert first_trace.output_tokens == 60
+    assert search_trace.status == "COMPLETED"
+    engine.dispose()
+
+
+def test_comprehensive_planner_rejects_symptom_matching_tree_as_not_relevant() -> None:
+    case = Case(
+        id="CASE-relevance-gate", title="AP频繁离线",
+        description="AP频繁离线", device_type="AP",
+    )
+    method = DiagnosticMethodDocument(
+        id="DOC-relevance-gate", title="AP offline tree", source_type="fault_tree",
+        version=1, device_type="AP", module=None,
+        content="# AP频繁离线\n检查离线与心跳。", content_sha256="c" * 64,
+        role="FAULT_TREE",
+    )
+    parsed = diagnostic_planning_contract.PlanningRound.model_validate({
+        "read_document_ids": [method.id],
+        "method_assessments": [{
+            "method_document_id": method.id,
+            "relevance": "NOT_RELEVANT",
+            "rationale": "No relation",
+        }],
+        "hypotheses": [],
+        "checks": [],
+        "search_queries": [],
+        "evidence_gaps": [],
+    })
+
+    with pytest.raises(ValueError, match="overlaps the case symptom"):
+        diagnostic_planning_contract.validate_planning_round(
+            parsed, round_number=1, case=case, methods=[method],
+        )
+
+
+def test_first_round_requires_search_coverage_for_each_relevant_method() -> None:
+    case = Case(
+        id="CASE-search-coverage", title="AP frequent offline", device_type="AP",
+    )
+    methods = [
+        DiagnosticMethodDocument(
+            id=f"DOC-search-{index}", title=f"Method {index}",
+            source_type="analysis_method", version=1, device_type="AP",
+            module=None, content=f"Method body {index}",
+            content_sha256=str(index) * 64, role="LOG_ANALYSIS_METHOD",
+        )
+        for index in (1, 2)
+    ]
+    parsed = diagnostic_planning_contract.PlanningRound.model_validate({
+        "read_document_ids": [method.id for method in methods],
+        "method_assessments": [{
+            "method_document_id": method.id,
+            "relevance": "RELEVANT",
+            "rationale": "Applicable",
+        } for method in methods],
+        "checks": [{
+            "check_id": f"check-{index}",
+            "method_document_id": method.id,
+            "description": "Check the method",
+            "evidence_needed": "Evidence",
+            "completion_rule": "Support or exclude",
+        } for index, method in enumerate(methods, start=1)],
+        "search_queries": [{
+            "query_id": "query-one",
+            "query": "search method one",
+            "method_document_ids": [methods[0].id],
+            "rationale": "Verify method one",
+            "expected_evidence": "Evidence",
+        }],
+    })
+
+    with pytest.raises(ValueError, match="Every relevant method"):
+        diagnostic_planning_contract.validate_planning_round(
+            parsed, round_number=1, case=case, methods=methods,
+        )
+
+
 def test_comprehensive_planner_stops_at_eight_round_hard_limit(
     tmp_path: Path,
     monkeypatch,
@@ -599,6 +1147,12 @@ def test_comprehensive_planner_stops_at_eight_round_hard_limit(
             calls += 1
             return {
                 "read_document_ids": ["DOC-eight"],
+                "method_assessments": [{
+                    "method_document_id": "DOC-eight",
+                    "relevance": "POSSIBLY_RELEVANT",
+                    "rationale": "Continue bounded verification",
+                    "matched_signals": [],
+                }],
                 "hypotheses": [f"hypothesis-{calls}"],
                 "checks": [{
                     "check_id": f"check-{calls}",
@@ -607,7 +1161,13 @@ def test_comprehensive_planner_stops_at_eight_round_hard_limit(
                     "evidence_needed": "More evidence",
                     "completion_rule": "Reach hard round budget",
                 }],
-                "search_queries": [],
+                "search_queries": [{
+                    "query_id": f"query-{calls}",
+                    "query": f"bounded verification query {calls}",
+                    "method_document_ids": ["DOC-eight"],
+                    "rationale": "Continue bounded verification",
+                    "expected_evidence": "More evidence",
+                }],
                 "evidence_gaps": ["More evidence required"],
                 "continue_analysis": True,
                 "stop_reason": "MORE_EVIDENCE_NEEDED",

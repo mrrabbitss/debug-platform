@@ -1,14 +1,14 @@
 # Validation Record
 
-Last validated: 2026-08-12 on Windows 11.
+Last validated: 2026-08-13 on Windows 11.
 
 ## Current local regression result
 
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 168 passed and 1 external-service test skipped locally.
-- Backend line coverage: 76.55%, above the enforced 75% quality gate.
+- Backend tests: 184 passed and 1 external-service test skipped locally.
+- Backend line coverage: 77.04%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
 - Browser E2E: 3 complete Edge scenarios passed in an isolated runtime. The
@@ -21,15 +21,18 @@ Last validated: 2026-08-12 on Windows 11.
   two-to-eight-round comprehensive diagnosis planning, explicit stop reason,
   recoverable case chat, GW/AP joint evidence scope and human-approved diagnosis/
   report revision. The revised end-to-end diagnosis flow was also rerun against
-  Playwright's bundled Chromium.
+  Playwright's bundled Chromium. The Edge flow now explicitly asserts that log
+  planning and comprehensive-diagnosis traces render non-zero total/input/output
+  Token counts from the Fake model usage response.
   Browser console errors and warnings: zero.
 - Repository Harness: all 13 contracts passed across 19 required files, 14
   tracked Markdown files, dependency-update targets and 28 allowlisted Workflow
-  operations. The local rerun also checked two explicitly ignored private
-  reference documents without adding them to Git.
-- Architecture checks: 81 Python files and 14 Vue files passed file-size,
+  operations. The local rerun checked 16 Markdown files in total because it also
+  included two explicitly ignored private reference documents without adding them
+  to Git.
+- Architecture checks: 82 Python files and 14 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest
-  measured Python cyclomatic complexity was 45, below the limit of 50.
+  measured Python cyclomatic complexity was 46, below the limit of 50.
 - Backend dependency consistency, lock synchronization, Ruff and Python
   compilation: passed.
 - Vue TypeScript check, production Vite build and VS Code extension TypeScript
@@ -39,7 +42,31 @@ Last validated: 2026-08-12 on Windows 11.
 - Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260812-110046-full\summary.json`.
+`artifacts\validation\20260813-161439-full\summary.json` (18/18 stages passed in
+344.78 seconds).
+
+Approved external GLM-5.2 validation was also performed without persisting the
+credential or private method bodies. For the synthetic symptom “AP频繁离线”, the
+current adapter completed in one request, attested both local method document IDs,
+selected 60 of 157 compiled method patterns, added 30 method-backed literal
+keywords and produced 90 first-bucket searchers. The provider reported 26,454
+prompt, 9,583 completion and 36,037 total Tokens in 118,212 ms. An earlier shape
+probe confirmed GLM may wrap the payload under `log_triage_plan`; the compatibility
+normalizer now accepts that envelope without weakening document/Pattern ID gates.
+
+The same approved GLM-5.2 endpoint was then exercised through the complete
+multi-round comprehensive Planner against an isolated “AP频繁离线” case and the
+two Git-ignored local methods. It completed three rounds in `llm_multiround` mode,
+attested every mandatory method each round, classified the local fault tree as
+`POSSIBLY_RELEVANT` in all three rounds, created two fault-tree-bound checks per
+round and executed 10 real Agentic Search calls. Fault-tree-bound query counts were
+3, 3 and 1 by round. Round three corrected one incompatible JSON response and then
+passed the same schema/ID/method-coverage gates. Trace usage was 51,774 prompt,
+22,286 completion and 74,060 total Tokens. The explicit stop reason was
+`EXHAUSTED_SEARCH_NO_EVIDENCE`; zero returned candidates were expected because the
+isolated database deliberately contained no logs or managed knowledge. This test
+therefore verifies planning and search dispatch without treating an empty test
+corpus as proof that the fault tree is unrelated.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,
@@ -82,6 +109,11 @@ Run it independently with `scripts\run_golden_evals.bat`. Golden thresholds in
 - Log planning, comprehensive diagnosis and case chat append live trace stages
   while their background jobs are running. Safe metadata includes method IDs,
   versions, planning rounds and stop reasons, but excludes method/log bodies.
+- Structured Chat requests prefer JSON object mode. Log-planning validation can
+  request one bounded correction, aggregates usage across attempts, and retains
+  consumed Tokens even when the result falls back. Final diagnosis synthesis is
+  included in the same live usage total; missing provider totals are derived from
+  input plus output.
 
 ## Agentic execution status
 
@@ -146,10 +178,11 @@ PostgreSQL/Qdrant containers and local Docker image builds were not run here.
 GitHub CI contains service-container and image-build jobs that provide those
 checks after a push.
 
-External Qwen, GLM and BGE endpoints were not called because approved credentials
-were not supplied. Adapter paths are covered by the Fake OpenAI-compatible
-service and mocked tests. Run the model-profile test action against an approved
-company endpoint before production use.
+External GLM-5.2 Chat was called with the credential explicitly approved for this
+validation, as recorded above. External Qwen Reranker, Qwen Chat, BGE and Embedding
+endpoints were not called; those adapter paths remain covered by the Fake
+OpenAI-compatible service and mocked tests. Run each model-profile test action
+against the endpoint approved for the target company environment before production use.
 
 Use `scripts\validate_all.bat Fast` during development,
 `scripts\validate_all.bat Full` before publishing, and

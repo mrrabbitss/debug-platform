@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
 import CaseChatPanel from '../components/diagnosis/CaseChatPanel.vue'
+import DiagnosticPlanningPanel from '../components/diagnosis/DiagnosticPlanningPanel.vue'
 import LogTriagePanel from '../components/diagnosis/LogTriagePanel.vue'
 import PlanningTracePanel from '../components/diagnosis/PlanningTracePanel.vue'
 import type {
@@ -733,6 +734,7 @@ onBeforeUnmount(() => {
         <el-empty v-if="!latestAnalysis" description="请先完成日志解析并启动综合诊断" />
         <template v-else>
           <el-alert type="info" :closable="false" :title="diagnosis.summary || '诊断完成'" />
+          <DiagnosticPlanningPanel :planning="diagnosis.diagnostic_planning" />
           <h3 class="section-title">已确认事实</h3>
           <div v-for="fact in diagnosis.confirmed_facts || []" :key="fact.statement" class="evidence-box">{{ fact.statement }}<div class="muted">证据：{{ fact.evidence_ids?.join('、') }}</div></div>
           <h3 class="section-title">根因候选</h3>

@@ -33,7 +33,7 @@ const form = reactive({
   temperature: 0.1,
   thinking_enabled: false,
   max_tokens: 0,
-  timeout_seconds: 120,
+  timeout_seconds: 300,
   max_retries: 2,
   dimension: undefined as number | undefined,
   batch_size: 16,
@@ -117,7 +117,7 @@ function resetForm(task: ModelTask) {
   form.temperature = 0.1
   form.thinking_enabled = false
   form.max_tokens = 0
-  form.timeout_seconds = 120
+  form.timeout_seconds = 300
   form.max_retries = 2
   form.dimension = undefined
   form.batch_size = 16
@@ -154,7 +154,7 @@ function openEdit(profile: ModelProfile) {
   form.temperature = Number(profile.config.temperature ?? 0.1)
   form.thinking_enabled = Boolean(profile.config.thinking_enabled ?? false)
   form.max_tokens = Number(profile.config.max_tokens ?? 0)
-  form.timeout_seconds = Number(profile.config.timeout_seconds ?? 120)
+  form.timeout_seconds = Number(profile.config.timeout_seconds ?? 300)
   form.max_retries = Number(profile.config.max_retries ?? 2)
   form.dimension = profile.config.dimension ? Number(profile.config.dimension) : undefined
   form.batch_size = Number(profile.config.batch_size ?? 16)

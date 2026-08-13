@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
 from app.core.utils import json_loads
-from app.models import AnalysisRun, Artifact, Case, LogEvent
+from app.models import AgentRun, AgentTraceEvent, AnalysisRun, Artifact, Case, LogEvent
 from app.services import diagnosis
 
 
@@ -121,11 +121,15 @@ def test_joint_diagnosis_collects_events_from_each_active_artifact(
         "is_mock": True,
     })
 
-    async def capture(case, result, evidence):
+    async def capture_with_metadata(case, result, evidence):
         captured["evidence"] = evidence
-        return result
+        return result, {
+            "usage": {"prompt_tokens": 41, "completion_tokens": 13},
+            "duration_ms": 7,
+            "fallback": False,
+        }
 
-    monkeypatch.setattr(diagnosis, "_augment_with_llm", capture)
+    monkeypatch.setattr(diagnosis, "_augment_with_llm_with_metadata", capture_with_metadata)
     diagnosis._analyze_case_impl(_JobContext(), "CASE-joint-events")
 
     log_evidence = [
@@ -135,4 +139,16 @@ def test_joint_diagnosis_collects_events_from_each_active_artifact(
     assert {item["artifact_source"]["device_type"] for item in log_evidence} == {"GW", "AP"}
     assert any(item["artifact_source"]["device_role"] == "PRIMARY" for item in log_evidence)
     assert any(item["artifact_source"]["device_role"] == "SECONDARY" for item in log_evidence)
+    with session_factory() as db:
+        agent_run = db.scalar(select(AgentRun).where(
+            AgentRun.case_id == "CASE-joint-events",
+            AgentRun.operation == "comprehensive_diagnosis",
+        ))
+        synthesis = db.scalar(select(AgentTraceEvent).where(
+            AgentTraceEvent.run_id == agent_run.id,
+            AgentTraceEvent.stage == "final_diagnostic_synthesis",
+        ))
+        assert synthesis.input_tokens == 41
+        assert synthesis.output_tokens == 13
+        assert agent_run.total_tokens == 54
     engine.dispose()

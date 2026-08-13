@@ -38,6 +38,24 @@ const parsedArtifacts = computed(() => props.artifacts.filter(item => item.statu
 const methodDocuments = computed(() => triage.value?.method_coverage?.documents || [])
 const planHypotheses = computed(() => triage.value?.plan?.hypotheses || [])
 const screeningSteps = computed(() => triage.value?.plan?.screening_steps || [])
+const selectedPatternCount = computed(() => Number(
+  triage.value?.summary?.selected_pattern_count
+  ?? triage.value?.plan?.selected_pattern_ids?.length
+  ?? 0
+))
+const additionalKeywordCount = computed(() => Number(
+  triage.value?.summary?.additional_keyword_count
+  ?? triage.value?.plan?.additional_keywords?.length
+  ?? 0
+))
+const selectedPatternCandidateCount = computed(() => Number(
+  triage.value?.plan?.selected_pattern_candidate_count
+  ?? selectedPatternCount.value
+))
+const selectionWasTruncated = computed(() => Boolean(
+  triage.value?.plan?.selected_pattern_selection_truncated
+  || triage.value?.plan?.additional_keyword_selection_truncated
+))
 
 function bucketLabel(bucket: LogEvidenceBucket): string {
   const labels: Record<LogEvidenceBucket, string> = {
@@ -156,10 +174,25 @@ onBeforeUnmount(() => {
     <el-empty v-else-if="!triage" description="尚未执行日志规划" />
     <template v-else>
       <el-alert v-if="triage.error_message" type="error" :closable="false" :title="triage.error_message" style="margin:12px 0" />
+      <el-alert
+        v-if="triage.summary?.planner_fallback"
+        type="warning"
+        :closable="false"
+        :title="`LLM 规划未通过校验，已使用确定性回退${triage.summary?.planner_error_type ? `（${triage.summary.planner_error_type}）` : ''}`"
+        style="margin:12px 0"
+      />
+      <el-alert
+        v-if="selectionWasTruncated"
+        type="info"
+        :closable="false"
+        :title="`模型返回 ${selectedPatternCandidateCount} 条候选规则；系统按相关度保留前 ${selectedPatternCount} 条，其余规则仍在“方法文档强制检查”中扫描。`"
+        style="margin:12px 0"
+      />
       <el-row :gutter="14" style="margin:14px 0">
-        <el-col :span="8"><el-card shadow="never"><div class="muted">强制阅读方法</div><strong>{{ triage.method_coverage?.document_count || 0 }}</strong><div class="muted">规则 {{ triage.method_coverage?.compiled_pattern_count || 0 }}</div></el-card></el-col>
-        <el-col :span="8"><el-card shadow="never"><div class="muted">实际命中事件</div><strong>{{ triage.summary?.matched_events || 0 }}</strong><div class="muted">总事件 {{ triage.summary?.total_events || 0 }}</div></el-card></el-col>
-        <el-col :span="8"><el-card shadow="never"><div class="muted">其他事件</div><strong>{{ triage.summary?.other_events || 0 }}</strong><div class="muted">不会冒充关键证据</div></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never"><div class="muted">强制阅读方法</div><strong>{{ triage.method_coverage?.document_count || 0 }}</strong><div class="muted">规则 {{ triage.method_coverage?.compiled_pattern_count || 0 }}</div></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never"><div class="muted">LLM 选择规则</div><strong>{{ selectedPatternCount }}</strong><div class="muted">已规划候选，不等于实际命中 · 补充关键词 {{ additionalKeywordCount }}</div></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never"><div class="muted">实际命中事件</div><strong>{{ triage.summary?.matched_events || 0 }}</strong><div class="muted">总事件 {{ triage.summary?.total_events || 0 }}</div></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never"><div class="muted">其他事件</div><strong>{{ triage.summary?.other_events || 0 }}</strong><div class="muted">不会冒充关键证据</div></el-card></el-col>
       </el-row>
 
       <el-collapse style="margin-bottom:14px">

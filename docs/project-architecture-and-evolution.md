@@ -1,6 +1,6 @@
 # GW/AP 智能调试平台：架构、技术栈与迭代说明
 
-> 文档状态：2026-08-05，随仓库版本维护。
+> 文档状态：2026-08-13，随仓库版本维护。
 > 适用范围：当前 `debug-platform` 单体仓库，包括 Web 前端、后端 API、后台任务、VS Code 扩展、部署脚本和本地模型支持。
 
 ## 1. 项目定位
@@ -166,6 +166,10 @@ debugplatform/
 ├─ .env.example
 └─ .github/workflows/ci.yml
 ```
+
+日志智能筛查内部进一步分层：`log_triage.py` 负责任务生命周期、完整文本扫描和原子发布，
+`log_triage_planning.py` 负责模型 Prompt、JSON Schema、GLM 返回形态兼容、证据 ID 校验、一次
+有界纠正和确定性回退。两者通过窄的 plan/metadata 字典边界连接，避免模型适配变化影响大日志扫描。
 
 ## 5. 后端模块划分
 

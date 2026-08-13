@@ -190,6 +190,9 @@ def record_agent_run(
         str(item)[:128] for item in evidence_ids if str(item).strip()
     ))[:1000]
     usage = usage or {}
+    input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+    output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+    total_tokens = int(usage.get("total_tokens") or 0) or (input_tokens + output_tokens)
     replay = sanitize_replay_payload(replay_payload)
     run = AgentRun(
         id=new_id("ARUN"),
@@ -205,9 +208,9 @@ def record_agent_run(
         prompt_version=prompt_version[:128],
         input_summary_hash=summary_hash(input_summary),
         output_summary_hash=summary_hash(output_summary),
-        input_tokens=int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0),
-        output_tokens=int(usage.get("completion_tokens") or usage.get("output_tokens") or 0),
-        total_tokens=int(usage.get("total_tokens") or 0),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
         estimated_cost=max(0.0, float(estimated_cost)),
         duration_ms=max(0, int(duration_ms)),
         retry_count=max(0, int(retry_count)),
