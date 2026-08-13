@@ -22,6 +22,20 @@ let timer: number | null = null
 const terminal = computed(() => (
   !run.value || ['COMPLETED', 'FAILED', 'CANCELLED', 'FALLBACK'].includes(run.value.status)
 ))
+const displayedInputTokens = computed(() => {
+  const direct = Number(run.value?.usage.input_tokens || 0)
+  if (direct > 0) return direct
+  return (run.value?.events || []).reduce((sum, event) => sum + Number(event.input_tokens || 0), 0)
+})
+const displayedOutputTokens = computed(() => {
+  const direct = Number(run.value?.usage.output_tokens || 0)
+  if (direct > 0) return direct
+  return (run.value?.events || []).reduce((sum, event) => sum + Number(event.output_tokens || 0), 0)
+})
+const displayedTotalTokens = computed(() => {
+  const direct = Number(run.value?.usage.total_tokens || 0)
+  return direct > 0 ? direct : displayedInputTokens.value + displayedOutputTokens.value
+})
 
 function eventDescription(event: AgentTraceEvent): string {
   const metadata = event.metadata || {}
@@ -29,9 +43,11 @@ function eventDescription(event: AgentTraceEvent): string {
     return `${metadata.title || metadata.document_id || '方法文档'} · v${metadata.version || '?'}`
   }
   if (event.stage.startsWith('llm_planning_round_')) {
-    return `第 ${metadata.round || '?'} 轮 · ${metadata.stop_reason || '继续分析'}`
+    return `第 ${metadata.round || '?'} 轮 · ${metadata.stop_reason || '继续分析'}${event.retry_count ? ` · 结构纠错 ${event.retry_count} 次` : ''}`
   }
-  if (event.stage === 'execute_planned_search') return '按 LLM 规划执行认知检索'
+  if (event.stage === 'execute_planned_search') {
+    return `按 LLM 规划执行认知检索${metadata.document_id ? ` · 方法 ${metadata.document_id}` : ''}`
+  }
   if (event.stage === 'rank_log_evidence') return '完成三层日志证据排序'
   return String(metadata.reason || metadata.planner_mode || event.tool_name || event.stage)
 }
@@ -95,7 +111,7 @@ onBeforeUnmount(() => {
         <el-tag :type="run.status === 'FAILED' ? 'danger' : run.status === 'COMPLETED' ? 'success' : 'primary'">{{ run.status }}</el-tag>
         <span>停止原因：{{ run.stop_reason }}</span>
         <span>模型：{{ run.model_name || '确定性回退' }}</span>
-        <span>Tokens：{{ run.usage.total_tokens || 0 }}</span>
+        <span>Tokens：{{ displayedTotalTokens }}（输入 {{ displayedInputTokens }} / 输出 {{ displayedOutputTokens }}）</span>
         <span>耗时：{{ run.duration_ms || 0 }} ms</span>
         <el-button size="small" @click="loadTrace">刷新</el-button>
       </div>

@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     CaseChatPanel: typeof import('./components/diagnosis/CaseChatPanel.vue')['default']
     CurationSourcePreviewDialog: typeof import('./components/curation/CurationSourcePreviewDialog.vue')['default']
+    DiagnosticPlanningPanel: typeof import('./components/diagnosis/DiagnosticPlanningPanel.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']
     ElButton: typeof import('element-plus/es')['ElButton']

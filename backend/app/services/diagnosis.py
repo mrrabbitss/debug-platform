@@ -360,10 +360,19 @@ def _find_related_symbols(case_id: str, events: list[LogEvent]) -> list[CodeSymb
     return [symbol for _, symbol in sorted(scored, key=lambda item: item[0], reverse=True)[:30]]
 
 
-async def _augment_with_llm(case: Case, result: dict, evidence: list[dict]) -> dict:
+async def _augment_with_llm_with_metadata(
+    case: Case,
+    result: dict,
+    evidence: list[dict],
+) -> tuple[dict, dict[str, Any]]:
     provider = get_llm_provider()
     if provider.is_mock or not case.model_egress_approved:
-        return result
+        return result, {
+            "usage": {},
+            "duration_ms": 0,
+            "fallback": True,
+            "reason": "mock_provider" if provider.is_mock else "model_egress_not_approved",
+        }
     compact_evidence = _compact_evidence_for_prompt(evidence)
     deterministic_baseline = deepcopy(result)
     prompt = {
@@ -397,10 +406,24 @@ async def _augment_with_llm(case: Case, result: dict, evidence: list[dict]) -> d
         merged["related_code"] = result.get("related_code", [])
         merged["analysis_engine"] = "rule+rag+llm-validated"
         merged["deterministic_baseline"] = deterministic_baseline
-        return merged
+        return merged, {
+            "usage": getattr(provider, "last_usage", {}) or {},
+            "duration_ms": int(getattr(provider, "last_duration_ms", 0) or 0),
+            "fallback": False,
+        }
     except (LLMError, ValidationError, ValueError) as exc:
         result.setdefault("warnings", []).append(f"LLM synthesis rejected; deterministic result retained: {exc}")
-    return result
+        return result, {
+            "usage": getattr(provider, "last_usage", {}) or {},
+            "duration_ms": int(getattr(provider, "last_duration_ms", 0) or 0),
+            "fallback": True,
+            "error_type": type(exc).__name__,
+        }
+
+
+async def _augment_with_llm(case: Case, result: dict, evidence: list[dict]) -> dict:
+    augmented, _ = await _augment_with_llm_with_metadata(case, result, evidence)
+    return augmented
 
 
 def prepare_analysis_run(
@@ -660,7 +683,10 @@ def _analyze_case_impl(
 
     ctx.update(88, "Running evidence-constrained final LLM synthesis")
     synthesis_started = perf_counter()
-    result = asyncio.run(_augment_with_llm(case, result, evidence))
+    result, synthesis_metadata = asyncio.run(
+        _augment_with_llm_with_metadata(case, result, evidence)
+    )
+    synthesis_usage = synthesis_metadata.get("usage", {})
     with SessionLocal() as db:
         append_live_trace(
             db,
@@ -669,6 +695,8 @@ def _analyze_case_impl(
             tool_name="chat_completion",
             status="COMPLETED",
             duration_ms=int((perf_counter() - synthesis_started) * 1000),
+            input_tokens=int(synthesis_usage.get("prompt_tokens") or 0),
+            output_tokens=int(synthesis_usage.get("completion_tokens") or 0),
             output_summary={
                 "hypotheses": len(result.get("hypotheses", [])),
                 "engine": result.get("analysis_engine"),
@@ -678,7 +706,11 @@ def _analyze_case_impl(
                 for item in evidence[:1000]
                 if item.get("evidence_id")
             ],
-            metadata={"planner_stop_reason": planning.public_plan.get("stop_reason")},
+            metadata={
+                "planner_stop_reason": planning.public_plan.get("stop_reason"),
+                "fallback": bool(synthesis_metadata.get("fallback")),
+                "error_type": synthesis_metadata.get("error_type"),
+            },
         )
     result["analysis_run_id"] = run_id
     result["generated_at"] = utcnow().isoformat()

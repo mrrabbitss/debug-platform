@@ -168,7 +168,16 @@ def load_applicable_diagnostic_methods(
 
 
 def _clean_candidate(value: str) -> str:
-    candidate = value.strip().strip("`'\"“”‘’")
+    candidate = value.strip()
+    # Markdown is presentation, not part of the runtime log signature. Peel
+    # nested emphasis/code wrappers so table cells such as **`message %u`**
+    # compile to the message emitted by the device.
+    for _ in range(4):
+        previous = candidate
+        candidate = re.sub(r"^(?:\*\*|__)(.*?)(?:\*\*|__)$", r"\1", candidate).strip()
+        candidate = candidate.strip("`'\"“”‘’")
+        if candidate == previous:
+            break
     candidate = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)、]\s*)", "", candidate)
     candidate = re.sub(r"\s+", " ", candidate).strip()
     if ":" in candidate and len(candidate.split(":", 1)[0]) <= 18:
@@ -209,8 +218,16 @@ def _pattern_regex(value: str) -> tuple[str, str]:
     prepared = _PLACEHOLDER.sub(lambda match: remember(
         r"\S+" if match.group(0)[-1].lower() in {"s", "c", "p"} else r"[-+]?\d+(?:\.\d+)?"
     ), value)
-    prepared = re.sub(r"\[(?:X{1,8}|x{1,8})\]", lambda _: remember(r"\[[^\]\r\n]+\]"), prepared)
-    prepared = re.sub(r"\b(?:X{2,8}|x{2,8})\b", lambda _: remember(r"\S+"), prepared)
+    prepared = re.sub(
+        r"\[(?:X{1,8}|Y{1,8}|Z{1,8}|x{1,8}|y{1,8}|z{1,8})\]",
+        lambda _: remember(r"\[[^\]\r\n]+\]"),
+        prepared,
+    )
+    prepared = re.sub(
+        r"(?<![A-Za-z0-9_])(?:X{1,8}|Y{1,8}|Z{1,8}|x{2,8}|y{2,8}|z{2,8})(?![A-Za-z0-9_])",
+        lambda _: remember(r"\S+"),
+        prepared,
+    )
     rendered = re.escape(prepared).replace(r"\ ", r"\s+")
     for token, regex in placeholders:
         rendered = rendered.replace(re.escape(token), regex)
@@ -274,11 +291,20 @@ def compile_diagnostic_patterns(
                 heading = heading_match.group(2).strip()
                 heading_is_log_section = any(hint in heading.lower() for hint in _LOG_HINTS)
                 continue
-            for inline in _INLINE_CODE.findall(raw_line):
+            inline_candidates = _INLINE_CODE.findall(raw_line)
+            for inline in inline_candidates:
                 candidates.append((inline, line_number, "Inline code log pattern"))
-            if _PLACEHOLDER.search(raw_line):
+            # Inline code and table-column extraction are more precise than a
+            # complete Markdown row. Avoid compiling pipes, emphasis and prose
+            # into a regex that can never occur in the raw device log.
+            is_table_row = raw_line.lstrip().startswith("|")
+            if _PLACEHOLDER.search(raw_line) and not inline_candidates and not is_table_row:
                 candidates.append((raw_line, line_number, "Printf-style log template"))
-            if heading_is_log_section and re.match(r"^\s*(?:[-*+]\s+|\d+[.)、]\s*)", raw_line):
+            if (
+                heading_is_log_section
+                and not inline_candidates
+                and re.match(r"^\s*(?:[-*+]\s+|\d+[.)、]\s*)", raw_line)
+            ):
                 candidates.append((raw_line, line_number, f"Log method section: {heading}"))
 
         for raw_candidate, line_number, reason in candidates:

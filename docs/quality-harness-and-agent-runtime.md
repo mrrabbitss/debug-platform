@@ -1,6 +1,6 @@
 # 质量评测、Agent 轨迹与有界执行
 
-最后更新：2026-08-11
+最后更新：2026-08-13
 
 本文说明如何重复验证日志解析、知识提炼、认知检索和 Agent 执行质量。所有仓库样本均为
 合成数据，禁止把公司日志或凭据加入 Golden Dataset。
@@ -102,7 +102,8 @@ Playwright 场景位于 [knowledge-curation.spec.ts](../frontend/e2e/knowledge-c
 - 必需领域模块、类型化 API Client、Composable 或组件被意外删除。
 
 `routes.py` 已拆出系统、知识、代码仓和任务 API；知识提炼已拆出上传、文档沙箱抽取、证据、
-序列化及编排；Agentic Search 已拆出 Planner、Tool Registry、Fusion、Executor 和 Trace。
+序列化及编排；Agentic Search 已拆出 Planner、Tool Registry、Fusion、Executor 和 Trace；日志筛查
+也拆为任务/本地扫描发布与独立 LLM Planning/Schema 校验模块。
 
 ## 5. 统一运行轨迹与隐私
 
@@ -117,6 +118,8 @@ Agent 运行使用 `AgentRun + AgentTraceEvent` 保存：
 日志规划、综合诊断和案例问答在任务执行期间增量写入轨迹，前端不必等整个任务完成才显示阶段。
 同一事务连续写入会先 flush 分配出的 sequence，避免多个方法读取事件复用同一序号。规划元数据只
 放行文档 ID、版本、角色、轮次和停止原因；方法标题/正文、原始日志和 Prompt 不进入轨迹。
+Token 会从供应商 usage 映射到每个模型阶段；缺少 total 时由输入与输出求和。日志规划的结构校验
+失败、一次有界纠正以及综合诊断最终合成都写入用量，前端还可从事件明细回算旧运行的总量。
 
 管理员可在前端“运行轨迹”查看失败步骤和脱敏元数据。重放只对具备内容安全 payload 的
 只读 Agentic Search 开放，强制 `record_memory=false`；知识提炼可查看轨迹，但不能从轨迹

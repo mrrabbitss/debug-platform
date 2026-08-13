@@ -357,6 +357,12 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
   await expect(page.getByRole('tabpanel', { name: /② 方法文档强制检查/ })).toContainText(
     'get WLANConfiguration!'
   )
+  const triageTrace = page.getByTestId('planning-trace').filter({
+    hasText: '日志 LLM Planning 轨迹'
+  })
+  await expect(triageTrace).toContainText(
+    /Tokens：[1-9]\d*（输入 [1-9]\d* \/ 输出 [1-9]\d*）/
+  )
 
   await page.getByRole('tab', { name: '综合诊断' }).click()
   const diagnosisTrace = page.getByTestId('planning-trace').filter({
@@ -365,6 +371,9 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
   await expect(diagnosisTrace).toContainText('llm_planning_round_1')
   await expect(diagnosisTrace).toContainText('llm_planning_round_2')
   await expect(diagnosisTrace).toContainText('第 2 轮 · ENOUGH_EVIDENCE')
+  await expect(diagnosisTrace).toContainText(
+    /Tokens：[1-9]\d*（输入 [1-9]\d* \/ 输出 [1-9]\d*）/
+  )
   await expect(page.getByText('Synthetic evidence-constrained comprehensive diagnosis completed.')).toBeVisible()
 
   await page.getByRole('tab', { name: '交互问答' }).click()

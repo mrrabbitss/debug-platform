@@ -186,6 +186,31 @@ def test_live_trace_allocates_unique_sequences_without_intermediate_commit(
     engine.dispose()
 
 
+def test_record_agent_run_derives_total_tokens_when_provider_omits_it(
+    tmp_path: Path,
+) -> None:
+    engine, factory = _factory(tmp_path)
+    with factory() as db:
+        run = record_agent_run(
+            db,
+            operation="usage_test",
+            execution_mode="model_assisted",
+            input_summary={"case": "synthetic"},
+            output_summary={"status": "ok"},
+            events=[],
+            evidence_ids=[],
+            stop_reason="COMPLETED",
+            approval_status="NOT_REQUIRED",
+            duration_ms=5,
+            usage={"prompt_tokens": 13, "completion_tokens": 8},
+        )
+
+    assert run.input_tokens == 13
+    assert run.output_tokens == 8
+    assert run.total_tokens == 21
+    engine.dispose()
+
+
 def test_admin_can_inspect_and_read_only_replay_agent_run(
     tmp_path: Path,
     monkeypatch,

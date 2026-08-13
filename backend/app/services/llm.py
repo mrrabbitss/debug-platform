@@ -29,6 +29,14 @@ class LLMError(RuntimeError):
     pass
 
 
+def _json_mode_unsupported(exc: Exception) -> bool:
+    rendered = str(exc).casefold()
+    return "response_format" in rendered and any(
+        marker in rendered
+        for marker in ("unsupported", "not support", "unknown", "unrecognized", "not permitted")
+    )
+
+
 class LLMProvider(ABC):
     provider_id: str
     model_name: str
@@ -120,10 +128,15 @@ class OpenAICompatibleProvider(LLMProvider):
         error_type: str | None = None,
     ) -> None:
         usage_object = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage_object, "prompt_tokens", None)
+        completion_tokens = getattr(usage_object, "completion_tokens", None)
+        total_tokens = getattr(usage_object, "total_tokens", None)
+        if total_tokens is None and (prompt_tokens is not None or completion_tokens is not None):
+            total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
         usage = {
-            "prompt_tokens": getattr(usage_object, "prompt_tokens", None),
-            "completion_tokens": getattr(usage_object, "completion_tokens", None),
-            "total_tokens": getattr(usage_object, "total_tokens", None),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
         }
         duration_ms = int((perf_counter() - started) * 1000)
         self.last_usage = usage
@@ -152,21 +165,45 @@ class OpenAICompatibleProvider(LLMProvider):
     ) -> dict[str, Any]:
         started = perf_counter()
         try:
-            request_options: dict[str, Any] = {}
+            request_options: dict[str, Any] = {
+                "response_format": {"type": "json_object"},
+            }
             max_tokens = getattr(self, "max_tokens", None)
             if max_tokens:
                 request_options["max_tokens"] = max_tokens
             if getattr(self, "thinking_enabled", False):
                 request_options["extra_body"] = {"thinking": {"type": "enabled"}}
-            response = await self.client.chat.completions.create(
-                model=self.model_name,
-                temperature=self.temperature,
-                messages=[
-                    {"role": "system", "content": system + "\n只输出合法 JSON，不要使用 Markdown 代码块。"},
-                    {"role": "user", "content": user},
-                ],
-                **request_options,
-            )
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        system
+                        + "\n只输出合法 JSON 对象，不要使用 Markdown 代码块。"
+                        + f"\n响应结构名称：{schema_name}。它仅用于标识结构，不是 JSON 外层字段。"
+                        + "直接输出调用方所列字段组成的对象，并严格保留字段名和字段类型。"
+                    ),
+                },
+                {"role": "user", "content": user},
+            ]
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.model_name,
+                    temperature=self.temperature,
+                    messages=messages,
+                    **request_options,
+                )
+            except Exception as exc:
+                if not _json_mode_unsupported(exc):
+                    raise
+                # Some older OpenAI-compatible gateways reject JSON mode.
+                # Retry once with the same explicit JSON instructions.
+                request_options.pop("response_format", None)
+                response = await self.client.chat.completions.create(
+                    model=self.model_name,
+                    temperature=self.temperature,
+                    messages=messages,
+                    **request_options,
+                )
             content = response.choices[0].message.content or "{}"
         except Exception as exc:
             self._record_egress(
@@ -196,6 +233,12 @@ class OpenAICompatibleProvider(LLMProvider):
                 error_type=type(exc).__name__,
             )
             raise LLMError("Model returned invalid JSON") from exc
+        if (
+            isinstance(parsed, dict)
+            and len(parsed) == 1
+            and isinstance(parsed.get(schema_name), dict)
+        ):
+            parsed = parsed[schema_name]
         self._record_egress(
             purpose=purpose,
             system=system,

@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_model: str = ""
     llm_temperature: float = 0.1
-    llm_timeout_seconds: int = 120
+    llm_timeout_seconds: int = 300
     llm_max_retries: int = 2
     model_secret_key: str = ""
     model_endpoint_allowlist: str = ""
