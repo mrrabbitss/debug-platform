@@ -39,6 +39,8 @@ def append_log_planning_trace(
             "error_type": model_result.get("error_type"),
             "validation_code": failure.get("code"),
             "validation_path": failure.get("field_path"),
+            "upstream_error_type": failure.get("upstream_error_type"),
+            "thinking_mode": model_result.get("thinking_mode"),
             "finish_reason": model_result.get("finish_reason"),
         },
         commit=False,
@@ -57,6 +59,8 @@ def append_log_planning_trace(
             stop_reason="PLANNER_VALIDATION_FALLBACK",
             metadata={
                 "validation_code": failure.get("code"),
+                "upstream_error_type": failure.get("upstream_error_type"),
+                "thinking_mode": model_result.get("thinking_mode"),
                 "finish_reason": model_result.get("finish_reason"),
             },
             commit=False,

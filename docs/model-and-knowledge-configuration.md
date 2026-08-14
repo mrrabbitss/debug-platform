@@ -145,6 +145,13 @@ HTTP 连接本身不再触发白名单校验；是否接受无传输加密的 HT
 结构化规划，`max_tokens=65536` 可完成 27 节点闭环；使用相同规模方法文档时建议配置 65536，
 同时通过后台轨迹监控实际 Token 和耗时。
 
+智能日志筛查的 `LLM LOG PLAN` 是 Pattern/关键词的有界 JSON 提取，而不是最终综合推理。
+该阶段无论 Profile 的 Thinking 设置为何，都会显式发送 `thinking.type=disabled`；综合诊断和
+报告修订仍遵循 Profile 设置。这样可以避免 GLM 的思考内容占满结构化输出预算，也降低企业
+代理长请求超时的概率。失败时前端会区分代理、超时、TLS、鉴权、权限、限流、BadRequest、
+模型不存在、上游错误、连接失败、输出截断和无效 JSON，而不再全部显示为
+`MODEL_REQUEST_FAILED`。
+
 保存后先点击“测试”，成功后点击“切换使用”。系统允许保存多套 Qwen、GLM 或内部兼容网关配置，但同一时间只有一个诊断模型处于激活状态。已有 `.env` 中的 `LLM_*` 配置会在首次升级启动时导入为一个模型配置，作为兼容路径。
 
 需要结构化结果的 Chat 请求会使用 OpenAI-Compatible `response_format={"type":"json_object"}`，

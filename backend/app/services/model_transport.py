@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import ssl
 
 import httpx
 from openai import DefaultAsyncHttpxClient
+
+
+@dataclass(frozen=True)
+class SafeModelError:
+    code: str
+    message: str
+    upstream_error_type: str
 
 
 def verified_ssl_context_without_revocation() -> ssl.SSLContext:
@@ -40,8 +48,12 @@ def build_chat_http_client(
     return DefaultAsyncHttpxClient(**kwargs)
 
 
-def safe_model_connection_error(error: Exception, *, proxy_configured: bool) -> str:
-    """Classify connection failures without returning endpoints or credentials."""
+def safe_model_error_details(
+    error: Exception,
+    *,
+    proxy_configured: bool,
+) -> SafeModelError:
+    """Classify model failures without returning endpoints, bodies or credentials."""
     chain: list[BaseException] = []
     current: BaseException | None = error
     while current is not None and len(chain) < 8:
@@ -50,16 +62,55 @@ def safe_model_connection_error(error: Exception, *, proxy_configured: bool) -> 
     names = {type(item).__name__ for item in chain}
     rendered = " ".join(str(item).casefold() for item in chain)
     route = " through the configured proxy" if proxy_configured else ""
+    upstream_error_type = type(error).__name__
     if "ProxyError" in names:
-        return f"Model connection{route} failed because the proxy rejected the connection"
-    if any("Timeout" in name for name in names):
-        return f"Model connection{route} timed out"
-    if "SSLCertVerificationError" in names or "certificate verify failed" in rendered:
-        return (
-            f"Model connection{route} failed TLS certificate verification; "
-            "certificate chain and hostname checks remain required"
+        return SafeModelError(
+            "MODEL_PROXY_CONNECTION_FAILED",
+            f"Model connection{route} failed because the proxy rejected the connection",
+            upstream_error_type,
         )
+    if any("Timeout" in name for name in names):
+        return SafeModelError(
+            "MODEL_TIMEOUT",
+            f"Model connection{route} timed out",
+            upstream_error_type,
+        )
+    if "SSLCertVerificationError" in names or "certificate verify failed" in rendered:
+        return SafeModelError(
+            "MODEL_TLS_VERIFICATION_FAILED",
+            f"Model connection{route} failed TLS certificate verification; "
+            "certificate chain and hostname checks remain required",
+            upstream_error_type,
+        )
+    status_errors = (
+        ("AuthenticationError", "MODEL_AUTHENTICATION_FAILED", "Model authentication failed"),
+        ("PermissionDeniedError", "MODEL_PERMISSION_DENIED", "Model request was denied"),
+        ("RateLimitError", "MODEL_RATE_LIMITED", "Model request was rate limited"),
+        ("BadRequestError", "MODEL_BAD_REQUEST", "Model gateway rejected the request"),
+        ("NotFoundError", "MODEL_NOT_FOUND", "Model or endpoint was not found"),
+        ("InternalServerError", "MODEL_UPSTREAM_ERROR", "Model gateway returned a server error"),
+        ("APIStatusError", "MODEL_UPSTREAM_ERROR", "Model gateway returned an HTTP error"),
+    )
+    for error_name, code, message in status_errors:
+        if error_name in names:
+            return SafeModelError(code, message, upstream_error_type)
     connection_names = {"APIConnectionError", "ConnectError", "ConnectErrorOSError"}
     if names.intersection(connection_names):
-        return f"Model connection{route} failed ({type(error).__name__})"
-    return f"Model request failed ({type(error).__name__})"
+        return SafeModelError(
+            "MODEL_CONNECTION_FAILED",
+            f"Model connection{route} failed ({upstream_error_type})",
+            upstream_error_type,
+        )
+    return SafeModelError(
+        "MODEL_REQUEST_FAILED",
+        f"Model request failed ({upstream_error_type})",
+        upstream_error_type,
+    )
+
+
+def safe_model_connection_error(error: Exception, *, proxy_configured: bool) -> str:
+    """Backward-compatible safe message for callers that do not need the code."""
+    return safe_model_error_details(
+        error,
+        proxy_configured=proxy_configured,
+    ).message

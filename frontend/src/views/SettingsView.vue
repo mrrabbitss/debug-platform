@@ -444,7 +444,7 @@ onMounted(load)
                 <el-option label="强制开启" value="enabled" />
                 <el-option label="强制关闭" value="disabled" />
               </el-select>
-              <div class="muted">GLM-5.1/5.2 选择“强制关闭”时会显式发送 thinking.type=disabled；其他兼容端点可选择跟随默认。</div>
+              <div class="muted">GLM-5.1/5.2 选择“强制关闭”时会显式发送 thinking.type=disabled；智能日志筛查属于有界 JSON 提取，会始终关闭 Thinking，综合诊断仍采用此处设置。</div>
             </div>
           </el-form-item>
           <el-form-item label="最大输出 Tokens">

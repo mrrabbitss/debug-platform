@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.db import Base
 from app.core.utils import json_loads
 from app.models import AuditEvent
-from app.services import audit, llm
+from app.services import audit, llm, model_transport
 
 
 def _session_factory(tmp_path: Path):
@@ -90,9 +90,10 @@ def test_invalid_model_json_is_audited_as_failed(monkeypatch) -> None:
     captured: list[dict] = []
     monkeypatch.setattr(provider, "_record_egress", lambda **details: captured.append(details))
 
-    with pytest.raises(llm.LLMError, match="invalid JSON"):
+    with pytest.raises(llm.LLMError, match="invalid JSON") as captured_error:
         asyncio.run(provider.generate_json("system", "user"))
 
+    assert captured_error.value.code == "MODEL_INVALID_JSON"
     assert len(captured) == 1
     assert captured[0]["outcome"] == "FAILED"
     assert captured[0]["error_type"] == "JSONDecodeError"
@@ -169,6 +170,87 @@ def test_json_generation_sends_explicit_thinking_mode(
     else:
         assert captured_request["extra_body"] == expected_extra_body
     assert provider.last_finish_reason == "stop"
+
+
+def test_log_triage_json_generation_forces_thinking_disabled(monkeypatch) -> None:
+    captured_request: dict = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            captured_request.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content='{"ok":true}'),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=4, completion_tokens=2, total_tokens=6),
+            )
+
+    provider = object.__new__(llm.OpenAICompatibleProvider)
+    provider.model_name = "glm-5.2"
+    provider.temperature = 0.1
+    provider.thinking_mode = "enabled"
+    provider.client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+    monkeypatch.setattr(llm, "record_model_egress", lambda *args, **kwargs: None)
+
+    asyncio.run(provider.generate_json(
+        "system",
+        "user",
+        purpose="log_triage_planning",
+    ))
+
+    assert captured_request["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert provider.last_thinking_mode == "disabled"
+
+
+def test_truncated_model_json_has_specific_error_code(monkeypatch) -> None:
+    class FakeCompletions:
+        async def create(self, **_kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content='{"unfinished":'),
+                    finish_reason="length",
+                )],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=100, total_tokens=110),
+            )
+
+    provider = object.__new__(llm.OpenAICompatibleProvider)
+    provider.model_name = "glm-5.2"
+    provider.temperature = 0.1
+    provider.thinking_mode = "disabled"
+    provider.client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+    monkeypatch.setattr(llm, "record_model_egress", lambda *args, **kwargs: None)
+
+    with pytest.raises(llm.LLMError) as captured_error:
+        asyncio.run(provider.generate_json("system", "user"))
+
+    assert captured_error.value.code == "MODEL_OUTPUT_TRUNCATED"
+    assert provider.last_finish_reason == "length"
+
+
+@pytest.mark.parametrize(
+    ("error_name", "expected_code"),
+    [
+        ("APITimeoutError", "MODEL_TIMEOUT"),
+        ("AuthenticationError", "MODEL_AUTHENTICATION_FAILED"),
+        ("RateLimitError", "MODEL_RATE_LIMITED"),
+        ("BadRequestError", "MODEL_BAD_REQUEST"),
+        ("APIConnectionError", "MODEL_CONNECTION_FAILED"),
+    ],
+)
+def test_model_transport_exposes_safe_failure_code(
+    error_name: str,
+    expected_code: str,
+) -> None:
+    error_type = type(error_name, (Exception,), {})
+    details = model_transport.safe_model_error_details(
+        error_type("sensitive upstream body"),
+        proxy_configured=True,
+    )
+
+    assert details.code == expected_code
+    assert details.upstream_error_type == error_name
+    assert "sensitive upstream body" not in details.message
 
 
 def test_thinking_mode_keeps_legacy_profiles_compatible() -> None:

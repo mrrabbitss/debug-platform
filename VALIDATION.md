@@ -7,8 +7,8 @@ Last validated: 2026-08-14 on Windows 11.
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 196 passed and 1 external-service test skipped locally.
-- Backend line coverage: 77.86%, above the enforced 75% quality gate.
+- Backend tests: 205 passed and 1 external-service test skipped locally.
+- Backend line coverage: 77.91%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
 - Browser E2E: 3 complete Edge scenarios passed in an isolated runtime. They
@@ -39,8 +39,10 @@ Last validated: 2026-08-14 on Windows 11.
 - Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260814-135736-full\summary.json` (18/18 stages passed in
-349.74 seconds).
+`artifacts\validation\20260814-151131-full\summary.json` (18/18 stages passed in
+337.25 seconds). An immediately preceding attempt reached the dependency-audit
+stage but the configured network proxy closed its PyPI connection; the complete
+retry passed the same audit without source changes.
 
 After removing the development-mode HTTP-only allowlist restriction, the focused
 model-profile suite passed 16/16 and
@@ -49,6 +51,14 @@ in 26.70 seconds. The regression explicitly accepts a public HTTP model endpoint
 accepts a private HTTP endpoint when `MODEL_ALLOW_PRIVATE_ENDPOINTS=true`, and
 retains blocking for unapproved private/loopback, cloud-metadata and production
 endpoints.
+
+The subsequent log-planning diagnostics suite passed 42/42. A real GLM-5.2
+follow-up started from a provider configured with Thinking enabled; the production
+purpose override sent `thinking.type=disabled` for `LLM LOG PLAN` and completed in
+53.53 seconds without retry. It read 2 method documents and 157 compiled Patterns,
+then returned 60 selected Patterns and 30 additional keywords using 30,756 Tokens.
+Synthetic failure tests separately cover stable, content-safe timeout, authentication,
+rate-limit, bad-request, connection, truncated-output and invalid-JSON diagnostics.
 
 ## Approved external GLM-5.2 result
 

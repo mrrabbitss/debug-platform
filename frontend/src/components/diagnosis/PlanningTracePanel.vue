@@ -58,7 +58,7 @@ function eventDescription(event: AgentTraceEvent): string {
     return `第 ${metadata.round || '?'} 轮只读工具调用 · 返回 ${metadata.returned_count || 0} 条${metadata.document_id ? ` · 方法 ${metadata.document_id}` : ''}`
   }
   if (metadata.validation_code) {
-    return `${metadata.validation_code}${metadata.validation_path ? ` · 字段 ${metadata.validation_path}` : ''}${metadata.finish_reason ? ` · 模型停止 ${metadata.finish_reason}` : ''}`
+    return `${metadata.validation_code}${metadata.upstream_error_type ? ` · 上游 ${metadata.upstream_error_type}` : ''}${metadata.validation_path ? ` · 字段 ${metadata.validation_path}` : ''}${metadata.thinking_mode ? ` · Thinking ${metadata.thinking_mode}` : ''}${metadata.finish_reason ? ` · 模型停止 ${metadata.finish_reason}` : ''}`
   }
   if (event.stage === 'rank_log_evidence') return '完成三层日志证据排序'
   return String(metadata.reason || metadata.planner_mode || event.tool_name || event.stage)

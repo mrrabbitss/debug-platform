@@ -388,7 +388,7 @@ def main() -> int:
             if set(plan.get("read_document_ids", [])) != {item.id for item in methods}:
                 raise ValueError("Log triage did not attest every applicable method")
             return {
-                "thinking_mode": "disabled",
+                "thinking_mode": getattr(model, "last_thinking_mode", "disabled"),
                 "method_count": len(methods),
                 "compiled_pattern_count": len(patterns),
                 "selected_pattern_count": len(plan.get("selected_pattern_ids", [])),
