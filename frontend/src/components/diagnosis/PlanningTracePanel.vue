@@ -39,14 +39,26 @@ const displayedTotalTokens = computed(() => {
 
 function eventDescription(event: AgentTraceEvent): string {
   const metadata = event.metadata || {}
+  if (event.stage === 'list_diagnostic_documents') {
+    return `建立 GW/AP/通用联合方法目录 · ${metadata.candidate_count || event.evidence_ids.length} 份文档`
+  }
+  if (event.stage === 'read_diagnostic_documents') {
+    return `策略强制读取全部方法正文 · ${event.evidence_ids.length} 份文档`
+  }
   if (event.stage === 'read_method_document') {
     return `${metadata.title || metadata.document_id || '方法文档'} · v${metadata.version || '?'}`
   }
   if (event.stage.startsWith('llm_planning_round_')) {
-    return `第 ${metadata.round || '?'} 轮 · ${metadata.stop_reason || '继续分析'}${event.retry_count ? ` · 结构纠错 ${event.retry_count} 次` : ''}`
+    return `第 ${metadata.round || '?'} 轮 · ${metadata.validation_code || metadata.stop_reason || '继续分析'}${metadata.validation_path ? ` · 字段 ${metadata.validation_path}` : ''}${event.retry_count ? ` · 结构纠错 ${event.retry_count} 次` : ''}`
   }
   if (event.stage === 'execute_planned_search') {
     return `按 LLM 规划执行认知检索${metadata.document_id ? ` · 方法 ${metadata.document_id}` : ''}`
+  }
+  if (event.stage === 'execute_agent_tool') {
+    return `第 ${metadata.round || '?'} 轮只读工具调用 · 返回 ${metadata.returned_count || 0} 条${metadata.document_id ? ` · 方法 ${metadata.document_id}` : ''}`
+  }
+  if (metadata.validation_code) {
+    return `${metadata.validation_code}${metadata.validation_path ? ` · 字段 ${metadata.validation_path}` : ''}${metadata.finish_reason ? ` · 模型停止 ${metadata.finish_reason}` : ''}`
   }
   if (event.stage === 'rank_log_evidence') return '完成三层日志证据排序'
   return String(metadata.reason || metadata.planner_mode || event.tool_name || event.stage)

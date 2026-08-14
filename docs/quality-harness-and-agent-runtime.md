@@ -1,6 +1,6 @@
 # 质量评测、Agent 轨迹与有界执行
 
-最后更新：2026-08-13
+最后更新：2026-08-14
 
 本文说明如何重复验证日志解析、知识提炼、认知检索和 Agent 执行质量。所有仓库样本均为
 合成数据，禁止把公司日志或凭据加入 Golden Dataset。
@@ -19,6 +19,27 @@ scripts\validate_all.bat Full
 - 浏览器 E2E 自动启动独立数据库、Storage、Fake Model、FastAPI 和 Vite，执行完成后清理；
 - `Full` 同时执行锁文件、Ruff、compileall、Harness、架构门禁、Golden、后端覆盖率、
   前端构建、依赖审计、VS Code 扩展、Doctor、运行冒烟和浏览器 E2E。
+
+经数据出站审批后，可额外验证真实 GLM Chat 链路：
+
+```powershell
+$env:DEBUG_PLATFORM_GLM_API_KEY = '<仅当前 PowerShell 会话中的密钥>'
+scripts\validate_glm_chat_features.bat
+Remove-Item Env:\DEBUG_PLATFORM_GLM_API_KEY
+```
+
+优先从公司 Secret Manager 注入该环境变量，避免把密钥写入命令历史。脚本没有 `--api-key` 参数，
+不会修改 `.env` 或业务数据库；它使用临时数据库和合成日志，检查模型网关、日志规划、最多二十轮
+故障树 Agent、最终合成、案例问答、诊断修订、知识提炼/纠错和代码补丁建议。安全报告位于
+Git 忽略的 `artifacts\validation\glm-chat-features.json`，只包含状态、耗时、Token、数量和哈希。
+首次接入或替换故障树时可先执行无模型预检：
+
+```bat
+scripts\validate_glm_chat_features.bat --preflight-only
+```
+
+需要只复测某个失败阶段时，可重复使用 `--only <probe-name>`；脚本会拒绝未知名称，避免拼写错误
+造成“零项测试但退出 0”。综合诊断和修订默认保留 65,536 输出预算，小型探针按用途自动收紧。
 
 需要为并行任务预分配独立 worktree 和运行目录时：
 
@@ -81,7 +102,7 @@ Playwright 场景位于 [knowledge-curation.spec.ts](../frontend/e2e/knowledge-c
 
 - TXT/HTML/DOCX/PDF 文件夹上传、三类文档预览、初稿生成、对话纠错、人工确认只创建 `DRAFT`；
 - 加密 Chat 代理配置和清除，前端/API 不回显代理凭据；
-- 无后缀 Huawei 合成日志上传与解析、自动 LLM 日志规划、完整原文命中、三层证据 UI、至少两轮/最多八轮综合诊断、停止原因、后台案例问答、诊断修订草稿/人工确认和每阶段轨迹。
+- 无后缀 Huawei 合成日志上传与解析、自动 LLM 日志规划、完整原文命中、三层证据 UI、至少两轮/最多二十轮综合诊断、故障树逐节点覆盖、停止原因、后台案例问答、诊断修订草稿/人工确认和每阶段轨迹。
 
 页面异常、请求失败、未捕获异常或浏览器控制台错误都会使测试失败。Fake 服务会根据请求 Schema
 返回带动态方法/evidence ID 的合法响应，因此测试同时阻断“模型编造 ID”或“只跑一轮”的退化。
@@ -117,9 +138,11 @@ Agent 运行使用 `AgentRun + AgentTraceEvent` 保存：
 
 日志规划、综合诊断和案例问答在任务执行期间增量写入轨迹，前端不必等整个任务完成才显示阶段。
 同一事务连续写入会先 flush 分配出的 sequence，避免多个方法读取事件复用同一序号。规划元数据只
-放行文档 ID、版本、角色、轮次和停止原因；方法标题/正文、原始日志和 Prompt 不进入轨迹。
+放行文档 ID、版本、角色、轮次、校验错误码/字段、模型 `finish_reason` 和停止原因；方法标题/正文、
+原始日志和 Prompt 不进入轨迹。文档标题只在案例权限内的诊断/筛查结果中显示，不写入通用轨迹。
 Token 会从供应商 usage 映射到每个模型阶段；缺少 total 时由输入与输出求和。日志规划的结构校验
-失败、一次有界纠正以及综合诊断最终合成都写入用量，前端还可从事件明细回算旧运行的总量。
+失败、一次有界纠正，以及综合诊断单轮最多两次纠正和最终诊断合成都写入用量；验证报告按完整
+Agent 轨迹累计多轮 Token，前端也可从事件明细回算旧运行的总量。
 
 管理员可在前端“运行轨迹”查看失败步骤和脱敏元数据。重放只对具备内容安全 payload 的
 只读 Agentic Search 开放，强制 `record_memory=false`；知识提炼可查看轨迹，但不能从轨迹
@@ -138,10 +161,15 @@ Token 会从供应商 usage 映射到每个模型阶段；缺少 total 时由输
 - 失败后回退当前确定性检索器。
 
 当前通用 Agentic Search 仍以确定性 Planner 为默认安全基线；有界循环执行器已经具备测试和
-Golden 门禁，但尚未默认替换通用检索器。综合诊断是一个范围更窄的例外：它在确定性检索基线之上
-使用两至八轮 LLM Planner，只能产生有界、去重的只读检索 query，所有方法/evidence ID 都经过
-Schema 校验，失败后保留确定性诊断。多轮请求在同一异步事件循环内执行，避免复用 HTTP 客户端时
-跨事件循环导致第二轮 `APIConnectionError`。
+Golden 门禁，但尚未默认替换通用检索器。综合诊断是一个范围更窄的生产例外：它在确定性检索
+基线之上运行两至二十轮类型化工具 Agent。后端策略先用只读工具列出并读取全部 GW/AP/通用方法；
+故障树流程、判断表与根因场景编译为稳定节点，每个节点必须真实检索并形成终态才允许成功停止；
+模型每轮最多动态调用四次 `list_diagnostic_documents`、`read_diagnostic_documents`、
+`search_knowledge`、`search_log` 或 `get_evidence`，重复调用复用前次结果。工具名、Pydantic 输入输出、
+角色、只读权限、方法/Pattern/节点/evidence ID 都在执行前经过校验；尚未绑定检查和证据工具的节点
+不得提前进入终态，单轮输出最多纠正两次；失败后显示稳定诊断并保留确定性结果。
+多轮请求在同一异步事件循环内执行，避免复用 HTTP 客户端时跨事件循环导致第二轮
+`APIConnectionError`。
 
 ## 7. 后台任务可靠性与不可信文档隔离
 

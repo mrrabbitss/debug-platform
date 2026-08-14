@@ -1,38 +1,35 @@
 # Validation Record
 
-Last validated: 2026-08-13 on Windows 11.
+Last validated: 2026-08-14 on Windows 11.
 
 ## Current local regression result
 
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 184 passed and 1 external-service test skipped locally.
-- Backend line coverage: 77.04%, above the enforced 75% quality gate.
+- Backend tests: 196 passed and 1 external-service test skipped locally.
+- Backend line coverage: 77.86%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
-- Browser E2E: 3 complete Edge scenarios passed in an isolated runtime. The
-  same 3 scenarios also passed against Playwright's CI-version bundled Chromium
-  after verifying lazy, sandbox-preserving report preview loading. They
+- Browser E2E: 3 complete Edge scenarios passed in an isolated runtime. They
   covered TXT, HTML, DOCX and PDF upload/preview, draft generation,
   conversational correction, human confirmation, trace inspection, safe replay,
   encrypted Chat proxy configuration/clearing without credential exposure, and
   extensionless Huawei log upload, full-text three-bucket LLM triage, bounded
-  two-to-eight-round comprehensive diagnosis planning, explicit stop reason,
+  two-to-twenty-round typed-tool diagnosis planning, explicit stop reason,
   recoverable case chat, GW/AP joint evidence scope and human-approved diagnosis/
-  report revision. The revised end-to-end diagnosis flow was also rerun against
-  Playwright's bundled Chromium. The Edge flow now explicitly asserts that log
-  planning and comprehensive-diagnosis traces render non-zero total/input/output
-  Token counts from the Fake model usage response.
+  report revision. The diagnosis flow explicitly asserts non-zero total/input/output
+  Token counts, the called method/tool tables, and navigation from a triage match to
+  the canonical source file with exact line 5 highlighted.
   Browser console errors and warnings: zero.
-- Repository Harness: all 13 contracts passed across 19 required files, 14
+- Repository Harness: all 13 contracts passed across 21 required files, 14
   tracked Markdown files, dependency-update targets and 28 allowlisted Workflow
   operations. The local rerun checked 16 Markdown files in total because it also
   included two explicitly ignored private reference documents without adding them
   to Git.
-- Architecture checks: 82 Python files and 14 Vue files passed file-size,
+- Architecture checks: 94 Python files and 16 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest
-  measured Python cyclomatic complexity was 46, below the limit of 50.
+  measured Python cyclomatic complexity was 50, at the enforced limit of 50.
 - Backend dependency consistency, lock synchronization, Ruff and Python
   compilation: passed.
 - Vue TypeScript check, production Vite build and VS Code extension TypeScript
@@ -42,31 +39,43 @@ Last validated: 2026-08-13 on Windows 11.
 - Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
 
 Final local run artifacts:
-`artifacts\validation\20260813-161439-full\summary.json` (18/18 stages passed in
-344.78 seconds).
+`artifacts\validation\20260814-135736-full\summary.json` (18/18 stages passed in
+349.74 seconds).
 
-Approved external GLM-5.2 validation was also performed without persisting the
-credential or private method bodies. For the synthetic symptom “AP频繁离线”, the
-current adapter completed in one request, attested both local method document IDs,
-selected 60 of 157 compiled method patterns, added 30 method-backed literal
-keywords and produced 90 first-bucket searchers. The provider reported 26,454
-prompt, 9,583 completion and 36,037 total Tokens in 118,212 ms. An earlier shape
-probe confirmed GLM may wrap the payload under `log_triage_plan`; the compatibility
-normalizer now accepts that envelope without weakening document/Pattern ID gates.
+## Approved external GLM-5.2 result
 
-The same approved GLM-5.2 endpoint was then exercised through the complete
-multi-round comprehensive Planner against an isolated “AP频繁离线” case and the
-two Git-ignored local methods. It completed three rounds in `llm_multiround` mode,
-attested every mandatory method each round, classified the local fault tree as
-`POSSIBLY_RELEVANT` in all three rounds, created two fault-tree-bound checks per
-round and executed 10 real Agentic Search calls. Fault-tree-bound query counts were
-3, 3 and 1 by round. Round three corrected one incompatible JSON response and then
-passed the same schema/ID/method-coverage gates. Trace usage was 51,774 prompt,
-22,286 completion and 74,060 total Tokens. The explicit stop reason was
-`EXHAUSTED_SEARCH_NO_EVIDENCE`; zero returned candidates were expected because the
-isolated database deliberately contained no logs or managed knowledge. This test
-therefore verifies planning and search dispatch without treating an empty test
-corpus as proof that the fault tree is unrelated.
+On 2026-08-14 the approved GLM-5.2 endpoint was exercised with the Git-ignored
+local `故障树.md` and `日志分析.md`, an isolated temporary database and synthetic
+log evidence. The credential was obtained only inside the validation process and
+was not written to source, reports or command output. The no-model preflight found
+2 method documents, 157 compiled Patterns and 27 fault-tree nodes; 27/27 nodes had
+an auditable retrieval entry and 26 had a direct recommended log Pattern.
+
+All 9 Chat-model probes passed:
+
+- Thinking-enabled gateway text and Thinking-disabled log planning;
+- log planning read both methods, selected 59 Patterns and added 30 keywords;
+- comprehensive typed-tool diagnosis with a hard 20-round limit;
+- evidence-constrained final synthesis, asynchronous case answer and diagnosis/
+  report revision;
+- knowledge-folder generation, conversational correction and repository patch
+  suggestion.
+
+The comprehensive Agent independently passed twice. One run completed in 3 rounds;
+the chained downstream run completed in 5 rounds with 19 total policy/model tool
+calls. Both reached `attempted=27`, `concluded=27` and `complete=true`. In the chained
+run the model correctly recognized that every log line was explicitly synthetic and
+therefore returned 27 `INSUFFICIENT_EVIDENCE` conclusions rather than claiming a real
+fault. Final synthesis and revision each preserved all 27 conclusions, and case chat
+returned a non-empty answer with a citation. The chained planner used 991,321 Tokens;
+the subsequent synthesis, chat and revision used 228,390, 222,200 and 338,341 Tokens.
+
+A deliberate 16,384-output-token probe ended with `finish_reason=length`; the same
+current fault tree completed with `max_tokens=65536`. The checked-in validator now
+uses 65,536 for long diagnosis/revision structures and smaller caps for short probes.
+Safe reports are Git-ignored under `artifacts\validation`; they contain status,
+duration, Token counts, counts and hashes, not credentials, model response bodies or
+private method bodies.
 
 The GitHub CI result is intentionally not recorded as a local fact here. After
 each push, the pull request checks are the authoritative Linux, Windows,
@@ -118,11 +127,15 @@ Run it independently with `scripts\run_golden_evals.bat`. Golden thresholds in
 ## Agentic execution status
 
 The production general-purpose Agentic Search path remains the deterministic,
-explainable retrieval baseline. Comprehensive diagnosis now adds a narrowly
-bounded two-to-eight-round LLM planner over that baseline; it validates complete
-method coverage, permits only bounded read-only retrieval queries, runs all model
-rounds on one event loop and falls back deterministically. The repository also
-contains a bounded typed-agent runtime with:
+explainable retrieval baseline. Comprehensive diagnosis is the narrow production
+exception: it runs a two-to-twenty-round typed read-only tool Agent over that baseline.
+Policy tools first list and read every applicable GW/AP/GENERAL method; each model
+round may dynamically invoke at most four method, knowledge, log-evidence or evidence
+lookup tools. Calls and their method, Pattern, fault-tree-node and evidence identifiers
+are schema-validated before execution, then deduplicated and executed on the same
+event loop, with content-safe failure diagnostics and deterministic fallback. The
+coverage ledger rejects terminal conclusions for nodes that have not been attempted.
+The reusable bounded runtime also provides:
 
 - a typed Tool Registry and per-role allowlists;
 - read-only-by-default tools and explicit approval for writes;
@@ -131,8 +144,8 @@ contains a bounded typed-agent runtime with:
 - deterministic fallback when planning or a tool fails;
 - privacy-preserving trajectory recording, scoring inputs and safe replay.
 
-The bounded runtime is beta infrastructure and is not silently enabled as the
-default production planner. Remaining P2 work is tracked in `CAPABILITIES.md`:
+The bounded runtime is not silently enabled as the default general-purpose search
+planner. Remaining P2 work is tracked in `CAPABILITIES.md`:
 a cross-task DAG/approval/stagnation control plane, and automatic conversion of
 human review feedback into a rule, test, document or evaluation case.
 
@@ -140,13 +153,15 @@ human review feedback into a rule, test, document or evaluation case.
 
 - Extensionless upload normalization to `.txt` and Huawei collectDebuginfo detection;
 - streaming parse, sparse line index, arbitrary-line reads, event pagination,
-  facets, timeline data and event-to-source navigation;
+  facets, timeline data and manifest-normalized event/triage-to-source navigation
+  with exact-line highlighting;
 - case-authorized LLM log planning that reads every applicable method, scans the
   complete extracted text locally, keeps command-output-only matches and presents
   LLM-relevant, method-required and other-event buckets with source lines;
-- multi-round comprehensive diagnosis with live planning trace, validated method/
-  Pattern/evidence IDs, full method content for synthesis, a hard eight-round ceiling
-  and deterministic fallback;
+- multi-round comprehensive diagnosis with live planning trace, five typed read-only
+  tools, called-document/method visibility, validated method/Pattern/evidence IDs,
+  a hard 20-round ceiling, explicit 27-node fault-tree coverage and diagnostic
+  deterministic fallback;
 - joint GW/AP diagnosis that retrieves both device domains plus GENERAL knowledge,
   retains primary-GW/secondary-AP artifact provenance and balances evidence across
   uploaded logs before synthesis;
@@ -163,7 +178,8 @@ human review feedback into a rule, test, document or evaluation case.
 - Code Graph, Commit Graph, three-class memory and Agentic Search integration;
 - encrypted model credentials and per-profile Chat proxy URLs, endpoint policy,
   certificate-chain/hostname verification with proxy-mode revocation checking
-  disabled, GLM-5.1/5.2 thinking/max-token options, egress audit and local/API
+  disabled, GLM-5.1/5.2 Thinking inherit/enabled/disabled and max-token options,
+  egress audit and local/API
   model switching;
 - idempotent, secret-safe Win11 opt-in that persists
   `MODEL_ALLOW_PRIVATE_ENDPOINTS=true` in the Git-ignored local `.env` without
@@ -178,11 +194,13 @@ PostgreSQL/Qdrant containers and local Docker image builds were not run here.
 GitHub CI contains service-container and image-build jobs that provide those
 checks after a push.
 
-External GLM-5.2 Chat was called with the credential explicitly approved for this
-validation, as recorded above. External Qwen Reranker, Qwen Chat, BGE and Embedding
-endpoints were not called; those adapter paths remain covered by the Fake
-OpenAI-compatible service and mocked tests. Run each model-profile test action
-against the endpoint approved for the target company environment before production use.
+External GLM-5.2 Chat was not called by the unified Full command itself. It was called
+separately on 2026-08-14 by the dedicated approved validator, and that current result
+is recorded above. External Qwen Reranker, Qwen Chat, BGE and Embedding endpoints were
+not called; a Chat-completions credential cannot validate those distinct model APIs.
+Those adapter paths remain covered by the Fake OpenAI-compatible service and mocked
+tests. Run each model-profile test action against the endpoint approved for the target
+company environment before production use.
 
 Use `scripts\validate_all.bat Fast` during development,
 `scripts\validate_all.bat Full` before publishing, and

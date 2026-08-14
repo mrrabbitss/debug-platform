@@ -41,8 +41,10 @@ SAFE_EVENT_METADATA_KEYS = {
     "document_id",
     "error_type",
     "fallback",
+    "finish_reason",
     "model",
     "model_profile_id",
+    "agent_mode",
     "planner_mode",
     "planner_stop_reason",
     "provider",
@@ -54,6 +56,8 @@ SAFE_EVENT_METADATA_KEYS = {
     "selected_modules",
     "stop_reason",
     "tool_permission",
+    "validation_code",
+    "validation_path",
     "version",
 }
 

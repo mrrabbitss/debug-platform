@@ -36,6 +36,9 @@ let timer: number | null = null
 
 const parsedArtifacts = computed(() => props.artifacts.filter(item => item.status === 'PARSED'))
 const methodDocuments = computed(() => triage.value?.method_coverage?.documents || [])
+const methodUsage = computed(() => triage.value?.summary?.method_usage || methodDocuments.value)
+const plannerFailure = computed(() => triage.value?.summary?.planner_failure || null)
+const toolCalls = computed(() => triage.value?.plan?.tool_calls || [])
 const planHypotheses = computed(() => triage.value?.plan?.hypotheses || [])
 const screeningSteps = computed(() => triage.value?.plan?.screening_steps || [])
 const selectedPatternCount = computed(() => Number(
@@ -178,7 +181,16 @@ onBeforeUnmount(() => {
         v-if="triage.summary?.planner_fallback"
         type="warning"
         :closable="false"
-        :title="`LLM 规划未通过校验，已使用确定性回退${triage.summary?.planner_error_type ? `（${triage.summary.planner_error_type}）` : ''}`"
+        :title="`LLM 规划未通过，已完成确定性回退${plannerFailure?.code ? `（${plannerFailure.code}）` : ''}`"
+        :description="`${plannerFailure?.message || triage.summary?.planner_error_type || '模型请求或结构校验失败'}${plannerFailure?.field_path ? `；字段：${plannerFailure.field_path}` : ''}${triage.summary?.planner_finish_reason ? `；模型停止原因：${triage.summary.planner_finish_reason}` : ''}`"
+        style="margin:12px 0"
+      />
+      <el-alert
+        v-else-if="triage.status === 'COMPLETED'"
+        type="success"
+        :closable="false"
+        :title="`LLM 日志规划已通过校验 · ${triage.plan?.agent_mode || '受控规划'}`"
+        :description="triage.summary?.planner_finish_reason ? `模型停止原因：${triage.summary.planner_finish_reason}` : '全部方法规则已由本地扫描器完成检查。'"
         style="margin:12px 0"
       />
       <el-alert
@@ -196,12 +208,25 @@ onBeforeUnmount(() => {
       </el-row>
 
       <el-collapse style="margin-bottom:14px">
-        <el-collapse-item title="已读取的方法文档与 LLM 规划摘要" name="methods">
-          <el-table :data="methodDocuments" size="small" max-height="260">
+        <el-collapse-item title="调用的文档、方法与 LLM 规划摘要" name="methods">
+          <el-table :data="methodUsage" size="small" max-height="320">
             <el-table-column prop="title" label="文档" min-width="240" />
-            <el-table-column prop="role" label="角色" width="190" />
+            <el-table-column prop="source_type" label="类型" width="150" />
+            <el-table-column prop="device_type" label="设备" width="80" />
             <el-table-column prop="version" label="版本" width="80" />
+            <el-table-column prop="read_status" label="读取状态" width="170" />
+            <el-table-column prop="selected_pattern_count" label="LLM 选择" width="100" />
+            <el-table-column prop="matched_pattern_count" label="命中规则" width="100" />
+            <el-table-column prop="occurrence_count" label="命中次数" width="100" />
             <el-table-column prop="id" label="证据 ID" min-width="210" show-overflow-tooltip />
+          </el-table>
+          <h4>只读工具调用</h4>
+          <el-table :data="toolCalls" size="small" max-height="240">
+            <el-table-column prop="round" label="轮次" width="70" />
+            <el-table-column prop="tool_name" label="工具" min-width="210" />
+            <el-table-column prop="invoked_by" label="调度方" width="170" />
+            <el-table-column prop="status" label="状态" width="120" />
+            <el-table-column prop="returned" label="返回" width="90" />
           </el-table>
           <h4>假设</h4><ul><li v-for="item in planHypotheses" :key="item">{{ item }}</li></ul>
           <h4>筛查步骤</h4><ol><li v-for="item in screeningSteps" :key="item">{{ item }}</li></ol>

@@ -140,6 +140,11 @@ def _diagnostic_response(payload: dict[str, Any]) -> str | None:
 
     if "round" in payload and "ranked_log_evidence" in payload:
         round_number = max(1, int(payload.get("round") or 1))
+        fault_tree_items = [
+            item for item in payload.get("fault_tree_items", [])
+            if isinstance(item, dict) and item.get("id") and item.get("method_document_id")
+        ]
+        fault_tree_item_ids = [str(item["id"]) for item in fault_tree_items]
         assessments = [{
             "method_document_id": document_id,
             "relevance": "POSSIBLY_RELEVANT",
@@ -152,6 +157,7 @@ def _diagnostic_response(payload: dict[str, Any]) -> str | None:
             "description": "Verify the method against ranked synthetic evidence",
             "evidence_needed": "A matching evidence ID or an explicit evidence gap",
             "completion_rule": "Record support, contradiction, or missing evidence",
+            "fault_tree_item_ids": fault_tree_item_ids if index == 1 else [],
         } for index, document_id in enumerate(method_ids, start=1)]
         return json.dumps({
             "read_document_ids": method_ids,
@@ -164,7 +170,16 @@ def _diagnostic_response(payload: dict[str, Any]) -> str | None:
                 "method_document_ids": method_ids,
                 "rationale": "Verify the synthetic method checks",
                 "expected_evidence": "Synthetic support or contradiction",
+                "fault_tree_item_ids": fault_tree_item_ids,
             }] if method_ids else [],
+            "fault_tree_assessments": [{
+                "item_id": str(item["id"]),
+                "method_document_id": str(item["method_document_id"]),
+                "status": "INSUFFICIENT_EVIDENCE",
+                "rationale": "The browser fixture does not contain evidence for this optional local tree node.",
+                "evidence_ids": [],
+                "next_action": "Collect the GW/AP logs requested by this tree node.",
+            } for item in fault_tree_items] if round_number == 1 else [],
             "evidence_gaps": [],
             "continue_analysis": round_number < 2,
             "stop_reason": (
@@ -221,6 +236,19 @@ def _diagnostic_response(payload: dict[str, Any]) -> str | None:
             if isinstance(item, dict) and item.get("evidence_id")
         ]
         evidence_id = evidence_ids[0] if evidence_ids else "SYNTHETIC-EVIDENCE"
+        deterministic = payload.get("deterministic_result")
+        coverage = (
+            deterministic.get("diagnostic_planning", {}).get("fault_tree_coverage", {})
+            if isinstance(deterministic, dict) else {}
+        )
+        conclusions = [{
+            "item_id": str(item["id"]),
+            "method_document_id": str(item["method_document_id"]),
+            "status": str(item["status"]),
+            "conclusion": str(item.get("rationale") or "Synthetic coverage conclusion"),
+            "evidence_ids": list(item.get("evidence_ids") or []),
+            "next_action": str(item.get("next_action") or "Human verification required"),
+        } for item in coverage.get("items", []) if isinstance(item, dict) and item.get("id")]
         return json.dumps({
             "summary": "Synthetic evidence-constrained comprehensive diagnosis completed.",
             "confirmed_facts": [{
@@ -247,6 +275,7 @@ def _diagnostic_response(payload: dict[str, Any]) -> str | None:
             "missing_information": [],
             "suspected_modules": ["AUTH"],
             "limitations": ["Synthetic browser fixture only."],
+            "fault_tree_conclusions": conclusions,
         }, ensure_ascii=False)
 
     if "question" in payload and "conversation_history" in payload:

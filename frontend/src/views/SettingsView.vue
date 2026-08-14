@@ -4,6 +4,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
 import type { Job, ModelMode, ModelProfile, ModelTask } from '../types'
 
+type ThinkingMode = 'inherit' | 'enabled' | 'disabled'
+
 const profiles = ref<ModelProfile[]>([])
 const retrieval = ref<any>({})
 const activeTask = ref<ModelTask>('chat')
@@ -31,7 +33,7 @@ const form = reactive({
   clear_proxy_url: false,
   enabled: true,
   temperature: 0.1,
-  thinking_enabled: false,
+  thinking_mode: 'inherit' as ThinkingMode,
   max_tokens: 0,
   timeout_seconds: 300,
   max_retries: 2,
@@ -115,7 +117,7 @@ function resetForm(task: ModelTask) {
   form.clear_proxy_url = false
   form.enabled = true
   form.temperature = 0.1
-  form.thinking_enabled = false
+  form.thinking_mode = 'inherit'
   form.max_tokens = 0
   form.timeout_seconds = 300
   form.max_retries = 2
@@ -152,7 +154,12 @@ function openEdit(profile: ModelProfile) {
   form.clear_proxy_url = false
   form.enabled = profile.enabled
   form.temperature = Number(profile.config.temperature ?? 0.1)
-  form.thinking_enabled = Boolean(profile.config.thinking_enabled ?? false)
+  const configuredThinking = String(profile.config.thinking_mode || '')
+  form.thinking_mode = ['inherit', 'enabled', 'disabled'].includes(configuredThinking)
+    ? configuredThinking as ThinkingMode
+    : Object.prototype.hasOwnProperty.call(profile.config, 'thinking_enabled')
+      ? (profile.config.thinking_enabled ? 'enabled' : 'disabled')
+      : 'inherit'
   form.max_tokens = Number(profile.config.max_tokens ?? 0)
   form.timeout_seconds = Number(profile.config.timeout_seconds ?? 300)
   form.max_retries = Number(profile.config.max_retries ?? 2)
@@ -169,7 +176,7 @@ function modelConfig() {
   if (form.task_type === 'chat') {
     return {
       temperature: form.temperature,
-      thinking_enabled: form.thinking_enabled,
+      thinking_mode: form.thinking_mode,
       max_tokens: form.max_tokens > 0 ? form.max_tokens : undefined,
       timeout_seconds: form.timeout_seconds,
       max_retries: form.max_retries
@@ -427,8 +434,12 @@ onMounted(load)
           <el-form-item label="Temperature"><el-input-number v-model="form.temperature" :min="0" :max="2" :step="0.1" /></el-form-item>
           <el-form-item label="Thinking">
             <div>
-              <el-switch v-model="form.thinking_enabled" active-text="启用" inactive-text="关闭" />
-              <div class="muted">GLM-5.1/5.2 可开启；后端会发送 thinking.type=enabled。其他兼容端点不支持时请关闭。</div>
+              <el-select v-model="form.thinking_mode" style="width:220px">
+                <el-option label="跟随模型默认" value="inherit" />
+                <el-option label="强制开启" value="enabled" />
+                <el-option label="强制关闭" value="disabled" />
+              </el-select>
+              <div class="muted">GLM-5.1/5.2 选择“强制关闭”时会显式发送 thinking.type=disabled；其他兼容端点可选择跟随默认。</div>
             </div>
           </el-form-item>
           <el-form-item label="最大输出 Tokens">

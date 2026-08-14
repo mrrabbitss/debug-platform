@@ -129,6 +129,55 @@ def test_json_generation_requests_json_object_and_tracks_usage(monkeypatch) -> N
     }
 
 
+@pytest.mark.parametrize(
+    ("thinking_mode", "expected_extra_body"),
+    [
+        ("enabled", {"thinking": {"type": "enabled"}}),
+        ("disabled", {"thinking": {"type": "disabled"}}),
+        ("inherit", None),
+    ],
+)
+def test_json_generation_sends_explicit_thinking_mode(
+    monkeypatch,
+    thinking_mode: str,
+    expected_extra_body: dict | None,
+) -> None:
+    captured_request: dict = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            captured_request.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content='{"ok":true}'),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=4, completion_tokens=2, total_tokens=6),
+            )
+
+    provider = object.__new__(llm.OpenAICompatibleProvider)
+    provider.model_name = "glm-5.2"
+    provider.temperature = 0.1
+    provider.thinking_mode = thinking_mode
+    provider.client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+    monkeypatch.setattr(llm, "record_model_egress", lambda *args, **kwargs: None)
+
+    asyncio.run(provider.generate_json("system", "user"))
+
+    if expected_extra_body is None:
+        assert "extra_body" not in captured_request
+    else:
+        assert captured_request["extra_body"] == expected_extra_body
+    assert provider.last_finish_reason == "stop"
+
+
+def test_thinking_mode_keeps_legacy_profiles_compatible() -> None:
+    assert llm._thinking_mode({}) == "inherit"
+    assert llm._thinking_mode({"thinking_enabled": True}) == "enabled"
+    assert llm._thinking_mode({"thinking_enabled": False}) == "disabled"
+    assert llm._thinking_mode({"thinking_mode": "disabled"}) == "disabled"
+
+
 def test_json_generation_falls_back_when_gateway_rejects_json_mode(monkeypatch) -> None:
     requests: list[dict] = []
 

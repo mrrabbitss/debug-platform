@@ -21,6 +21,7 @@ from app.services.agent_trace_runtime import (
     create_live_agent_run,
     finish_live_agent_run,
 )
+from app.services.agentic.tools import ToolContext
 from app.services.diagnostic_methods import (
     DiagnosticMethodDocument,
     DiagnosticPattern,
@@ -28,9 +29,16 @@ from app.services.diagnostic_methods import (
     load_applicable_diagnostic_methods,
 )
 from app.services.diagnostic_scope import normalize_artifact_source
+from app.services.diagnostic_tools import (
+    DiagnosticToolEnvironment,
+    build_diagnostic_tool_registry,
+    invoke_diagnostic_tool,
+    summarize_log_method_usage,
+)
 from app.services.jobs import JobCancelledError, JobContext, job_runner
 from app.services.llm import get_active_chat_model_info, get_llm_provider
 from app.services import log_triage_planning
+from app.services.log_triage_trace import append_log_planning_trace
 from app.services.storage import storage
 from app.services.text_files import open_text_lines
 
@@ -494,6 +502,19 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
             triage.error_message = None
             methods = load_applicable_diagnostic_methods(db, case)
             patterns = compile_diagnostic_patterns(methods)
+            tool_registry = build_diagnostic_tool_registry(DiagnosticToolEnvironment(
+                case=case, methods=methods, patterns=patterns,
+            ))
+            tool_context = ToolContext(role="ENGINEER", case_id=case.id)
+            catalog_tool = invoke_diagnostic_tool(
+                tool_registry, tool_context,
+                tool_name="list_diagnostic_documents", arguments={},
+            )
+            read_tool = invoke_diagnostic_tool(
+                tool_registry, tool_context,
+                tool_name="read_diagnostic_documents",
+                arguments={"document_ids": [method.id for method in methods]},
+            ) if methods else None
             coverage = {
                 "required_document_ids": [method.id for method in methods],
                 "documents": [method.public_snapshot() for method in methods],
@@ -506,9 +527,10 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
                 append_live_trace(
                     db,
                     triage.agent_run_id,
-                    stage="load_method_catalog",
-                    tool_name="load_applicable_diagnostic_methods",
+                    stage="list_diagnostic_documents",
+                    tool_name="list_diagnostic_documents",
                     status="COMPLETED",
+                    duration_ms=catalog_tool.duration_ms,
                     output_summary={
                         "documents": len(methods),
                         "patterns": len(patterns),
@@ -517,26 +539,15 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
                     metadata={"candidate_count": len(methods)},
                     commit=False,
                 )
-                for method in methods:
+                if read_tool:
                     append_live_trace(
-                        db,
-                        triage.agent_run_id,
-                        stage="read_method_document",
-                        tool_name="read_method_document",
-                        status="COMPLETED",
-                        input_summary={"document_id": method.id},
-                        output_summary={
-                            "document_id": method.id,
-                            "version": method.version,
-                            "sha256": method.content_sha256,
-                        },
-                        evidence_ids=[method.id],
-                        metadata={
-                            "document_id": method.id,
-                            "title": method.title,
-                            "version": method.version,
-                            "role": method.role,
-                        },
+                        db, triage.agent_run_id,
+                        stage="read_diagnostic_documents",
+                        tool_name="read_diagnostic_documents", status="COMPLETED",
+                        duration_ms=read_tool.duration_ms,
+                        output_summary={"documents": len(methods), "patterns": len(patterns)},
+                        evidence_ids=read_tool.evidence_ids,
+                        metadata={"candidate_count": len(methods), "role": "POLICY"},
                         commit=False,
                     )
             db.commit()
@@ -568,29 +579,12 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
             triage.method_coverage_json = json_dumps(coverage)
             triage.plan_json = json_dumps(plan)
             if triage.agent_run_id:
-                usage = model_result.get("usage", {})
-                append_live_trace(
+                append_log_planning_trace(
                     db,
-                    triage.agent_run_id,
-                    stage="llm_log_plan",
-                    tool_name="chat_completion",
-                    status="COMPLETED",
+                    run_id=triage.agent_run_id,
+                    plan=plan,
+                    model_result=model_result,
                     duration_ms=int((perf_counter() - planning_started) * 1000),
-                    input_tokens=int(usage.get("prompt_tokens") or 0),
-                    output_tokens=int(usage.get("completion_tokens") or 0),
-                    retry_count=int(model_result.get("retry_count") or 0),
-                    output_summary={
-                        "selected_patterns": len(plan.get("selected_pattern_ids", [])),
-                        "additional_keywords": len(plan.get("additional_keywords", [])),
-                        "fallback": bool(model_result.get("fallback")),
-                    },
-                    evidence_ids=list(plan.get("read_document_ids", [])),
-                    metadata={
-                        "planner_mode": plan.get("planner_mode"),
-                        "fallback": bool(model_result.get("fallback")),
-                        "error_type": model_result.get("error_type"),
-                    },
-                    commit=False,
                 )
             db.commit()
 
@@ -619,7 +613,20 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
                 "additional_keyword_count": len(plan.get("additional_keywords", [])),
                 "planner_fallback": bool(model_result.get("fallback")),
                 "planner_error_type": model_result.get("error_type"),
+                "planner_status": (
+                    "FALLBACK" if model_result.get("fallback") else "ACCEPTED"
+                ),
+                "planner_failure": model_result.get("failure"),
+                "planner_finish_reason": model_result.get("finish_reason"),
             })
+            summary["method_usage"] = summarize_log_method_usage(
+                methods, patterns, plan, summary,
+            )
+            for tool_call in plan.get("tool_calls", []):
+                if tool_call.get("tool_name") == "search_log":
+                    tool_call["status"] = "COMPLETED"
+                    tool_call["returned"] = len(match_rows)
+            triage.plan_json = json_dumps(plan)
             triage.summary_json = json_dumps(summary)
             triage.status = "COMPLETED"
             triage.completed_at = utcnow()
@@ -648,7 +655,11 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
                     db,
                     triage.agent_run_id,
                     status="COMPLETED",
-                    stop_reason="ALL_METHODS_SCANNED",
+                    stop_reason=(
+                        "ALL_METHODS_SCANNED_WITH_DETERMINISTIC_FALLBACK"
+                        if model_result.get("fallback")
+                        else "ALL_METHODS_SCANNED"
+                    ),
                     output_summary=summary,
                     duration_ms=int((perf_counter() - started) * 1000),
                     evidence_ids=[row["id"] for row in match_rows[:1000]],

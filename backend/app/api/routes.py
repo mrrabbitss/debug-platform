@@ -33,7 +33,11 @@ from app.schemas import (
 )
 from app.services.access_control import accessible_case_clause, case_permission
 from app.services.agentic_search import agentic_search
-from app.services.diagnosis import analyze_case_job, prepare_analysis_run
+from app.services.diagnosis import (
+    ANALYSIS_JOB_TIMEOUT_SECONDS,
+    analyze_case_job,
+    prepare_analysis_run,
+)
 from app.services.events import active_log_event_clause, event_to_dict, timeline_event_to_dict
 from app.services.jobs import job_runner
 from app.services.memory import (
@@ -65,7 +69,7 @@ job_runner.register(
     ("case_id", "analysis_run_id", "agent_run_id"),
     cancellable=True,
     max_attempts=1,
-    timeout_seconds=30 * 60,
+    timeout_seconds=ANALYSIS_JOB_TIMEOUT_SECONDS,
 )
 
 
@@ -543,7 +547,7 @@ def analyze_case(case_id: str, request: Request, db: Db) -> Job:
         },
         deduplicate=False,
         max_attempts=1,
-        timeout_seconds=30 * 60,
+        timeout_seconds=ANALYSIS_JOB_TIMEOUT_SECONDS,
         resource_limits={"max_input_bytes": 16 * 1024},
     )
 

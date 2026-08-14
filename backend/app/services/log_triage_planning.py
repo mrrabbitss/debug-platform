@@ -15,10 +15,12 @@ from app.services.diagnostic_methods import (
     method_prompt_bundle,
 )
 from app.services.llm import LLMError
+from app.services.log_triage_plan_tools import attach_log_triage_tool_calls
+from app.services.planning_diagnostics import planning_failure_details
 from app.services.rag import tokenize
 
 
-TRIAGE_PROMPT_VERSION = "log-triage-planner-v2"
+TRIAGE_PROMPT_VERSION = "log-triage-tool-planner-v3"
 MAX_LOG_PLAN_ATTEMPTS = 2
 MAX_LLM_SELECTED_PATTERNS = 60
 MAX_LLM_ADDITIONAL_KEYWORDS = 30
@@ -166,7 +168,7 @@ def deterministic_plan(
         for item in _IDENTIFIER.findall(issue)
         if not item.lower().startswith(("http://", "https://"))
     ))[:30]
-    return {
+    plan = {
         "read_document_ids": [document.id for document in documents],
         "selected_pattern_ids": [
             pattern.id for _, pattern in scored[:MAX_LLM_SELECTED_PATTERNS]
@@ -186,6 +188,15 @@ def deterministic_plan(
         "rationale": reason,
         "planner_mode": "deterministic_fallback",
     }
+    return attach_log_triage_tool_calls(
+        plan,
+        documents,
+        invoked_by="DETERMINISTIC_FALLBACK",
+        pattern_ids=[
+            pattern.id for _, pattern in scored[:MAX_LLM_SELECTED_PATTERNS]
+        ],
+        keywords=identifiers,
+    )
 
 
 async def plan_with_model(
@@ -218,7 +229,7 @@ async def plan_with_model(
         "compiled_patterns": [pattern.public_snapshot() for pattern in patterns],
         "output_contract": _LogTriagePlan.model_json_schema(),
         "requirements": [
-            "逐份完整阅读 mandatory_method_documents；read_document_ids 必须精确包含全部文档 ID",
+            "后端已通过只读文档工具完整读取 mandatory_method_documents；read_document_ids 会由工具轨迹证明并由后端写入，不要编造 ID",
             "选择与当前问题最相关的 compiled pattern ID；不得编造 pattern ID",
             f"selected_pattern_ids 最多 {MAX_LLM_SELECTED_PATTERNS} 个，必须按与当前问题的相关度从高到低排列",
             "additional_keywords 只能给出要在日志中按字面量查找的短关键词，不得输出正则表达式",
@@ -272,9 +283,10 @@ async def plan_with_model(
         _merge_usage(cumulative_usage, getattr(provider, "last_usage", {}) or {})
         cumulative_duration_ms += int(getattr(provider, "last_duration_ms", 0) or 0)
         try:
-            parsed = _LogTriagePlan.model_validate(_normalize_log_triage_plan(raw))
-            if set(parsed.read_document_ids) != expected_documents:
-                raise ValueError("Model did not attest reading every applicable method document")
+            normalized = _normalize_log_triage_plan(raw)
+            if isinstance(normalized, dict):
+                normalized["read_document_ids"] = sorted(expected_documents)
+            parsed = _LogTriagePlan.model_validate(normalized)
             unknown_patterns = set(parsed.selected_pattern_ids).difference(known_patterns)
             if unknown_patterns:
                 raise ValueError("Model selected unknown diagnostic pattern IDs")
@@ -313,6 +325,13 @@ async def plan_with_model(
         plan["additional_keywords"] = additional_keywords[:MAX_LLM_ADDITIONAL_KEYWORDS]
         plan["planning_attempts"] = attempt
         plan["planner_mode"] = "llm"
+        attach_log_triage_tool_calls(
+            plan,
+            documents,
+            invoked_by="MODEL_PLAN",
+            pattern_ids=plan["selected_pattern_ids"],
+            keywords=[item["keyword"] for item in plan["additional_keywords"]],
+        )
         _remember_planning_attempts(
             provider,
             usage=cumulative_usage,
@@ -327,6 +346,7 @@ async def plan_with_model(
             "attempts": attempt,
             "retry_count": attempt - 1,
             "fallback": False,
+            "finish_reason": getattr(provider, "last_finish_reason", None),
         }
     raise AssertionError("Log planning attempts exhausted without a result")
 
@@ -358,6 +378,7 @@ def safe_plan(
             case, documents, patterns, artifact_sources, provider,
         ))
     except (LLMError, ValidationError, ValueError) as exc:
+        failure = planning_failure_details(exc, provider)
         return deterministic_plan(
             case,
             documents,
@@ -373,5 +394,7 @@ def safe_plan(
             ),
             "fallback": True,
             "error_type": type(exc).__name__,
-            "error_message": str(exc)[:1000],
+            "error_message": failure["message"],
+            "failure": failure,
+            "finish_reason": failure.get("finish_reason"),
         }

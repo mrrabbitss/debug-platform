@@ -15,11 +15,13 @@ from app.services import (
     diagnostic_methods,
     diagnostic_planning,
     diagnostic_planning_contract,
+    diagnostic_tools,
     log_triage,
     log_triage_planning,
 )
 from app.services.diagnosis import _evidence_for_persistence
 from app.services.agent_trace_runtime import create_live_agent_run
+from app.services.agentic.tools import ToolContext, ToolPermission
 from app.services.diagnostic_methods import (
     DiagnosticMethodDocument,
     compile_diagnostic_patterns,
@@ -52,6 +54,60 @@ def _method(
         content_sha256="a" * 64,
         role="LOG_ANALYSIS_METHOD",
     )
+
+
+def test_diagnostic_tool_registry_reads_methods_and_searches_log_evidence() -> None:
+    methods = [_method("## 日志关键词\n- `Heartbeat timeout`", document_id="DOC-tools")]
+    patterns = compile_diagnostic_patterns(methods)
+    environment = diagnostic_tools.DiagnosticToolEnvironment(
+        case=Case(id="CASE-tools", title="AP频繁离线", device_type="AP"),
+        methods=methods,
+        patterns=patterns,
+        evidence=[{
+            "evidence_id": "LEM-tools",
+            "source_type": "log_triage_match",
+            "artifact_id": "ART-tools",
+            "source_file": "nested/AP.log",
+            "line_start": 42,
+            "line_end": 42,
+            "pattern_id": patterns[0].id,
+            "content": "Heartbeat timeout; AP offline",
+            "score": 0.8,
+        }],
+    )
+    registry = diagnostic_tools.build_diagnostic_tool_registry(environment)
+    context = ToolContext(role="ENGINEER", case_id="CASE-tools")
+
+    assert registry.get("search_log", role="ENGINEER").permission == ToolPermission.READ
+    read_result = diagnostic_tools.invoke_diagnostic_tool(
+        registry,
+        context,
+        tool_name="read_diagnostic_documents",
+        arguments={"document_ids": ["DOC-tools"]},
+    )
+    search_result = diagnostic_tools.invoke_diagnostic_tool(
+        registry,
+        context,
+        tool_name="search_log",
+        arguments={
+            "keywords": ["offline"],
+            "pattern_ids": [patterns[0].id],
+            "artifact_ids": ["ART-tools"],
+            "method_document_ids": ["DOC-tools"],
+        },
+    )
+
+    assert read_result.output["documents"][0]["content"].endswith("Heartbeat timeout`")
+    assert search_result.output["returned"] == 1
+    assert search_result.output["results"][0]["evidence_id"] == "LEM-tools"
+    assert search_result.output["results"][0]["line_start"] == 42
+    with pytest.raises(ValueError, match="unknown method"):
+        diagnostic_tools.invoke_diagnostic_tool(
+            registry,
+            context,
+            tool_name="search_log",
+            arguments={"keywords": ["offline"], "method_document_ids": ["DOC-unknown"]},
+        )
 
 
 def test_method_compiler_extracts_table_inline_and_template_patterns() -> None:
@@ -399,7 +455,7 @@ def test_log_scanner_reads_complete_extracted_text_not_only_structured_events(
     engine.dispose()
 
 
-def test_llm_log_plan_must_attest_every_method_document(monkeypatch) -> None:
+def test_log_plan_uses_tool_read_attestation_when_model_omits_ids(monkeypatch) -> None:
     documents = [_method("## 日志关键词\n- `Heartbeat timeout`", document_id="DOC-1")]
     patterns = compile_diagnostic_patterns(documents)
     case = Case(id="CASE-plan", title="heartbeat", device_type="AP")
@@ -422,17 +478,22 @@ def test_llm_log_plan_must_attest_every_method_document(monkeypatch) -> None:
     monkeypatch.setattr(log_triage, "get_llm_provider", lambda: _Provider())
     plan, metadata = log_triage._safe_plan(case, documents, patterns)
 
-    assert plan["planner_mode"] == "deterministic_fallback"
+    assert plan["planner_mode"] == "llm"
     assert plan["read_document_ids"] == ["DOC-1"]
-    assert metadata["fallback"] is True
-    assert metadata["error_type"] == "ValueError"
+    assert plan["read_attestation_source"] == "TOOL_RUNTIME"
+    assert any(
+        call["tool_name"] == "read_diagnostic_documents"
+        and call["status"] == "COMPLETED"
+        for call in plan["tool_calls"]
+    )
+    assert metadata["fallback"] is False
     assert metadata["usage"] == {
-        "prompt_tokens": 200,
-        "completion_tokens": 40,
-        "total_tokens": 240,
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
     }
-    assert metadata["duration_ms"] == 10
-    assert metadata["retry_count"] == 1
+    assert metadata["duration_ms"] == 5
+    assert metadata["retry_count"] == 0
 
 
 def test_log_plan_falls_back_when_provider_cannot_be_created(monkeypatch) -> None:
@@ -449,6 +510,7 @@ def test_log_plan_falls_back_when_provider_cannot_be_created(monkeypatch) -> Non
     assert plan["planner_mode"] == "deterministic_fallback"
     assert metadata["fallback"] is True
     assert metadata["error_type"] == "LLMError"
+    assert metadata["failure"]["code"] == "MODEL_REQUEST_FAILED"
     assert metadata["usage"] == {}
 
 
@@ -476,8 +538,10 @@ def test_llm_log_plan_corrects_invalid_first_response_and_aggregates_usage() -> 
             }
             self.last_duration_ms = 4 + call_number
             return {
-                "read_document_ids": [] if call_number == 1 else ["DOC-retry"],
-                "selected_pattern_ids": [patterns[0].id],
+                "read_document_ids": [],
+                "selected_pattern_ids": [
+                    "DPAT-unknown" if call_number == 1 else patterns[0].id
+                ],
                 "additional_keywords": ["offline"],
                 "screening_steps": ["scan"],
             }
@@ -919,11 +983,20 @@ def test_comprehensive_planner_records_usage_when_round_validation_fails(
             )
         ).one()
     assert result.public_plan["planner_mode"] == "deterministic_fallback"
+    assert result.public_plan["planner_accepted"] is False
+    assert result.public_plan["planner_failure"]["code"] == (
+        "PLANNER_SCHEMA_VALIDATION_ERROR"
+    )
+    assert any(
+        call["tool_name"] == "read_diagnostic_documents"
+        and call["status"] == "COMPLETED"
+        for call in result.public_plan["tool_calls"]
+    )
     assert failed.status == "FAILED"
-    assert failed.input_tokens == 62
-    assert failed.output_tokens == 18
-    assert failed.retry_count == 1
-    assert persisted.total_tokens == 80
+    assert failed.input_tokens == 93
+    assert failed.output_tokens == 27
+    assert failed.retry_count == 2
+    assert persisted.total_tokens == 120
     engine.dispose()
 
 
@@ -1029,6 +1102,7 @@ def test_comprehensive_planner_normalizes_glm_rich_objects_and_retries(
     assert provider.calls[1]["correction"]["symptom_relevant_fault_tree_ids"] == [
         "DOC-glm-tree",
     ]
+    assert "日志分析方法" in provider.calls[1]["correction"]["instruction"]
     first_round = result.public_plan["rounds"][0]
     assert first_round["planning_attempts"] == 2
     assert first_round["method_assessments"][0]["relevance"] == "RELEVANT"
@@ -1045,7 +1119,8 @@ def test_comprehensive_planner_normalizes_glm_rich_objects_and_retries(
         )).one()
         search_trace = db.scalars(select(AgentTraceEvent).where(
             AgentTraceEvent.run_id == run.id,
-            AgentTraceEvent.stage == "execute_planned_search",
+            AgentTraceEvent.stage == "execute_agent_tool",
+            AgentTraceEvent.tool_name == "search_knowledge",
         )).one()
     assert first_trace.retry_count == 1
     assert first_trace.input_tokens == 300
@@ -1126,11 +1201,11 @@ def test_first_round_requires_search_coverage_for_each_relevant_method() -> None
         )
 
 
-def test_comprehensive_planner_stops_at_eight_round_hard_limit(
+def test_comprehensive_planner_stops_at_twenty_round_hard_limit(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'planning-eight.db'}")
+    engine = create_engine(f"sqlite:///{tmp_path / 'planning-twenty.db'}")
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     Base.metadata.create_all(bind=engine)
     monkeypatch.setattr(diagnostic_methods, "_LOCAL_METHOD_FILES", {})
@@ -1146,9 +1221,9 @@ def test_comprehensive_planner_stops_at_eight_round_hard_limit(
             nonlocal calls
             calls += 1
             return {
-                "read_document_ids": ["DOC-eight"],
+                "read_document_ids": ["DOC-twenty"],
                 "method_assessments": [{
-                    "method_document_id": "DOC-eight",
+                    "method_document_id": "DOC-twenty",
                     "relevance": "POSSIBLY_RELEVANT",
                     "rationale": "Continue bounded verification",
                     "matched_signals": [],
@@ -1156,7 +1231,7 @@ def test_comprehensive_planner_stops_at_eight_round_hard_limit(
                 "hypotheses": [f"hypothesis-{calls}"],
                 "checks": [{
                     "check_id": f"check-{calls}",
-                    "method_document_id": "DOC-eight",
+                    "method_document_id": "DOC-twenty",
                     "description": "Continue bounded verification",
                     "evidence_needed": "More evidence",
                     "completion_rule": "Reach hard round budget",
@@ -1164,7 +1239,7 @@ def test_comprehensive_planner_stops_at_eight_round_hard_limit(
                 "search_queries": [{
                     "query_id": f"query-{calls}",
                     "query": f"bounded verification query {calls}",
-                    "method_document_ids": ["DOC-eight"],
+                    "method_document_ids": ["DOC-twenty"],
                     "rationale": "Continue bounded verification",
                     "expected_evidence": "More evidence",
                 }],
@@ -1176,13 +1251,13 @@ def test_comprehensive_planner_stops_at_eight_round_hard_limit(
     monkeypatch.setattr(diagnostic_planning, "get_llm_provider", lambda: _Provider())
     with factory() as db:
         case = Case(
-            id="CASE-eight", title="Eight round planning", device_type="AP",
+            id="CASE-twenty", title="Twenty round planning", device_type="AP",
             model_egress_approved=True,
         )
         db.add_all([
             case,
             KnowledgeDocument(
-                id="DOC-eight", title="GW/AP joint method", source_type="fault_tree",
+                id="DOC-twenty", title="GW/AP joint method", source_type="fault_tree",
                 device_type="GW", content="# Joint method", active=True,
                 review_status="ACTIVE",
             ),
@@ -1190,7 +1265,7 @@ def test_comprehensive_planner_stops_at_eight_round_hard_limit(
         db.flush()
         run = create_live_agent_run(
             db, operation="comprehensive_diagnosis", case_id=case.id,
-            resource_type="analysis", resource_id="RUN-eight",
+            resource_type="analysis", resource_id="RUN-twenty",
             input_summary={"case_id": case.id},
         )
         db.commit()
@@ -1200,8 +1275,8 @@ def test_comprehensive_planner_stops_at_eight_round_hard_limit(
         baseline_search={"summary": {}, "results": []}, session_factory=factory,
     )
 
-    assert calls == 8
-    assert len(result.public_plan["rounds"]) == 8
+    assert calls == 20
+    assert len(result.public_plan["rounds"]) == 20
     assert result.public_plan["stop_reason"] == "MAX_PLANNING_ROUNDS"
     assert result.public_plan["method_coverage"]["all_documents_read"] is True
     engine.dispose()
