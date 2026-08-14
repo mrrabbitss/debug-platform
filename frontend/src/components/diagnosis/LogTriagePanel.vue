@@ -182,7 +182,7 @@ onBeforeUnmount(() => {
         type="warning"
         :closable="false"
         :title="`LLM 规划未通过，已完成确定性回退${plannerFailure?.code ? `（${plannerFailure.code}）` : ''}`"
-        :description="`${plannerFailure?.message || triage.summary?.planner_error_type || '模型请求或结构校验失败'}${plannerFailure?.field_path ? `；字段：${plannerFailure.field_path}` : ''}${triage.summary?.planner_finish_reason ? `；模型停止原因：${triage.summary.planner_finish_reason}` : ''}`"
+        :description="`${plannerFailure?.message || triage.summary?.planner_error_type || '模型请求或结构校验失败'}${plannerFailure?.upstream_error_type ? `；上游错误：${plannerFailure.upstream_error_type}` : ''}${plannerFailure?.field_path ? `；字段：${plannerFailure.field_path}` : ''}${triage.summary?.planner_thinking_mode ? `；Thinking：${triage.summary.planner_thinking_mode}` : ''}${triage.summary?.planner_finish_reason ? `；模型停止原因：${triage.summary.planner_finish_reason}` : ''}`"
         style="margin:12px 0"
       />
       <el-alert
@@ -190,7 +190,7 @@ onBeforeUnmount(() => {
         type="success"
         :closable="false"
         :title="`LLM 日志规划已通过校验 · ${triage.plan?.agent_mode || '受控规划'}`"
-        :description="triage.summary?.planner_finish_reason ? `模型停止原因：${triage.summary.planner_finish_reason}` : '全部方法规则已由本地扫描器完成检查。'"
+        :description="`${triage.summary?.planner_thinking_mode ? `本阶段 Thinking：${triage.summary.planner_thinking_mode}；` : ''}${triage.summary?.planner_finish_reason ? `模型停止原因：${triage.summary.planner_finish_reason}` : '全部方法规则已由本地扫描器完成检查。'}`"
         style="margin:12px 0"
       />
       <el-alert

@@ -341,6 +341,7 @@ async def plan_with_model(
         return plan, {
             "provider": provider.provider_id,
             "model": provider.model_name,
+            "thinking_mode": getattr(provider, "last_thinking_mode", None),
             "usage": cumulative_usage,
             "duration_ms": cumulative_duration_ms,
             "attempts": attempt,
@@ -374,9 +375,7 @@ def safe_plan(
                 "duration_ms": 0,
                 "fallback": True,
             }
-        return asyncio.run(plan_with_model(
-            case, documents, patterns, artifact_sources, provider,
-        ))
+        return asyncio.run(plan_with_model(case, documents, patterns, artifact_sources, provider))
     except (LLMError, ValidationError, ValueError) as exc:
         failure = planning_failure_details(exc, provider)
         return deterministic_plan(
@@ -396,5 +395,6 @@ def safe_plan(
             "error_type": type(exc).__name__,
             "error_message": failure["message"],
             "failure": failure,
+            "thinking_mode": failure.get("thinking_mode"),
             "finish_reason": failure.get("finish_reason"),
         }

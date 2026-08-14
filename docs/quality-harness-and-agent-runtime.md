@@ -143,6 +143,8 @@ Agent 运行使用 `AgentRun + AgentTraceEvent` 保存：
 Token 会从供应商 usage 映射到每个模型阶段；缺少 total 时由输入与输出求和。日志规划的结构校验
 失败、一次有界纠正，以及综合诊断单轮最多两次纠正和最终诊断合成都写入用量；验证报告按完整
 Agent 轨迹累计多轮 Token，前端也可从事件明细回算旧运行的总量。
+模型失败轨迹只保存内容安全的稳定分类与上游异常类型，不保存端点响应正文。日志 JSON 规划
+单独记录实际 Thinking 模式，并固定为 `disabled`。
 
 管理员可在前端“运行轨迹”查看失败步骤和脱敏元数据。重放只对具备内容安全 payload 的
 只读 Agentic Search 开放，强制 `record_memory=false`；知识提炼可查看轨迹，但不能从轨迹

@@ -19,7 +19,7 @@ from app.services.model_profiles import (
     validate_model_endpoint,
     validate_model_proxy_url,
 )
-from app.services.model_transport import build_chat_http_client, safe_model_connection_error
+from app.services.model_transport import build_chat_http_client, safe_model_error_details
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,16 @@ def _thinking_mode(config: dict[str, Any]) -> str:
 
 
 class LLMError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "MODEL_REQUEST_FAILED",
+        upstream_error_type: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.upstream_error_type = upstream_error_type
 
 
 def _json_mode_unsupported(exc: Exception) -> bool:
@@ -96,12 +105,19 @@ class OpenAICompatibleProvider(LLMProvider):
         model_name = profile.model_name if profile else settings.llm_model
         proxy_url = get_profile_proxy_url(profile) if profile and profile.proxy_url_ciphertext else None
         if not api_key or not base_url or not model_name:
-            raise LLMError("API key, Base URL and model name are required")
+            raise LLMError(
+                "API key, Base URL and model name are required",
+                code="MODEL_CONFIGURATION_MISSING",
+            )
         try:
             validate_model_endpoint(base_url)
             validate_model_proxy_url("chat", "api", proxy_url)
         except ValueError as exc:
-            raise LLMError(str(exc)) from exc
+            raise LLMError(
+                str(exc),
+                code="MODEL_ENDPOINT_CONFIGURATION_INVALID",
+                upstream_error_type=type(exc).__name__,
+            ) from exc
         self.model_name = model_name
         self.profile = profile
         self.base_url = base_url
@@ -191,6 +207,14 @@ class OpenAICompatibleProvider(LLMProvider):
             thinking_mode = getattr(self, "thinking_mode", None)
             if thinking_mode is None and hasattr(self, "thinking_enabled"):
                 thinking_mode = "enabled" if self.thinking_enabled else "disabled"
+            # Log keyword planning is a bounded JSON extraction task. GLM Thinking
+            # can consume the whole output budget before emitting the JSON object,
+            # and can exceed common corporate-proxy request deadlines. Keep deep
+            # reasoning available for comprehensive diagnosis, but make this stage
+            # deterministic and short regardless of the profile-wide preference.
+            if purpose == "log_triage_planning":
+                thinking_mode = "disabled"
+            self.last_thinking_mode = thinking_mode or "inherit"
             if thinking_mode in {"enabled", "disabled"}:
                 request_options["extra_body"] = {"thinking": {"type": thinking_mode}}
             messages = [
@@ -235,10 +259,15 @@ class OpenAICompatibleProvider(LLMProvider):
                 error_type=type(exc).__name__,
             )
             logger.exception("OpenAI-compatible JSON request failed")
-            raise LLMError(safe_model_connection_error(
+            details = safe_model_error_details(
                 exc,
                 proxy_configured=getattr(self, "proxy_configured", False),
-            )) from exc
+            )
+            raise LLMError(
+                details.message,
+                code=details.code,
+                upstream_error_type=details.upstream_error_type,
+            ) from exc
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.I)
         try:
             parsed = json.loads(content)
@@ -252,7 +281,17 @@ class OpenAICompatibleProvider(LLMProvider):
                 response=response,
                 error_type=type(exc).__name__,
             )
-            raise LLMError("Model returned invalid JSON") from exc
+            finish_reason = getattr(self, "last_finish_reason", None)
+            truncated = str(finish_reason or "").casefold() == "length"
+            raise LLMError(
+                (
+                    "Model output reached the token limit before completing JSON"
+                    if truncated
+                    else "Model returned invalid JSON"
+                ),
+                code="MODEL_OUTPUT_TRUNCATED" if truncated else "MODEL_INVALID_JSON",
+                upstream_error_type=type(exc).__name__,
+            ) from exc
         if (
             isinstance(parsed, dict)
             and len(parsed) == 1
@@ -279,6 +318,7 @@ class OpenAICompatibleProvider(LLMProvider):
             thinking_mode = getattr(self, "thinking_mode", None)
             if thinking_mode is None and hasattr(self, "thinking_enabled"):
                 thinking_mode = "enabled" if self.thinking_enabled else "disabled"
+            self.last_thinking_mode = thinking_mode or "inherit"
             if thinking_mode in {"enabled", "disabled"}:
                 request_options["extra_body"] = {"thinking": {"type": thinking_mode}}
             response = await self.client.chat.completions.create(
@@ -298,10 +338,15 @@ class OpenAICompatibleProvider(LLMProvider):
                 error_type=type(exc).__name__,
             )
             logger.exception("OpenAI-compatible text request failed")
-            raise LLMError(safe_model_connection_error(
+            details = safe_model_error_details(
                 exc,
                 proxy_configured=getattr(self, "proxy_configured", False),
-            )) from exc
+            )
+            raise LLMError(
+                details.message,
+                code=details.code,
+                upstream_error_type=details.upstream_error_type,
+            ) from exc
         self._record_egress(
             purpose=purpose,
             system=system,

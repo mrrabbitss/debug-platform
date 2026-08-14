@@ -617,6 +617,7 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
                     "FALLBACK" if model_result.get("fallback") else "ACCEPTED"
                 ),
                 "planner_failure": model_result.get("failure"),
+                "planner_thinking_mode": model_result.get("thinking_mode"),
                 "planner_finish_reason": model_result.get("finish_reason"),
             })
             summary["method_usage"] = summarize_log_method_usage(

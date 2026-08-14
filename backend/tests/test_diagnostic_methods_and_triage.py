@@ -514,6 +514,34 @@ def test_log_plan_falls_back_when_provider_cannot_be_created(monkeypatch) -> Non
     assert metadata["usage"] == {}
 
 
+def test_log_plan_preserves_safe_model_failure_classification(monkeypatch) -> None:
+    documents = [_method("## 日志关键词\n- `Heartbeat timeout`", document_id="DOC-timeout")]
+    patterns = compile_diagnostic_patterns(documents)
+    case = Case(id="CASE-timeout", title="heartbeat", device_type="AP")
+
+    def fail_provider():
+        raise log_triage_planning.LLMError(
+            "Model connection through the configured proxy timed out",
+            code="MODEL_TIMEOUT",
+            upstream_error_type="APITimeoutError",
+        )
+
+    monkeypatch.setattr(log_triage, "get_llm_provider", fail_provider)
+    plan, metadata = log_triage._safe_plan(case, documents, patterns)
+
+    assert plan["planner_mode"] == "deterministic_fallback"
+    assert metadata["failure"] == {
+        "code": "MODEL_TIMEOUT",
+        "message": "模型请求超时；请检查代理超时和模型 Profile 的超时秒数。",
+        "field_path": None,
+        "error_type": "LLMError",
+        "upstream_error_type": "APITimeoutError",
+        "finish_reason": None,
+        "thinking_mode": None,
+        "retry_count": 0,
+    }
+
+
 def test_llm_log_plan_corrects_invalid_first_response_and_aggregates_usage() -> None:
     documents = [_method("## 日志关键词\n- `Synthetic offline marker`", document_id="DOC-retry")]
     patterns = compile_diagnostic_patterns(documents)

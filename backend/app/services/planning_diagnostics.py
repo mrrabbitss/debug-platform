@@ -108,6 +108,24 @@ _VALUE_ERROR_CODES = {
     ),
 }
 
+_LLM_ERROR_MESSAGES = {
+    "MODEL_CONFIGURATION_MISSING": "模型配置缺少 API Key、Base URL 或模型名称。",
+    "MODEL_ENDPOINT_CONFIGURATION_INVALID": "模型端点或代理配置未通过校验。",
+    "MODEL_PROXY_CONNECTION_FAILED": "模型代理拒绝连接。",
+    "MODEL_TIMEOUT": "模型请求超时；请检查代理超时和模型 Profile 的超时秒数。",
+    "MODEL_TLS_VERIFICATION_FAILED": "模型请求未通过 TLS 证书链或主机名校验。",
+    "MODEL_AUTHENTICATION_FAILED": "模型 API 鉴权失败，请检查 API Key。",
+    "MODEL_PERMISSION_DENIED": "模型服务拒绝访问，请检查账号或模型权限。",
+    "MODEL_RATE_LIMITED": "模型服务触发限流或配额限制。",
+    "MODEL_BAD_REQUEST": "模型网关拒绝了请求参数。",
+    "MODEL_NOT_FOUND": "模型名称或模型端点不存在。",
+    "MODEL_UPSTREAM_ERROR": "模型网关返回服务端 HTTP 错误。",
+    "MODEL_CONNECTION_FAILED": "无法连接模型服务或配置的代理。",
+    "MODEL_OUTPUT_TRUNCATED": "模型输出达到最大 Tokens，JSON 未完整返回。",
+    "MODEL_INVALID_JSON": "模型返回内容不是可解析的 JSON 对象。",
+    "MODEL_REQUEST_FAILED": "模型请求失败。",
+}
+
 
 def planning_failure_details(exc: Exception, provider: Any | None = None) -> dict[str, Any]:
     """Return content-safe diagnostics suitable for persistence and UI display."""
@@ -131,8 +149,8 @@ def planning_failure_details(exc: Exception, provider: Any | None = None) -> dic
         if mapped:
             code, message, field_path = mapped
         elif error_type == "LLMError":
-            code = "MODEL_REQUEST_FAILED"
-            message = "模型请求失败或模型没有返回可解析的 JSON。"
+            code = str(getattr(exc, "code", None) or "MODEL_REQUEST_FAILED")
+            message = _LLM_ERROR_MESSAGES.get(code, "模型请求失败。")
         elif rendered:
             message = rendered[:500]
     return {
@@ -140,6 +158,8 @@ def planning_failure_details(exc: Exception, provider: Any | None = None) -> dic
         "message": message,
         "field_path": field_path or None,
         "error_type": error_type,
+        "upstream_error_type": getattr(exc, "upstream_error_type", None),
         "finish_reason": getattr(provider, "last_finish_reason", None),
+        "thinking_mode": getattr(provider, "last_thinking_mode", None),
         "retry_count": int(getattr(provider, "last_validation_retry_count", 0) or 0),
     }
