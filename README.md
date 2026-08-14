@@ -398,14 +398,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models
 - Base URL 是否位于内网或受控网络；
 - API Key 和代理凭据不得写入前端持久化、Git 或报告。
 
-模型网关地址会在保存、启用和实际请求前校验。默认只允许公开 HTTPS 地址，并拒绝 `file://`、云元数据、链路本地、未授权回环和私网地址。公司内网模型请在 `.env` 明确列出主机名：
+模型网关地址会在保存、启用和实际请求前校验。开发/本地环境兼容公开 HTTP 与 HTTPS，
+不会仅因为使用 HTTP 就要求白名单；仍会拒绝 `file://`、云元数据、链路本地、未授权回环
+和私网地址。受控公司电脑需要直接访问内网 HTTP/HTTPS 模型时，可运行一次
+`scripts\enable_private_model_endpoints.bat`，或在 `.env` 中设置：
 
 ```env
-MODEL_ENDPOINT_ALLOWLIST=model-gateway.corp.example,.approved-models.corp.example
-MODEL_ALLOW_PRIVATE_ENDPOINTS=false
+MODEL_ALLOW_PRIVATE_ENDPOINTS=true
 ```
 
-白名单中的端点可以使用内网 HTTP（仍建议优先 HTTPS）。私网、本机或单标签代理主机优先加入同一白名单；受控公司开发电脑无法枚举地址时，可显式运行 `scripts\enable_private_model_endpoints.bat`。`APP_ENV=prod` 时所有 API 模型端点和模型代理仍必须在白名单内。回环代理必须单独加入白名单。
+无需再为普通 HTTP 模型地址维护 `MODEL_ENDPOINT_ALLOWLIST`。回环地址仍需精确加入白名单；
+`APP_ENV=prod` 时所有 API 模型端点和模型代理仍需白名单。HTTP 不提供传输加密，是否在
+公司网络中使用由部署方决定，平台不再以协议为由阻止开发环境配置。
 
 ## 6. 核心数据流
 

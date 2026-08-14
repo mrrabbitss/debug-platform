@@ -8,8 +8,8 @@ Markdown 故障案例草稿。模型输出不会直接进入在线知识检索�
 
 1. 运行 `scripts\start_local.bat`。
 2. 进入“系统设置 → 诊断大模型”，新增一个公司批准的 OpenAI-Compatible Chat 模型。
-3. 测试并启用该模型。内网模型地址需要按 README 配置
-   `MODEL_ENDPOINT_ALLOWLIST`。
+3. 测试并启用该模型。受控开发电脑使用内网模型时，按 README 运行一次
+   `scripts\enable_private_model_endpoints.bat`；普通 HTTP 地址不再要求单独维护白名单。
 4. 准备一个单案例文件夹。建议用文件名表达用途，例如：
 
 ```text

@@ -42,6 +42,14 @@ Final local run artifacts:
 `artifacts\validation\20260814-135736-full\summary.json` (18/18 stages passed in
 349.74 seconds).
 
+After removing the development-mode HTTP-only allowlist restriction, the focused
+model-profile suite passed 16/16 and
+`artifacts\validation\20260814-143609-fast\summary.json` passed all 9 Fast stages
+in 26.70 seconds. The regression explicitly accepts a public HTTP model endpoint,
+accepts a private HTTP endpoint when `MODEL_ALLOW_PRIVATE_ENDPOINTS=true`, and
+retains blocking for unapproved private/loopback, cloud-metadata and production
+endpoints.
+
 ## Approved external GLM-5.2 result
 
 On 2026-08-14 the approved GLM-5.2 endpoint was exercised with the Git-ignored
