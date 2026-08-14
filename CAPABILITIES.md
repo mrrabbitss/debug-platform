@@ -56,7 +56,7 @@
 | --- | --- | --- |
 | 规则诊断 | `AVAILABLE` | 基于事件码产生事实、假设、行动建议和限制 |
 | 证据约束 LLM 诊断 | `AVAILABLE` | 原生类型化只读工具 Agent 至少两轮、最多二十轮；策略先读取全部联合方法，并把故障树流程、判断点和根因分支编译为稳定节点。每个节点带跨方法 Pattern/检索词入口，必须绑定检查和实际只读检索，并得到“证据支持 / 已排除 / 证据不足”终态后规划才通过；模型每轮最多四次工具调用，工具参数和 GW/AP 双侧方法、Schema、方法/节点/Pattern/evidence ID 均在执行前受门禁约束，单轮最多纠正两次，失败显示原因并回退确定性诊断 |
-| 模型网关 | `AVAILABLE` | 前端管理并切换 Chat、Embedding、Reranker 配置；Chat API 支持逐 Profile 加密代理，空值直连，代理启用时保留证书链/主机名校验并跳过吊销检查；Thinking 支持“跟随模型默认 / 强制开启 / 强制关闭”，GLM-5.1/5.2 关闭时显式发送 `thinking.type=disabled`；可配置 `max_tokens`，新 Profile 默认 300 秒超时 |
+| 模型网关 | `AVAILABLE` | 前端管理并切换 Chat、Embedding、Reranker 配置；开发/本地环境兼容 HTTP/HTTPS，HTTP 不再强制要求端点白名单，私网地址可由本机 `MODEL_ALLOW_PRIVATE_ENDPOINTS` 持久开关放行，回环/危险系统地址和生产白名单约束仍保留；Chat API 支持逐 Profile 加密代理，空值直连，代理启用时保留证书链/主机名校验并跳过吊销检查；Thinking 支持“跟随模型默认 / 强制开启 / 强制关闭”，GLM-5.1/5.2 关闭时显式发送 `thinking.type=disabled`；可配置 `max_tokens`，新 Profile 默认 300 秒超时 |
 | 本地/API Embedding | `AVAILABLE` | 内置 Hashing、本地 Sentence Transformers、兼容 API |
 | 本地/API Reranker | `AVAILABLE` | 本地 CrossEncoder、Qwen Rerank API |
 | 混合检索 | `AVAILABLE` | 有界 BM25 候选、Dense top-K、加权 RRF、模块均衡和单次 Reranker |

@@ -112,8 +112,6 @@ def validate_model_endpoint(base_url: str) -> None:
         raise ValueError("Cloud metadata endpoints cannot be used as model gateways")
     if settings.app_env == "prod" and not allowlisted:
         raise ValueError("Production model endpoints must be listed in MODEL_ENDPOINT_ALLOWLIST")
-    if parsed.scheme.lower() == "http" and not allowlisted:
-        raise ValueError("HTTP model endpoints must be explicitly allowlisted; use HTTPS otherwise")
     if (host == "localhost" or host.endswith(".localhost")) and not allowlisted:
         raise ValueError("Loopback model endpoints must be explicitly allowlisted")
     if "." not in host and not allowlisted and not settings.model_allow_private_endpoints:

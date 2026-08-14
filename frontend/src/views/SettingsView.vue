@@ -403,7 +403,12 @@ onMounted(load)
         <el-form-item label="模型名/本地路径"><el-input v-model="form.model_name" :disabled="form.mode === 'builtin'" placeholder="模型名称或本地模型目录" /></el-form-item>
         <template v-if="form.mode === 'api'">
           <el-alert type="warning" :closable="false" style="margin-bottom:16px" title="API 模式会把当前用途所需的数据发送到该端点：诊断证据、知识分块或检索候选。请仅使用公司批准的模型服务。" />
-          <el-form-item label="Base URL"><el-input v-model="form.base_url" placeholder="Embedding/Chat 填到 /v1；Qwen Reranker 可填到 /compatible-api/v1" /></el-form-item>
+          <el-form-item label="Base URL">
+            <div style="width:100%">
+              <el-input v-model="form.base_url" placeholder="Embedding/Chat 填到 /v1；Qwen Reranker 可填到 /compatible-api/v1" />
+              <div class="muted" style="margin-top:6px">开发环境兼容 HTTP/HTTPS；私网地址启用 MODEL_ALLOW_PRIVATE_ENDPOINTS 后无需再配置 HTTP 白名单。</div>
+            </div>
+          </el-form-item>
           <el-form-item label="API Key"><el-input v-model="form.api_key" type="password" show-password :placeholder="editingId ? '留空则保留原密钥' : '仅发送并保存在后端'" /></el-form-item>
           <el-form-item v-if="editingId" label="清除原密钥"><el-switch v-model="form.clear_api_key" /></el-form-item>
           <template v-if="form.task_type === 'chat'">

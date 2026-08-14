@@ -51,7 +51,8 @@ HTTPS 和后端鉴权。
 
 - 仅支持 `http://` 和 `https://`，不允许 URL 内嵌账号密码、查询串或片段；
 - 云元数据、链路本地、未授权的回环/私网地址会被拒绝；
-- HTTP、回环地址以及 `APP_ENV=prod` 下的所有 API 地址必须显式加入 `MODEL_ENDPOINT_ALLOWLIST`；
+- 开发/本地环境中的普通 HTTP 与 HTTPS 地址均可直接配置，不因使用 HTTP 强制要求白名单；
+- 回环地址以及 `APP_ENV=prod` 下的所有 API 地址必须显式加入 `MODEL_ENDPOINT_ALLOWLIST`；
 - 内网主机较多时可显式设置 `MODEL_ALLOW_PRIVATE_ENDPOINTS=true`，但回环和危险系统地址仍受限制，生产环境仍要求精确白名单。
 
 Chat 模型代理执行相同的危险地址和生产白名单策略。代理 URL 仅支持 `http://` 或
@@ -59,11 +60,10 @@ Chat 模型代理执行相同的危险地址和生产白名单策略。代理 UR
 用户名和密码。私网和单标签代理主机应优先加入 `MODEL_ENDPOINT_ALLOWLIST`；受控开发环境
 无法枚举时可显式启用私网地址。本机/回环代理仍必须精确加入白名单。
 
-示例：
+开发电脑直接使用受信任的内网 HTTP/HTTPS 模型时，推荐配置：
 
 ```env
-MODEL_ENDPOINT_ALLOWLIST=model-gateway.corp.example,.approved-models.corp.example
-MODEL_ALLOW_PRIVATE_ENDPOINTS=false
+MODEL_ALLOW_PRIVATE_ENDPOINTS=true
 ```
 
 受控公司 Win11 电脑确认需要允许私网模型/代理地址时，可运行一次：
@@ -75,6 +75,7 @@ scripts\enable_private_model_endpoints.bat
 脚本只把 `MODEL_ALLOW_PRIVATE_ENDPOINTS=true` 持久写入本机 Git 忽略的 `.env`，重复运行
 不会产生重复配置，也不会输出 `.env` 内容或密钥。后续启动无需再次设置；执行后必须完全
 关闭并重启后端。该开关不放行回环、链路本地、云元数据地址，也不绕过生产白名单。
+HTTP 连接本身不再触发白名单校验；是否接受无传输加密的 HTTP 由部署方决定。
 
 ## 3. 知识分类层次
 

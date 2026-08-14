@@ -471,10 +471,26 @@ def test_model_endpoint_validation_blocks_unsafe_urls(monkeypatch):
         validate_model_endpoint("http://metadata.google.internal/latest")
     with pytest.raises(ValueError, match="Loopback"):
         validate_model_endpoint("https://127.0.0.1:8000/v1")
-    with pytest.raises(ValueError, match="HTTP model endpoints"):
-        validate_model_endpoint("http://api.example.com/v1")
+    validate_model_endpoint("http://api.example.com/v1")
     with pytest.raises(ValueError, match="credentials"):
         validate_model_endpoint("https://user:password@api.example.com/v1")
+
+
+def test_private_http_endpoint_uses_private_endpoint_opt_in(monkeypatch):
+    monkeypatch.setattr(
+        model_profiles,
+        "get_settings",
+        lambda: _endpoint_settings(allow_private=False),
+    )
+    with pytest.raises(ValueError, match="Private-network"):
+        validate_model_endpoint("http://10.20.30.40:8080/v1")
+
+    monkeypatch.setattr(
+        model_profiles,
+        "get_settings",
+        lambda: _endpoint_settings(allow_private=True),
+    )
+    validate_model_endpoint("http://10.20.30.40:8080/v1")
 
 
 def test_allowlisted_internal_model_endpoint_is_supported(monkeypatch):
