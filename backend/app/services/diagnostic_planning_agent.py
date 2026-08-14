@@ -1,0 +1,339 @@
+from __future__ import annotations
+
+from time import perf_counter
+from typing import Any
+
+from pydantic import ValidationError
+
+from app.core.utils import json_dumps
+from app.models import Case
+from app.services.agent_trace_runtime import append_live_trace
+from app.services.agentic.tools import ToolContext
+from app.services.diagnostic_methods import DiagnosticMethodDocument, DiagnosticPattern
+from app.services.diagnostic_planning_coverage import (
+    TERMINAL_FAULT_TREE_STATUSES,
+    coverage_snapshot,
+    initial_fault_tree_coverage,
+)
+from app.services.diagnostic_tools import invoke_diagnostic_tool
+from app.services.fault_tree_coverage import FaultTreeCoverageItem
+from app.services.jobs import JobContext
+from app.services.llm import LLMError
+from app.services.planning_diagnostics import planning_failure_details
+
+
+async def execute_llm_planning_rounds(
+    ctx: JobContext,
+    *,
+    provider: Any,
+    case: Case,
+    methods: list[DiagnosticMethodDocument],
+    triage_evidence: list[dict[str, Any]],
+    baseline_search: dict[str, Any],
+    agent_run_id: str,
+    session_factory: Any,
+    tool_registry: Any,
+    tool_context: ToolContext,
+    document_observation: dict[str, Any],
+    fault_tree_items: list[FaultTreeCoverageItem],
+    diagnostic_patterns: list[DiagnosticPattern],
+    request_round: Any,
+    max_rounds: int,
+    min_rounds: int,
+    max_tool_calls_per_round: int,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    set[str],
+    str,
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+    dict[str, Any],
+]:
+    """Execute the model and typed tools until coverage is complete or the hard limit."""
+    prior_rounds: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = [{
+        "query": "initial deterministic retrieval",
+        "summary": baseline_search.get("summary", {}),
+        "results": baseline_search.get("results", [])[:20],
+    }]
+    supplemental_results: list[dict[str, Any]] = []
+    seen_queries: set[str] = set()
+    prior_tool_calls: dict[str, dict[str, Any]] = {}
+    executed_tool_calls: list[dict[str, Any]] = []
+    coverage = initial_fault_tree_coverage(fault_tree_items)
+    failure: dict[str, Any] | None = None
+    stop_reason = "MAX_PLANNING_ROUNDS"
+    active_round = 0
+    active_round_started = perf_counter()
+    try:
+        for round_number in range(1, max_rounds + 1):
+            active_round = round_number
+            ctx.update(
+                min(86, 50 + round_number * 4),
+                f"LLM diagnostic tool-agent round {round_number}",
+            )
+            ctx.raise_if_cancelled()
+            started = perf_counter()
+            active_round_started = started
+            coverage_before = coverage_snapshot(coverage)
+            valid_evidence_ids = {
+                str(item.get("evidence_id"))
+                for item in [
+                    *triage_evidence,
+                    *baseline_search.get("results", []),
+                    *supplemental_results,
+                ]
+                if isinstance(item, dict) and item.get("evidence_id")
+            }
+            planning_round = await request_round(
+                provider,
+                round_number=round_number,
+                case=case,
+                methods=methods,
+                triage_evidence=triage_evidence,
+                prior_rounds=prior_rounds,
+                search_observations=observations,
+                tool_manifest=tool_registry.manifest(role=tool_context.role),
+                document_observation=document_observation,
+                fault_tree_items=fault_tree_items,
+                diagnostic_patterns=diagnostic_patterns,
+                fault_tree_coverage=coverage_before,
+                unattempted_fault_tree_item_ids={
+                    item_id
+                    for item_id, item in coverage.items()
+                    if not item.get("attempted")
+                },
+                valid_evidence_ids=valid_evidence_ids,
+            )
+            rendered = planning_round.model_dump(mode="json")
+            rendered["round"] = round_number
+            rendered["planning_attempts"] = int(
+                getattr(provider, "last_validation_retry_count", 0) or 0
+            ) + 1
+            for assessment in planning_round.fault_tree_assessments:
+                current = coverage.get(assessment.item_id)
+                if current is None:
+                    continue
+                if (
+                    assessment.status == "PENDING"
+                    and current.get("status") in TERMINAL_FAULT_TREE_STATUSES
+                ):
+                    continue
+                current.update({
+                    "status": assessment.status,
+                    "rationale": assessment.rationale,
+                    "evidence_ids": list(dict.fromkeys(assessment.evidence_ids)),
+                    "next_action": assessment.next_action,
+                    "last_round": round_number,
+                })
+            prior_rounds.append(rendered)
+            usage = getattr(provider, "last_usage", {}) or {}
+            with session_factory() as db:
+                append_live_trace(
+                    db,
+                    agent_run_id,
+                    stage=f"llm_planning_round_{round_number}",
+                    tool_name="chat_completion",
+                    status="COMPLETED",
+                    duration_ms=int((perf_counter() - started) * 1000),
+                    input_tokens=int(usage.get("prompt_tokens") or 0),
+                    output_tokens=int(usage.get("completion_tokens") or 0),
+                    retry_count=int(
+                        getattr(provider, "last_validation_retry_count", 0) or 0
+                    ),
+                    output_summary={
+                        "hypotheses": len(planning_round.hypotheses),
+                        "method_assessments": len(planning_round.method_assessments),
+                        "checks": len(planning_round.checks),
+                        "tool_calls": len(planning_round.tool_calls),
+                        "fault_tree_assessments": len(
+                            planning_round.fault_tree_assessments
+                        ),
+                        "continue": planning_round.continue_analysis,
+                    },
+                    evidence_ids=planning_round.read_document_ids,
+                    metadata={
+                        "round": round_number,
+                        "stop_reason": planning_round.stop_reason,
+                        "finish_reason": getattr(provider, "last_finish_reason", None),
+                        "fault_tree_pending_before": int(
+                            coverage_before.get("status_counts", {}).get("PENDING", 0)
+                        ),
+                    },
+                )
+            rendered_calls: list[dict[str, Any]] = []
+            for planned_call in planning_round.tool_calls[:max_tool_calls_per_round]:
+                call_arguments = dict(planned_call.arguments)
+                if planned_call.method_document_ids:
+                    call_arguments.setdefault(
+                        "method_document_ids", planned_call.method_document_ids,
+                    )
+                dedupe_key = f"{planned_call.tool_name}:{json_dumps(call_arguments)}"
+                if dedupe_key in prior_tool_calls:
+                    previous_call = prior_tool_calls[dedupe_key]
+                    reused_call = {
+                        "round": round_number,
+                        "call_id": planned_call.call_id,
+                        "tool_name": planned_call.tool_name,
+                        "invoked_by": "MODEL",
+                        "method_document_ids": planned_call.method_document_ids,
+                        "rationale": planned_call.rationale,
+                        "fault_tree_item_ids": planned_call.fault_tree_item_ids,
+                        "status": "REUSED_DUPLICATE",
+                        "returned": previous_call.get("returned", 0),
+                        "total_candidates": previous_call.get("total_candidates", 0),
+                        "evidence_ids": previous_call.get("evidence_ids", []),
+                    }
+                    rendered_calls.append(reused_call)
+                    executed_tool_calls.append(reused_call)
+                    for item_id in planned_call.fault_tree_item_ids:
+                        if item_id in coverage:
+                            coverage[item_id]["attempted"] = True
+                    continue
+                ctx.raise_if_cancelled()
+                invocation = invoke_diagnostic_tool(
+                    tool_registry,
+                    tool_context,
+                    tool_name=planned_call.tool_name,
+                    arguments=call_arguments,
+                )
+                output_results = invocation.output.get("results", [])
+                if planned_call.tool_name == "search_knowledge":
+                    query = str(invocation.arguments.get("query") or "").strip()
+                    if query:
+                        seen_queries.add(query.casefold())
+                supplemental_results.extend(output_results)
+                observations.append({
+                    "round": round_number,
+                    "tool_name": planned_call.tool_name,
+                    "invoked_by": "MODEL",
+                    "arguments": invocation.arguments,
+                    "summary": {
+                        "returned": invocation.output.get("returned", 0),
+                        "total_candidates": invocation.output.get("total_candidates", 0),
+                    },
+                    "results": output_results,
+                })
+                rendered_call = {
+                    "round": round_number,
+                    "call_id": planned_call.call_id,
+                    "tool_name": planned_call.tool_name,
+                    "arguments": invocation.arguments,
+                    "method_document_ids": planned_call.method_document_ids,
+                    "rationale": planned_call.rationale,
+                    "fault_tree_item_ids": planned_call.fault_tree_item_ids,
+                    "status": "COMPLETED",
+                    "returned": int(invocation.output.get("returned") or 0),
+                    "total_candidates": int(
+                        invocation.output.get("total_candidates") or 0
+                    ),
+                    "evidence_ids": invocation.evidence_ids,
+                }
+                rendered_calls.append(rendered_call)
+                executed_tool_calls.append(rendered_call)
+                prior_tool_calls[dedupe_key] = rendered_call
+                for item_id in planned_call.fault_tree_item_ids:
+                    if item_id in coverage:
+                        coverage[item_id]["attempted"] = True
+                with session_factory() as db:
+                    append_live_trace(
+                        db,
+                        agent_run_id,
+                        stage="execute_agent_tool",
+                        tool_name=planned_call.tool_name,
+                        status="COMPLETED",
+                        duration_ms=invocation.duration_ms,
+                        input_summary=invocation.arguments,
+                        output_summary={
+                            "returned": invocation.output.get("returned", 0),
+                            "total_candidates": invocation.output.get(
+                                "total_candidates", 0,
+                            ),
+                        },
+                        evidence_ids=invocation.evidence_ids,
+                        metadata={
+                            "round": round_number,
+                            "candidate_count": invocation.output.get(
+                                "total_candidates", 0,
+                            ),
+                            "returned_count": invocation.output.get("returned", 0),
+                            "document_id": ",".join(
+                                planned_call.method_document_ids
+                            )[:500],
+                            "fault_tree_item_ids": planned_call.fault_tree_item_ids,
+                        },
+                    )
+            rendered["executed_tool_calls"] = rendered_calls
+            rendered["fault_tree_coverage_after_round"] = coverage_snapshot(coverage)
+            coverage_complete = rendered["fault_tree_coverage_after_round"]["complete"]
+            if (
+                round_number >= min_rounds
+                and not planning_round.continue_analysis
+                and (coverage_complete or not fault_tree_items)
+            ):
+                stop_reason = planning_round.stop_reason or "MODEL_SUFFICIENT_EVIDENCE"
+                break
+            if not planning_round.continue_analysis and not coverage_complete:
+                rendered["coverage_forced_continue"] = True
+    except (LLMError, ValidationError, ValueError) as exc:
+        stop_reason = "PLANNER_VALIDATION_FALLBACK"
+        failure = planning_failure_details(exc, provider)
+        usage = getattr(provider, "last_usage", {}) or {}
+        metadata = {
+            "round": active_round or 1,
+            "error_type": failure["error_type"],
+            "validation_code": failure["code"],
+            "validation_path": failure.get("field_path"),
+            "finish_reason": failure.get("finish_reason"),
+        }
+        with session_factory() as db:
+            append_live_trace(
+                db,
+                agent_run_id,
+                stage=f"llm_planning_round_{active_round or 1}",
+                tool_name="chat_completion",
+                status="FAILED",
+                duration_ms=int((perf_counter() - active_round_started) * 1000),
+                input_tokens=int(usage.get("prompt_tokens") or 0),
+                output_tokens=int(usage.get("completion_tokens") or 0),
+                retry_count=int(
+                    getattr(provider, "last_validation_retry_count", 0) or 0
+                ),
+                output_summary={"completed_rounds": len(prior_rounds)},
+                stop_reason=stop_reason,
+                metadata=metadata,
+                commit=False,
+            )
+            append_live_trace(
+                db,
+                agent_run_id,
+                stage="diagnostic_planner_fallback",
+                tool_name="deterministic_planner",
+                status="COMPLETED",
+                output_summary={"completed_rounds": len(prior_rounds)},
+                stop_reason=stop_reason,
+                metadata=metadata,
+            )
+    final_coverage = coverage_snapshot(coverage)
+    if fault_tree_items and not final_coverage["complete"] and failure is None:
+        stop_reason = "FAULT_TREE_COVERAGE_INCOMPLETE"
+        failure = {
+            "code": "FAULT_TREE_COVERAGE_INCOMPLETE",
+            "message": (
+                "The model did not investigate and conclude every compiled fault-tree item "
+                f"within {max_rounds} rounds"
+            ),
+            "field_path": "fault_tree_coverage",
+            "error_type": "FaultTreeCoverageError",
+            "finish_reason": getattr(provider, "last_finish_reason", None),
+        }
+    return (
+        prior_rounds,
+        supplemental_results,
+        seen_queries,
+        stop_reason,
+        executed_tool_calls,
+        failure,
+        final_coverage,
+    )

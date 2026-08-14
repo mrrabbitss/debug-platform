@@ -357,6 +357,20 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
   await expect(page.getByRole('tabpanel', { name: /② 方法文档强制检查/ })).toContainText(
     'get WLANConfiguration!'
   )
+  await page.getByText('调用的文档、方法与 LLM 规划摘要').click()
+  await expect(page.getByTestId('log-triage-panel')).toContainText(
+    'Synthetic E2E authentication screening method'
+  )
+  const methodEvidenceRow = page.getByRole('tabpanel', { name: /② 方法文档强制检查/ })
+    .locator('.el-table__row')
+    .filter({ hasText: 'get WLANConfiguration!' })
+    .first()
+  await methodEvidenceRow.click()
+  await expect(page.getByRole('tab', { name: '日志浏览' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('.log-line.target')).toContainText('get WLANConfiguration!')
+  await expect(page.locator('.log-line.target .line-number')).toHaveText('5')
+
+  await page.getByRole('tab', { name: '智能日志筛查' }).click()
   const triageTrace = page.getByTestId('planning-trace').filter({
     hasText: '日志 LLM Planning 轨迹'
   })
@@ -374,6 +388,12 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
   await expect(diagnosisTrace).toContainText(
     /Tokens：[1-9]\d*（输入 [1-9]\d* \/ 输出 [1-9]\d*）/
   )
+  await page.getByText('本次调用的文档与方法').click()
+  await expect(page.getByTestId('diagnostic-planning-details')).toContainText(
+    'Synthetic E2E authentication screening method'
+  )
+  await page.getByText('原生只读工具调用').click()
+  await expect(page.getByTestId('diagnostic-planning-details')).toContainText('search_knowledge')
   await expect(page.getByText('Synthetic evidence-constrained comprehensive diagnosis completed.')).toBeVisible()
 
   await page.getByRole('tab', { name: '交互问答' }).click()

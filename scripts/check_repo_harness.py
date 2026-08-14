@@ -31,6 +31,8 @@ REQUIRED_PATHS = (
     "docs/README.md",
     "scripts/validate_all.bat",
     "scripts/validate_all.ps1",
+    "scripts/validate_glm_chat_features.bat",
+    "scripts/validate_glm_chat_features.py",
     "scripts/check_architecture.py",
     "scripts/run_backend_tests.py",
     "workflow/README.md",

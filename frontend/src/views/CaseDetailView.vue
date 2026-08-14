@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
 import CaseChatPanel from '../components/diagnosis/CaseChatPanel.vue'
 import DiagnosticPlanningPanel from '../components/diagnosis/DiagnosticPlanningPanel.vue'
+import LogBrowserPanel from '../components/diagnosis/LogBrowserPanel.vue'
 import LogTriagePanel from '../components/diagnosis/LogTriagePanel.vue'
 import PlanningTracePanel from '../components/diagnosis/PlanningTracePanel.vue'
 import type {
@@ -48,21 +49,10 @@ const diagnosis = ref<any>({})
 const reportHtml = ref('')
 const reportPreviewAnalysisId = ref('')
 const selectedEvent = ref<LogEvent | null>(null)
-const fileManifest = ref<any>({})
-const rawLog = ref('')
-const selectedArtifact = ref<string>('')
-const selectedLogPath = ref('')
-const rawStartLine = ref(1)
-const rawReturnedLines = ref(0)
-const rawTotalLines = ref(0)
-const rawHasMore = ref(false)
-const rawEncoding = ref('')
-const rawJumpLine = ref(1)
-const rawSearchQuery = ref('')
-const rawSearchMatches = ref<{line_number:number, text:string}[]>([])
-const rawSearchNextLine = ref<number | null>(null)
-const rawSearchScannedTo = ref(0)
-const rawSearching = ref(false)
+const logBrowser = ref<{
+  loadManifest: (artifactId: string) => Promise<void>
+  openSource: (payload: { artifactId: string, sourceFile: string, line: number }) => Promise<void>
+} | null>(null)
 const symbolSearch = ref('')
 const principal = ref<Principal | null>(null)
 const caseAccess = ref<{case_id:string, role:string, permission:CasePermission | null} | null>(null)
@@ -92,6 +82,8 @@ const eventDrawerVisible = computed({
 const criticalCount = computed(() => eventStats.value.level_counts.CRITICAL || 0)
 const errorCount = computed(() => eventStats.value.level_counts.ERROR || 0)
 const modules = computed(() => Object.keys(eventStats.value.module_counts || {}).sort())
+const synthesisStatus = computed(() => diagnosis.value.synthesis_status || null)
+const synthesisFailure = computed(() => synthesisStatus.value?.failure || null)
 
 async function loadAll() {
   const [caseRes, artifactRes, analysisRes, repoRes] = await Promise.all([
@@ -325,89 +317,29 @@ async function retryCurrentJob() {
   }
 }
 
-async function loadManifest(artifactId: string) {
-  selectedArtifact.value = artifactId
-  fileManifest.value = (await api.get(`/artifacts/${artifactId}/files`)).data
-  selectedLogPath.value = ''
-  rawLog.value = ''
-  resetRawSearch()
+async function openArtifactFiles(artifactId: string) {
   activeTab.value = 'logs'
+  await nextTick()
+  await logBrowser.value?.loadManifest(artifactId)
 }
 
-async function loadRawLog(path: string, startLine = 1) {
-  if (!selectedArtifact.value) return
-  if (selectedLogPath.value !== path) resetRawSearch()
-  selectedLogPath.value = path
-  const response = await api.get(`/artifacts/${selectedArtifact.value}/content`, {
-    params: { path, start_line: Math.max(1, startLine), line_count: 1000 }
-  })
-  rawLog.value = response.data
-  rawStartLine.value = Number(response.headers['x-start-line'] || startLine)
-  rawReturnedLines.value = Number(response.headers['x-returned-lines'] || 0)
-  rawTotalLines.value = Number(response.headers['x-total-lines'] || 0)
-  rawHasMore.value = String(response.headers['x-has-more'] || 'false') === 'true'
-  rawEncoding.value = String(response.headers['x-text-encoding'] || '')
-  rawJumpLine.value = rawStartLine.value
-}
-
-function resetRawSearch() {
-  rawSearchMatches.value = []
-  rawSearchNextLine.value = null
-  rawSearchScannedTo.value = 0
-}
-
-async function searchRawLog(continueFromLast = false) {
-  const query = rawSearchQuery.value.trim()
-  if (!selectedArtifact.value || !selectedLogPath.value) return ElMessage.warning('请先选择日志文件')
-  if (!query) return ElMessage.warning('请输入原始日志关键词')
-  rawSearching.value = true
-  try {
-    const startLine = continueFromLast ? (rawSearchNextLine.value || 1) : 1
-    const { data } = await api.get(`/artifacts/${selectedArtifact.value}/search`, {
-      params: { path: selectedLogPath.value, query, start_line: startLine, limit: 100 }
-    })
-    rawSearchMatches.value = data.matches || []
-    rawSearchNextLine.value = data.next_start_line
-    rawSearchScannedTo.value = Number(data.scanned_to_line || 0)
-    if (!rawSearchMatches.value.length) ElMessage.info(data.has_more ? '当前扫描范围没有匹配，可继续搜索' : '没有找到匹配内容')
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || error?.message || '原始日志搜索失败')
-  } finally {
-    rawSearching.value = false
-  }
-}
-
-async function openRawSearchMatch(lineNumber: number) {
-  await loadRawLog(selectedLogPath.value, Math.max(1, lineNumber - 20))
-}
-
-async function previousRawPage() {
-  await loadRawLog(selectedLogPath.value, Math.max(1, rawStartLine.value - 1000))
-}
-
-async function nextRawPage() {
-  await loadRawLog(selectedLogPath.value, rawStartLine.value + Math.max(rawReturnedLines.value, 1))
-}
-
-async function jumpToRawLine() {
-  const maximum = rawTotalLines.value || Number.MAX_SAFE_INTEGER
-  await loadRawLog(selectedLogPath.value, Math.min(Math.max(1, rawJumpLine.value), maximum))
+async function openLogSource(payload: { artifactId: string, sourceFile: string, line: number }) {
+  activeTab.value = 'logs'
+  await nextTick()
+  await logBrowser.value?.openSource(payload)
 }
 
 async function openEventSource(event: LogEvent) {
   selectedEvent.value = null
-  await loadManifest(event.artifact_id)
-  await loadRawLog(event.source_file, Math.max(1, event.line_start - 20))
+  await openLogSource({ artifactId: event.artifact_id, sourceFile: event.source_file, line: event.line_start })
 }
 
 async function openTimelineSource(item: any) {
-  await loadManifest(item.artifact_id)
-  await loadRawLog(item.source_file, Math.max(1, Number(item.line_start || 1) - 20))
+  await openLogSource({ artifactId: item.artifact_id, sourceFile: item.source_file, line: Number(item.line_start || 1) })
 }
 
 async function openTriageSource(payload: { artifactId: string, sourceFile: string, line: number }) {
-  await loadManifest(payload.artifactId)
-  await loadRawLog(payload.sourceFile, Math.max(1, payload.line - 20))
+  await openLogSource(payload)
 }
 
 async function loadReportPreview(analysisId: string) {
@@ -517,11 +449,12 @@ onBeforeUnmount(() => {
     <el-tabs v-model="activeTab" type="border-card" @tab-change="handleTabChange">
       <el-tab-pane label="案例概览" name="overview">
         <div class="card-grid">
-          <div class="stat-card"><div class="muted">关键事件</div><strong style="font-size:28px">{{ eventStats.total }}</strong></div>
-          <div class="stat-card"><div class="muted">严重事件</div><strong style="font-size:28px;color:#991b1b">{{ criticalCount }}</strong></div>
-          <div class="stat-card"><div class="muted">错误事件</div><strong style="font-size:28px;color:#dc2626">{{ errorCount }}</strong></div>
+          <div class="stat-card"><div class="muted">已结构化日志记录</div><strong style="font-size:28px">{{ eventStats.total }}</strong></div>
+          <div class="stat-card"><div class="muted">CRITICAL 级记录</div><strong style="font-size:28px;color:#991b1b">{{ criticalCount }}</strong></div>
+          <div class="stat-card"><div class="muted">ERROR 级记录</div><strong style="font-size:28px;color:#dc2626">{{ errorCount }}</strong></div>
           <div class="stat-card"><div class="muted">知识增强</div><strong style="font-size:28px">{{ diagnosis.retrieved_knowledge?.length || 0 }}</strong></div>
         </div>
+        <p class="muted">以上是解析器按日志级别统计的记录条数，不等同于独立故障数或真实严重事件数。</p>
         <h3 class="section-title">问题现象</h3><p>{{ caseInfo.description || '未填写' }}</p>
         <el-card shadow="never" style="margin:14px 0">
           <div class="toolbar">
@@ -594,7 +527,7 @@ onBeforeUnmount(() => {
           <el-table-column label="操作" width="250">
             <template #default="scope">
               <el-button link type="primary" :disabled="!canEditCase" @click="parseArtifact(scope.row.id)">解析</el-button>
-              <el-button link @click="loadManifest(scope.row.id)">文件树</el-button>
+              <el-button link @click="openArtifactFiles(scope.row.id)">文件树</el-button>
                <el-button link type="danger" :disabled="!canEditCase" @click="deleteArtifact(scope.row as Artifact)">删除</el-button>
             </template>
           </el-table-column>
@@ -602,45 +535,7 @@ onBeforeUnmount(() => {
       </el-tab-pane>
 
       <el-tab-pane label="日志浏览" name="logs">
-        <div class="toolbar">
-          <el-select v-model="selectedArtifact" placeholder="选择已解析日志包" style="width:260px" @change="loadManifest">
-            <el-option v-for="item in artifacts.filter(a => a.status === 'PARSED')" :key="item.id" :label="item.original_name" :value="item.id" />
-          </el-select>
-          <span class="muted">解析文件数：{{ fileManifest.manifest_file_count || 0 }}</span>
-          <span class="muted">解析器：{{ Object.keys(fileManifest.parser_counts || {}).join('、') || '暂无' }}</span>
-        </div>
-        <el-row :gutter="14">
-          <el-col :span="7">
-            <el-card header="文件目录" style="height:650px;overflow:auto">
-              <div v-for="item in fileManifest.manifest || []" :key="item.path" style="padding:5px 0;cursor:pointer" @click="loadRawLog(item.path)">
-                <span class="mono">{{ item.path }}</span> <small class="muted">{{ item.line_count ? `${item.line_count} 行` : `${item.size} B` }}</small>
-              </div>
-            </el-card>
-          </el-col>
-          <el-col :span="17">
-            <el-card :header="selectedLogPath || '原始日志'" style="height:650px">
-              <div v-if="selectedLogPath" class="toolbar" style="margin-bottom:8px">
-                <el-button :disabled="rawStartLine <= 1" @click="previousRawPage">上一页</el-button>
-                <el-button :disabled="!rawHasMore" @click="nextRawPage">下一页</el-button>
-                <el-input-number v-model="rawJumpLine" :min="1" :max="rawTotalLines || undefined" controls-position="right" style="width:150px" />
-                <el-button @click="jumpToRawLine">跳转</el-button>
-                <span class="muted">第 {{ rawStartLine }}–{{ rawStartLine + Math.max(rawReturnedLines - 1, 0) }} 行 / {{ rawTotalLines || '未知总行数' }} · {{ rawEncoding }}</span>
-              </div>
-              <div v-if="selectedLogPath" class="toolbar" style="margin-bottom:8px">
-                <el-input v-model="rawSearchQuery" clearable placeholder="搜索原始日志关键词" style="width:280px" @keyup.enter="searchRawLog(false)" />
-                <el-button :loading="rawSearching" @click="searchRawLog(false)">搜索</el-button>
-                <el-button v-if="rawSearchNextLine" :loading="rawSearching" @click="searchRawLog(true)">从第 {{ rawSearchNextLine }} 行继续</el-button>
-                <span v-if="rawSearchScannedTo" class="muted">已扫描到第 {{ rawSearchScannedTo }} 行</span>
-              </div>
-              <div v-if="rawSearchMatches.length" style="max-height:92px;overflow:auto;border:1px solid #e5e7eb;padding:4px 8px;margin-bottom:8px">
-                <div v-for="match in rawSearchMatches" :key="match.line_number" class="mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-                  <el-button link type="primary" @click="openRawSearchMatch(match.line_number)">第 {{ match.line_number }} 行</el-button>{{ match.text }}
-                </div>
-              </div>
-              <pre class="mono" :style="{height: rawSearchMatches.length ? '375px' : '460px', overflow:'auto'}">{{ rawLog || '选择左侧文件查看，原始数据不会被 LLM 输出覆盖。' }}</pre>
-            </el-card>
-          </el-col>
-        </el-row>
+        <LogBrowserPanel ref="logBrowser" :artifacts="artifacts" />
       </el-tab-pane>
 
       <el-tab-pane label="智能日志筛查" name="triage">
@@ -734,6 +629,15 @@ onBeforeUnmount(() => {
         <el-empty v-if="!latestAnalysis" description="请先完成日志解析并启动综合诊断" />
         <template v-else>
           <el-alert type="info" :closable="false" :title="diagnosis.summary || '诊断完成'" />
+          <el-alert
+            v-if="synthesisStatus"
+            :type="synthesisStatus.accepted ? 'success' : synthesisStatus.mode === 'SKIPPED' ? 'info' : 'warning'"
+            :closable="false"
+            show-icon
+            :title="synthesisStatus.accepted ? '最终大模型诊断已通过证据校验' : synthesisStatus.mode === 'SKIPPED' ? '本次未调用最终大模型诊断' : '最终大模型诊断未通过校验，保留确定性诊断结果'"
+            :description="synthesisFailure ? `${synthesisFailure.code} · ${synthesisFailure.message}${synthesisFailure.field_path ? ` · 字段 ${synthesisFailure.field_path}` : ''}${synthesisStatus.finish_reason ? ` · 模型停止原因 ${synthesisStatus.finish_reason}` : ''}` : synthesisStatus.mode"
+            style="margin-top:10px"
+          />
           <DiagnosticPlanningPanel :planning="diagnosis.diagnostic_planning" />
           <h3 class="section-title">已确认事实</h3>
           <div v-for="fact in diagnosis.confirmed_facts || []" :key="fact.statement" class="evidence-box">{{ fact.statement }}<div class="muted">证据：{{ fact.evidence_ids?.join('、') }}</div></div>

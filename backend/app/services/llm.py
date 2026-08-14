@@ -25,6 +25,18 @@ from app.services.model_transport import build_chat_http_client, safe_model_conn
 logger = logging.getLogger(__name__)
 
 
+def _thinking_mode(config: dict[str, Any]) -> str:
+    configured = str(config.get("thinking_mode") or "").strip().lower()
+    if configured in {"inherit", "enabled", "disabled"}:
+        return configured
+    # Preserve the intent of profiles created before the tri-state control was
+    # introduced. A stored false value meant that the user explicitly chose
+    # "off", even though older adapters accidentally omitted the parameter.
+    if "thinking_enabled" in config:
+        return "enabled" if bool(config.get("thinking_enabled")) else "disabled"
+    return "inherit"
+
+
 class LLMError(RuntimeError):
     pass
 
@@ -98,11 +110,13 @@ class OpenAICompatibleProvider(LLMProvider):
         self.temperature = float(config.get("temperature", settings.llm_temperature))
         configured_max_tokens = int(config.get("max_tokens") or 0)
         self.max_tokens = configured_max_tokens if configured_max_tokens > 0 else None
-        self.thinking_enabled = bool(config.get("thinking_enabled", False))
+        self.thinking_mode = _thinking_mode(config)
+        self.thinking_enabled = self.thinking_mode == "enabled"
         timeout_seconds = float(config.get("timeout_seconds", settings.llm_timeout_seconds))
         self.last_usage: dict[str, int | None] = {}
         self.last_duration_ms = 0
         self.last_outcome = "NOT_CALLED"
+        self.last_finish_reason: str | None = None
         trust_environment = profile is None or profile.id == "MODEL-chat-env"
         self.client = AsyncOpenAI(
             api_key=api_key,
@@ -142,6 +156,9 @@ class OpenAICompatibleProvider(LLMProvider):
         self.last_usage = usage
         self.last_duration_ms = duration_ms
         self.last_outcome = outcome
+        choices = getattr(response, "choices", None) or []
+        finish_reason = getattr(choices[0], "finish_reason", None) if choices else None
+        self.last_finish_reason = str(finish_reason)[:128] if finish_reason else None
         record_model_egress(
             getattr(self, "profile", None),
             base_url=getattr(self, "base_url", None),
@@ -171,8 +188,11 @@ class OpenAICompatibleProvider(LLMProvider):
             max_tokens = getattr(self, "max_tokens", None)
             if max_tokens:
                 request_options["max_tokens"] = max_tokens
-            if getattr(self, "thinking_enabled", False):
-                request_options["extra_body"] = {"thinking": {"type": "enabled"}}
+            thinking_mode = getattr(self, "thinking_mode", None)
+            if thinking_mode is None and hasattr(self, "thinking_enabled"):
+                thinking_mode = "enabled" if self.thinking_enabled else "disabled"
+            if thinking_mode in {"enabled", "disabled"}:
+                request_options["extra_body"] = {"thinking": {"type": thinking_mode}}
             messages = [
                 {
                     "role": "system",
@@ -256,8 +276,11 @@ class OpenAICompatibleProvider(LLMProvider):
             max_tokens = getattr(self, "max_tokens", None)
             if max_tokens:
                 request_options["max_tokens"] = max_tokens
-            if getattr(self, "thinking_enabled", False):
-                request_options["extra_body"] = {"thinking": {"type": "enabled"}}
+            thinking_mode = getattr(self, "thinking_mode", None)
+            if thinking_mode is None and hasattr(self, "thinking_enabled"):
+                thinking_mode = "enabled" if self.thinking_enabled else "disabled"
+            if thinking_mode in {"enabled", "disabled"}:
+                request_options["extra_body"] = {"thinking": {"type": thinking_mode}}
             response = await self.client.chat.completions.create(
                 model=self.model_name,
                 temperature=self.temperature,

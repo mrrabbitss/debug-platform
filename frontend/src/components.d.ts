@@ -57,6 +57,7 @@ declare module 'vue' {
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     ElTree: typeof import('element-plus/es')['ElTree']
     ElTreeSelect: typeof import('element-plus/es')['ElTreeSelect']
+    LogBrowserPanel: typeof import('./components/diagnosis/LogBrowserPanel.vue')['default']
     LogTriagePanel: typeof import('./components/diagnosis/LogTriagePanel.vue')['default']
     PlanningTracePanel: typeof import('./components/diagnosis/PlanningTracePanel.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
