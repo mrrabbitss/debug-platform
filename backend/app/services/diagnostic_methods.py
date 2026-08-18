@@ -46,6 +46,18 @@ _LOG_HINTS = (
     "signature",
     "log",
 )
+_MEANING_HINTS = (
+    "含义",
+    "说明",
+    "意义",
+    "解释",
+    "判断",
+    "结论",
+    "用途",
+    "结果",
+    "meaning",
+    "description",
+)
 _LOCAL_METHOD_FILES = {
     "故障树.md": ("fault_tree", "FAULT_TREE"),
     "日志分析.md": ("analysis_skill", "LOG_ANALYSIS_METHOD"),
@@ -83,6 +95,7 @@ class DiagnosticPattern:
     heading: str
     line_start: int
     reason: str
+    meaning: str
 
     def public_snapshot(self) -> dict[str, Any]:
         snapshot = asdict(self)
@@ -234,8 +247,36 @@ def _pattern_regex(value: str) -> tuple[str, str]:
     return rendered, "template" if placeholders else "literal"
 
 
-def _table_candidates(lines: list[str]) -> list[tuple[str, int, str]]:
-    result: list[tuple[str, int, str]] = []
+def _clean_meaning(value: str) -> str:
+    meaning = re.sub(r"<br\s*/?>", "；", value, flags=re.IGNORECASE)
+    meaning = meaning.replace("`", "")
+    meaning = re.sub(r"(?:\*\*|__)(.*?)(?:\*\*|__)", r"\1", meaning)
+    meaning = meaning.strip("*_")
+    meaning = re.sub(r"\s+", " ", meaning).strip(" ：:|-—")
+    return meaning[:1000]
+
+
+def _fallback_meaning(document_title: str, heading: str) -> str:
+    section = heading or "日志分析方法"
+    return f"用于《{document_title}》中“{section}”的筛查（Skill 未提供单独含义）"
+
+
+def _line_meaning(
+    raw_line: str,
+    candidate: str,
+    *,
+    document_title: str,
+    heading: str,
+) -> str:
+    prose = _INLINE_CODE.sub(" ", raw_line)
+    prose = prose.replace(candidate, " ")
+    prose = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)、]\s*)", "", prose)
+    prose = _clean_meaning(prose)
+    return prose if len(prose) >= 2 else _fallback_meaning(document_title, heading)
+
+
+def _table_candidates(lines: list[str]) -> list[tuple[str, int, str, str]]:
+    result: list[tuple[str, int, str, str]] = []
     index = 0
     while index + 1 < len(lines):
         header = lines[index]
@@ -253,12 +294,28 @@ def _table_candidates(lines: list[str]) -> list[tuple[str, int, str]]:
             for position, cell in enumerate(headers)
             if any(hint in cell for hint in _LOG_HINTS)
         ]
+        meaning_columns = [
+            position
+            for position, cell in enumerate(headers)
+            if any(hint in cell for hint in _MEANING_HINTS)
+        ]
         row_index = index + 2
         while row_index < len(lines) and "|" in lines[row_index]:
             cells = [cell.strip() for cell in lines[row_index].strip().strip("|").split("|")]
+            meaning = "；".join(
+                cleaned
+                for position in meaning_columns
+                if position < len(cells)
+                and (cleaned := _clean_meaning(cells[position]))
+            )
             for position in selected_columns:
                 if position < len(cells):
-                    result.append((cells[position], row_index + 1, "Markdown table log column"))
+                    result.append((
+                        cells[position],
+                        row_index + 1,
+                        "Markdown table log column",
+                        meaning,
+                    ))
             row_index += 1
         index = row_index
     return result
@@ -293,21 +350,51 @@ def compile_diagnostic_patterns(
                 continue
             inline_candidates = _INLINE_CODE.findall(raw_line)
             for inline in inline_candidates:
-                candidates.append((inline, line_number, "Inline code log pattern"))
+                candidates.append((
+                    inline,
+                    line_number,
+                    "Inline code log pattern",
+                    _line_meaning(
+                        raw_line,
+                        inline,
+                        document_title=document.title,
+                        heading=heading,
+                    ),
+                ))
             # Inline code and table-column extraction are more precise than a
             # complete Markdown row. Avoid compiling pipes, emphasis and prose
             # into a regex that can never occur in the raw device log.
             is_table_row = raw_line.lstrip().startswith("|")
             if _PLACEHOLDER.search(raw_line) and not inline_candidates and not is_table_row:
-                candidates.append((raw_line, line_number, "Printf-style log template"))
+                candidates.append((
+                    raw_line,
+                    line_number,
+                    "Printf-style log template",
+                    _line_meaning(
+                        raw_line,
+                        raw_line,
+                        document_title=document.title,
+                        heading=heading,
+                    ),
+                ))
             if (
                 heading_is_log_section
                 and not inline_candidates
                 and re.match(r"^\s*(?:[-*+]\s+|\d+[.)、]\s*)", raw_line)
             ):
-                candidates.append((raw_line, line_number, f"Log method section: {heading}"))
+                candidates.append((
+                    raw_line,
+                    line_number,
+                    f"Log method section: {heading}",
+                    _line_meaning(
+                        raw_line,
+                        raw_line,
+                        document_title=document.title,
+                        heading=heading,
+                    ),
+                ))
 
-        for raw_candidate, line_number, reason in candidates:
+        for raw_candidate, line_number, reason, meaning in candidates:
             candidate = _clean_candidate(raw_candidate)
             if not _candidate_is_pattern(candidate):
                 continue
@@ -332,6 +419,10 @@ def compile_diagnostic_patterns(
                 heading=_heading_for_line(lines, line_number),
                 line_start=line_number,
                 reason=reason,
+                meaning=meaning or _fallback_meaning(
+                    document.title,
+                    _heading_for_line(lines, line_number),
+                ),
             ))
     return patterns
 

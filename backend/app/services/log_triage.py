@@ -6,15 +6,11 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from sqlalchemy import insert, select
+from sqlalchemy import select
 
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
-from app.diagnostic_models import (
-    LogEvidenceMatch,
-    LogEvidenceOccurrence,
-    LogTriageRun,
-)
+from app.diagnostic_models import LogTriageRun
 from app.models import Artifact, Case, LogEvent
 from app.services.agent_trace_runtime import (
     append_live_trace,
@@ -39,6 +35,11 @@ from app.services.jobs import JobCancelledError, JobContext, job_runner
 from app.services.llm import get_active_chat_model_info, get_llm_provider
 from app.services import log_triage_planning
 from app.services.log_triage_trace import append_log_planning_trace
+from app.services.log_triage_evidence import (
+    build_exact_hit,
+    normalize_log_message,
+    publish_triage_evidence,
+)
 from app.services.storage import storage
 from app.services.text_files import open_text_lines
 
@@ -54,11 +55,6 @@ _planner_safe_plan = log_triage_planning.safe_plan
 LLM_BUCKET = "LLM_RELEVANT"
 METHOD_BUCKET = "METHOD_REQUIRED"
 OTHER_BUCKET = "OTHER"
-_VARIABLE_NUMBER = re.compile(
-    r"(?<![A-Za-z])(?:0x[0-9a-f]+|\d{1,4}(?:[.:/-]\d{1,4}){1,5}|\d+)(?![A-Za-z])",
-    re.IGNORECASE,
-)
-_MAC = re.compile(r"\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b", re.IGNORECASE)
 
 
 def submit_log_triage(
@@ -153,13 +149,6 @@ def _safe_plan(
     )
 
 
-def _normalize_message(value: str) -> str:
-    normalized = _MAC.sub("<MAC>", value)
-    normalized = _VARIABLE_NUMBER.sub("<N>", normalized)
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    return normalized[:2000]
-
-
 def _compiled_searchers(
     patterns: list[DiagnosticPattern],
     plan: dict[str, Any],
@@ -181,7 +170,12 @@ def _compiled_searchers(
             "bucket": LLM_BUCKET,
             "score": 0.88 + min(0.1, float(proposal.get("relevance") or 0.0) / 10),
             "reason": str(proposal.get("reason") or "LLM 规划关键词"),
+            "meaning": str(
+                proposal.get("reason")
+                or "LLM 根据问题描述补充的相关日志特征"
+            ),
             "document_id": None,
+            "document_title": "LLM 规划补充关键词",
             "document_version": None,
             "source_type": "llm_plan",
             "heading": "LLM additional keyword",
@@ -208,12 +202,14 @@ def _compiled_searchers(
                 if selected
                 else "适用日志分析方法要求检查的关键词"
             ),
+            "meaning": pattern.meaning,
             "document_id": (
                 pattern.document_id
                 if not pattern.document_id.startswith("LOCALDOC-")
                 else None
             ),
             "local_document_id": pattern.document_id,
+            "document_title": pattern.document_title,
             "document_version": pattern.document_version,
             "source_type": pattern.source_type,
             "heading": pattern.heading,
@@ -227,8 +223,14 @@ def _scan_events(
     *,
     triage: LogTriageRun,
     searchers: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
     groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    hit_rows: list[dict[str, Any]] = []
     occurrence_map: dict[str, dict[str, Any]] = {}
     bucket_occurrences: Counter[str] = Counter()
     pattern_occurrences: Counter[str] = Counter()
@@ -303,7 +305,7 @@ def _scan_events(
             elif existing:
                 existing["pattern_ids_json"] = json_dumps(all_pattern_ids)
 
-        normalized_message = _normalize_message(text)
+        normalized_message = normalize_log_message(text)
         for searcher in matched:
             key = (
                 searcher["bucket"],
@@ -327,6 +329,7 @@ def _scan_events(
                     "pattern_text": searcher["text"],
                     "match_kind": searcher["match_kind"],
                     "reason": searcher["reason"],
+                    "meaning": searcher.get("meaning") or searcher["reason"],
                     "method_document_id": searcher.get("document_id"),
                     "method_version": searcher.get("document_version"),
                     "message": text[:4000],
@@ -340,11 +343,15 @@ def _scan_events(
                         "document_id": searcher.get("local_document_id")
                         or searcher.get("document_id"),
                         "source_type": searcher.get("source_type"),
+                        "document_title": searcher.get("document_title"),
                         "heading": searcher.get("heading"),
                         "line_start": searcher.get("line_start"),
                     },
                 }
                 groups[key] = group
+            hit_rows.append(build_exact_hit(
+                triage, group["id"], source_file, line_number, text, event_info,
+            ))
             group["occurrence_count"] += 1
             group["line_end"] = max(group["line_end"], line_number)
             if event_info and event_info.get("timestamp"):
@@ -433,15 +440,11 @@ def _scan_events(
         "occurrence_counts": dict(bucket_occurrences),
         "matched_pattern_count": len(pattern_occurrences),
         "pattern_occurrences": dict(pattern_occurrences),
+        "exact_hit_count": len(hit_rows),
         "artifact_source": artifact_source,
         "knowledge_scope": "GW_AP_JOINT",
     }
-    return match_rows, list(occurrence_map.values()), summary
-
-
-def _persist_batches(db: Any, model: Any, rows: list[dict[str, Any]]) -> None:
-    for start in range(0, len(rows), 1000):
-        db.execute(insert(model), rows[start:start + 1000])
+    return match_rows, hit_rows, list(occurrence_map.values()), summary
 
 
 def _mark_triage_failure(
@@ -590,7 +593,7 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
 
         ctx.update(55, "Scanning all parsed events for planned and mandatory method patterns")
         searchers = _compiled_searchers(patterns, plan)
-        match_rows, occurrences, summary = _scan_events(
+        match_rows, hit_rows, occurrences, summary = _scan_events(
             ctx,
             triage=triage,
             searchers=searchers,
@@ -601,8 +604,7 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
             triage = db.get(LogTriageRun, triage_run_id)
             if not triage:
                 raise ValueError("Log triage run was removed")
-            _persist_batches(db, LogEvidenceMatch, match_rows)
-            _persist_batches(db, LogEvidenceOccurrence, occurrences)
+            publish_triage_evidence(db, match_rows, hit_rows, occurrences)
             summary.update({
                 "triage_run_id": triage.id,
                 "artifact_id": triage.artifact_id,

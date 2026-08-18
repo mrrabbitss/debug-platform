@@ -10,6 +10,7 @@ from app.core.db import get_db
 from app.core.utils import json_loads, new_id
 from app.diagnostic_models import (
     AnalysisRevision,
+    LogEvidenceHit,
     LogEvidenceMatch,
     LogEvidenceOccurrence,
     LogTriageRun,
@@ -22,6 +23,7 @@ from app.schemas import (
     ChatRequest,
     ChatSubmission,
     ConversationMessageOut,
+    LogEvidenceHitPage,
     LogEvidencePage,
     LogTriageOut,
     LogTriageSubmission,
@@ -479,6 +481,7 @@ def list_log_triage_evidence(
                 "pattern_text": row.pattern_text,
                 "match_kind": row.match_kind,
                 "reason": row.reason,
+                "meaning": row.meaning or row.reason,
                 "method_document_id": row.method_document_id,
                 "method_version": row.method_version,
                 "metadata": json_loads(row.metadata_json, {}),
@@ -517,6 +520,7 @@ def list_log_triage_evidence(
                 "event_code": row.event_code,
                 "message": row.raw_text or row.message,
                 "occurrence_count": 1,
+                "meaning": "未命中诊断 Skill 规则，作为完整日志上下文保留",
                 "metadata": {"component": row.component},
             }
             for row in rows
@@ -528,6 +532,66 @@ def list_log_triage_evidence(
         "offset": offset,
         "limit": limit,
         "items": items,
+    }
+
+
+@router.get(
+    "/cases/{case_id}/log-triage/{triage_run_id}/evidence/{match_id}/occurrences",
+    response_model=LogEvidenceHitPage,
+)
+def list_log_triage_match_occurrences(
+    case_id: str,
+    triage_run_id: str,
+    match_id: str,
+    db: Db,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    triage = db.get(LogTriageRun, triage_run_id)
+    match = db.get(LogEvidenceMatch, match_id)
+    if (
+        not triage
+        or triage.case_id != case_id
+        or not match
+        or match.triage_run_id != triage.id
+        or match.case_id != case_id
+    ):
+        raise HTTPException(404, "Log triage match not found")
+    filters = (
+        LogEvidenceHit.triage_run_id == triage.id,
+        LogEvidenceHit.match_id == match.id,
+    )
+    total = int(db.scalar(
+        select(func.count(LogEvidenceHit.id)).where(*filters)
+    ) or 0)
+    rows = list(db.scalars(
+        select(LogEvidenceHit)
+        .where(*filters)
+        .order_by(
+            LogEvidenceHit.source_file,
+            LogEvidenceHit.line_start,
+            LogEvidenceHit.id,
+        )
+        .offset(offset)
+        .limit(limit)
+    ).all())
+    return {
+        "triage_run_id": triage.id,
+        "match_id": match.id,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "items": [
+            {
+                "id": row.id,
+                "source_file": row.source_file,
+                "line_start": row.line_start,
+                "line_end": row.line_end,
+                "timestamp": row.timestamp,
+                "message": row.message,
+            }
+            for row in rows
+        ],
     }
 
 

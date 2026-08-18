@@ -75,9 +75,11 @@ async function publishSyntheticDiagnosticMethod(request: APIRequestContext): Pro
         '',
         '## 必查日志关键词',
         '',
-        '- `authentication failed`',
-        '- `DHCP discover timeout`',
-        '- `get WLANConfiguration!`',
+        '| 日志关键字 | 含义 |',
+        '| --- | --- |',
+        '| `authentication failed` | 客户端认证失败 |',
+        '| `DHCP discover timeout` | DHCP 地址获取超时 |',
+        '| `get WLANConfiguration!` | 读取 WLAN 配置以核对无线参数 |',
         '',
         '## 排查步骤',
         '',
@@ -300,13 +302,17 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
   expect(createdCase.ok(), await createdCase.text()).toBeTruthy()
   const caseItem = await createdCase.json()
 
+  const repeatedLog = Buffer.from(
+    `${readFileSync(resolve(corpusRoot, 'logs', 'collectDebuginfo_golden'), 'utf8').trimEnd()}\nget WLANConfiguration!\n`,
+    'utf8'
+  )
   const uploaded = await request.post(`${apiUrl}/cases/${caseItem.id}/artifacts`, {
     multipart: {
       kind: 'debug_log',
       file: {
         name: 'collectDebuginfo_e2e',
         mimeType: 'text/plain',
-        buffer: readFileSync(resolve(corpusRoot, 'logs', 'collectDebuginfo_golden'))
+        buffer: repeatedLog
       }
     }
   })
@@ -329,9 +335,19 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
     { params: { bucket: 'METHOD_REQUIRED', limit: 100 } }
   )
   expect(methodEvidence.ok(), await methodEvidence.text()).toBeTruthy()
-  expect((await methodEvidence.json()).items.some(
+  const methodEvidencePayload = await methodEvidence.json()
+  const repeatedMatch = methodEvidencePayload.items.find(
     (item: any) => item.message.includes('get WLANConfiguration!') && item.line_start === 5
-  )).toBe(true)
+  )
+  expect(repeatedMatch?.occurrence_count).toBe(2)
+  expect(repeatedMatch?.meaning).toContain('读取 WLAN 配置')
+  const exactHitsResponse = await request.get(
+    `${apiUrl}/cases/${caseItem.id}/log-triage/${triage.id}/evidence/${repeatedMatch.id}/occurrences`
+  )
+  expect(exactHitsResponse.ok(), await exactHitsResponse.text()).toBeTruthy()
+  const exactHits = await exactHitsResponse.json()
+  expect(exactHits.total).toBe(2)
+  expect(exactHits.items.map((item: any) => item.line_start)).toEqual([5, 13])
 
   const analysisResponse = await request.post(`${apiUrl}/cases/${caseItem.id}/analyses`)
   expect(analysisResponse.ok(), await analysisResponse.text()).toBeTruthy()
@@ -365,10 +381,19 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
     .locator('.el-table__row')
     .filter({ hasText: 'get WLANConfiguration!' })
     .first()
-  await methodEvidenceRow.click()
+  await expect(methodEvidenceRow).toContainText('读取 WLAN 配置以核对无线参数')
+  await expect(page.locator('.occurrence-panel')).toHaveCount(0)
+  await methodEvidenceRow.locator('.el-table__expand-icon').click()
+  const occurrencePanel = page.locator('.occurrence-panel').filter({
+    hasText: '全部命中位置（2）'
+  })
+  await expect(occurrencePanel).toBeVisible()
+  await expect(occurrencePanel.getByText('5', { exact: true })).toBeVisible()
+  await expect(occurrencePanel.getByText('13', { exact: true })).toBeVisible()
+  await occurrencePanel.locator('.el-table__row').nth(1).getByRole('button', { name: '跳转' }).click()
   await expect(page.getByRole('tab', { name: '日志浏览' })).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('.log-line.target')).toContainText('get WLANConfiguration!')
-  await expect(page.locator('.log-line.target .line-number')).toHaveText('5')
+  await expect(page.locator('.log-line.target .line-number')).toHaveText('13')
 
   await page.getByRole('tab', { name: '智能日志筛查' }).click()
   const triageTrace = page.getByTestId('planning-trace').filter({

@@ -370,7 +370,7 @@ onMounted(load)
             <el-table :data="graphResult.documents" stripe>
               <el-table-column prop="title" label="标题" min-width="240" />
               <el-table-column prop="source_type" label="类型" width="130" />
-              <el-table-column label="证据 ID" min-width="180"><template #default="scope"><span class="mono">{{ scope.row.evidence_id }}</span></template></el-table-column>
+              <el-table-column label="证据来源" min-width="180"><template #default="scope">{{ scope.row.metadata?.source_file || scope.row.metadata?.file_path || scope.row.title || '知识库文档' }}</template></el-table-column>
               <el-table-column prop="source_score" label="图谱分数" width="110" />
               <el-table-column label="路径数" width="90"><template #default="scope">{{ scope.row.paths?.length || 0 }}</template></el-table-column>
             </el-table>
@@ -539,7 +539,18 @@ onMounted(load)
           </el-select>
         </el-form-item>
         <el-form-item label="Query"><el-input v-model="evaluationCaseForm.query" type="textarea" :rows="3" /></el-form-item>
-        <el-form-item label="预期证据 ID"><el-input v-model="evaluationCaseForm.expected_evidence_ids" type="textarea" :rows="3" placeholder="每行一个 evidence/chunk ID；可留空，仅评根因" /></el-form-item>
+        <el-collapse style="margin-bottom:12px">
+          <el-collapse-item title="高级：证据级评测约束" name="expected-evidence">
+            <el-form-item label="内部定位键">
+              <el-input
+                v-model="evaluationCaseForm.expected_evidence_ids"
+                type="textarea"
+                :rows="3"
+                placeholder="仅供评测维护者录入稳定定位键；操作界面和评测结果不会展示这些内部编号"
+              />
+            </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
         <el-form-item label="预期根因"><el-input v-model="evaluationCaseForm.expected_root_causes" type="textarea" :rows="3" placeholder="每行一个可接受根因短语" /></el-form-item>
         <el-form-item label="检索模块">
           <el-checkbox-group v-model="evaluationCaseForm.modules">

@@ -164,7 +164,8 @@ $dependencyFiles = @(
     (Join-Path $RepoRoot "frontend\package-lock.json")
 )
 if (($dependencyFiles | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -eq 0) {
-    $expectedStamp = (($dependencyFiles | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }) -join "-")
+    $expectedStamp = & (Join-Path $PSScriptRoot "dependency_fingerprint.ps1") `
+        -RepositoryRoot $RepoRoot
     $stampPath = Join-Path $RepoRoot ".local_dependency_stamp"
     if (Test-Path -LiteralPath $stampPath) {
         $installedStamp = (Get-Content -LiteralPath $stampPath -Raw).Trim()

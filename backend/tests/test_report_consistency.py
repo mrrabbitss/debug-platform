@@ -4,6 +4,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
+from app.core.utils import json_dumps
 from app.models import AnalysisRun, Case, Report
 from app.services import report
 from app.services.storage import StorageService
@@ -26,8 +27,33 @@ def test_report_versions_are_reserved_uniquely_and_published_atomically(
             id="ANL-report",
             case_id="CASE-report",
             status="COMPLETED",
-            result_json='{"summary":"<b>untrusted</b>"}',
-            evidence_json="[]",
+            result_json=json_dumps({
+                "summary": "<b>untrusted</b> based on EVT-report",
+                "confirmed_facts": [{
+                    "statement": "Timeout confirmed by EVT-report",
+                    "evidence_ids": ["EVT-report"],
+                }],
+                "hypotheses": [{
+                    "rank": 1,
+                    "title": "Heartbeat loss",
+                    "description": "Supported by EVT-report",
+                    "confidence_level": "HIGH",
+                    "priority": "P0",
+                    "supporting_evidence": ["EVT-report"],
+                    "contradicting_evidence": [],
+                }],
+                "recommended_actions": [],
+                "missing_information": ["Need peer capture"],
+                "limitations": [],
+            }),
+            evidence_json=json_dumps([{
+                "evidence_id": "EVT-report",
+                "source_type": "log_event",
+                "source_file": "nested/ap.log",
+                "line_start": 42,
+                "line_end": 42,
+                "content": "Heartbeat timeout",
+            }]),
         ))
         db.commit()
 
@@ -45,9 +71,11 @@ def test_report_versions_are_reserved_uniquely_and_published_atomically(
     assert first_path.exists()
     assert second_path.exists()
     assert first_path != second_path
-    assert "&lt;b&gt;untrusted&lt;/b&gt;" in first_path.read_text(
-        encoding="utf-8"
-    )
+    rendered = first_path.read_text(encoding="utf-8")
+    assert "&lt;b&gt;untrusted&lt;/b&gt;" in rendered
+    assert "nested/ap.log - 第 42 行" in rendered
+    assert "EVT-report" not in rendered
+    assert rendered.index("六、缺失信息与限制") < rendered.index("八、已确认事实")
     assert not list(first_path.parent.glob("*.tmp"))
     with factory() as db:
         assert list(db.scalars(

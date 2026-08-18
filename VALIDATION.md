@@ -1,13 +1,13 @@
 # Validation Record
 
-Last validated: 2026-08-14 on Windows 11.
+Last validated: 2026-08-18 on Windows 11.
 
 ## Current local regression result
 
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 205 passed and 1 external-service test skipped locally.
+- Backend tests: 206 passed and 1 external-service test skipped locally.
 - Backend line coverage: 77.91%, above the enforced 75% quality gate.
 - Golden Dataset: all 9 evaluators passed for parser output, document curation,
   Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
@@ -19,15 +19,18 @@ Last validated: 2026-08-14 on Windows 11.
   two-to-twenty-round typed-tool diagnosis planning, explicit stop reason,
   recoverable case chat, GW/AP joint evidence scope and human-approved diagnosis/
   report revision. The diagnosis flow explicitly asserts non-zero total/input/output
-  Token counts, the called method/tool tables, and navigation from a triage match to
-  the canonical source file with exact line 5 highlighted.
+  Token counts, the called method/tool tables, Skill-derived match meanings, a
+  collapsed repeated-match group, all occurrences at synthetic lines 5 and 13, and
+  exact navigation from the second occurrence to line 13. User-facing diagnosis,
+  chat, trace and report evidence is rendered as a filename plus line number rather
+  than an opaque internal evidence ID; confirmed facts are rendered last.
   Browser console errors and warnings: zero.
 - Repository Harness: all 13 contracts passed across 21 required files, 14
-  tracked Markdown files, dependency-update targets and 28 allowlisted Workflow
+  tracked Markdown files, dependency-update targets and 29 allowlisted Workflow
   operations. The local rerun checked 16 Markdown files in total because it also
   included two explicitly ignored private reference documents without adding them
   to Git.
-- Architecture checks: 94 Python files and 16 Vue files passed file-size,
+- Architecture checks: 97 Python files and 16 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest
   measured Python cyclomatic complexity was 50, at the enforced limit of 50.
 - Backend dependency consistency, lock synchronization, Ruff and Python
@@ -35,14 +38,17 @@ Last validated: 2026-08-14 on Windows 11.
 - Vue TypeScript check, production Vite build and VS Code extension TypeScript
   compile: passed.
 - Python, frontend and VS Code extension dependency audits: no known vulnerabilities.
-- Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0015.
+- Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0016.
 - Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
+- Startup, doctor, lock refresh and local-model scripts use the .NET SHA-256
+  implementation instead of depending on the optional `Get-FileHash` cmdlet. A
+  focused Windows PowerShell 5.1 doctor rerun confirmed that the dependency stamp is
+  captured and compared without a false changed-dependency warning.
 
 Final local run artifacts:
-`artifacts\validation\20260814-151131-full\summary.json` (18/18 stages passed in
-337.25 seconds). An immediately preceding attempt reached the dependency-audit
-stage but the configured network proxy closed its PyPI connection; the complete
-retry passed the same audit without source changes.
+`artifacts\validation\20260818-112103-full\summary.json` (18/18 stages passed in
+379.95 seconds). The run used Windows PowerShell 5.1 and included Alembic 0016,
+exact-hit browser assertions and the new human-readable evidence presentation.
 
 After removing the development-mode HTTP-only allowlist restriction, the focused
 model-profile suite passed 16/16 and
@@ -122,6 +128,9 @@ Run it independently with `scripts\run_golden_evals.bat`. Golden thresholds in
 - Agent runs and trace events persist `run_id`, `case_id`, stage/tool, model and
   configuration identity, Prompt version, redacted input/output hashes, token
   counts, cost, latency, retry count, evidence IDs, stop reason and approval state.
+- Evidence IDs remain internal join/validation keys. Trace, diagnosis, chat and
+  report serializers provide safe filename-line or document-title labels for every
+  user-facing surface and scrub unresolved opaque IDs from model prose.
 - Trace storage excludes unprocessed company-log bodies. The frontend trace
   viewer exposes only redacted metadata and supports a read-only replay path.
 - Background jobs use atomic leases, heartbeat, idempotency keys, deadlines,
@@ -175,7 +184,10 @@ human review feedback into a rule, test, document or evaluation case.
   with exact-line highlighting;
 - case-authorized LLM log planning that reads every applicable method, scans the
   complete extracted text locally, keeps command-output-only matches and presents
-  LLM-relevant, method-required and other-event buckets with source lines;
+  LLM-relevant, method-required and other-event buckets with source lines; every
+  relevant grouped match includes its Skill-derived meaning and exact occurrence
+  count, expands on demand from a collapsed state, and supports per-occurrence
+  source-file/line navigation;
 - multi-round comprehensive diagnosis with live planning trace, five typed read-only
   tools, called-document/method visibility, validated method/Pattern/evidence IDs,
   a hard 20-round ceiling, explicit 27-node fault-tree coverage and diagnostic
@@ -186,7 +198,8 @@ human review feedback into a rule, test, document or evaluation case.
 - persistent asynchronous case chat with refresh recovery, cancellation, explicit
   failure state and no long-lived browser request; users can request a diagnosis/
   report revision, inspect the evidence-constrained DRAFT, and explicitly apply or
-  reject it without overwriting the prior analysis version;
+  reject it without overwriting the prior analysis version; confirmed facts are the
+  final diagnosis/report section, and visible citations use filename-line labels;
 - atomic parser, graph, vector and report publication with rollback-safe failures;
 - layered knowledge taxonomy, editing, vector reindexing and hybrid retrieval;
 - GW, AP, GENERAL (通用) and legacy OTHER knowledge applicability, with GENERAL

@@ -104,7 +104,7 @@ onMounted(loadRuns)
     <el-alert
       type="info"
       :closable="false"
-      title="这里只展示摘要哈希、证据 ID、模型用量和脱敏配置；不会保存或回显未经处理的公司日志正文。"
+      title="这里只展示摘要哈希、可读证据位置、模型用量和脱敏配置；不会保存或回显未经处理的公司日志正文。"
       style="margin-bottom:16px"
     />
 
@@ -154,7 +154,7 @@ onMounted(loadRuns)
           <el-table-column prop="duration_ms" label="耗时(ms)" width="100" />
           <el-table-column label="Tokens" width="150"><template #default="scope">{{ scope.row.input_tokens }}/{{ scope.row.output_tokens }}</template></el-table-column>
           <el-table-column prop="retry_count" label="重试" width="70" />
-          <el-table-column label="证据" min-width="170"><template #default="scope">{{ scope.row.evidence_ids.join(', ') || '—' }}</template></el-table-column>
+          <el-table-column label="证据位置" min-width="240"><template #default="scope">{{ scope.row.evidence_labels?.join('、') || '—' }}</template></el-table-column>
         </el-table>
       </template>
     </el-drawer>

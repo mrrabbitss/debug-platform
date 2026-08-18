@@ -183,7 +183,7 @@ def test_local_model_installer_uses_project_layout_and_hf_mirror() -> None:
     assert "scripts\\check_hf_model_access.bat" in script
     assert "?blobs=true" in tools
     assert "--continue-at -" in tools
-    assert "Get-FileHash -LiteralPath $Path -Algorithm SHA256" in tools
+    assert "Get-Sha256Hex -Path $Path" in tools
     assert "Resolve-HfSafeChildPath" in tools
     assert "[INFO] Preflight: hf download $Repository config.json" in script
     assert '"config.json",' in script

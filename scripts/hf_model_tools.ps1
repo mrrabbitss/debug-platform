@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "file_hash.ps1")
 
 function Normalize-HfEndpoint {
     param(
@@ -249,7 +250,7 @@ function Test-HfDownloadedFile {
         return $false
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
-        $actualHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actualHash = (Get-Sha256Hex -Path $Path).ToLowerInvariant()
         if ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {
             return $false
         }

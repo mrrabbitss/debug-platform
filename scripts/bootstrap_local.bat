@@ -88,7 +88,7 @@ if errorlevel 1 (
 )
 popd
 
-for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths=@('backend\pyproject.toml','backend\uv.lock','backend\constraints.lock','frontend\package-lock.json'); $hashes=$paths | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }; [Console]::Write([string]::Join('-', $hashes))"`) do set "DEPENDENCY_STAMP=%%H"
+for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dependency_fingerprint.ps1" -RepositoryRoot "%CD%"`) do set "DEPENDENCY_STAMP=%%H"
 if not defined DEPENDENCY_STAMP (
   set "FAIL_STEP=Could not calculate the installed dependency fingerprint."
   goto :fail
