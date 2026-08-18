@@ -150,7 +150,7 @@ onBeforeUnmount(() => {
             <span v-if="message.error_message"> · {{ message.error_message }}</span>
           </div>
           <div v-if="message.citations?.length" class="message-meta">
-            引用：{{ message.citations.map(item => item.evidence_id).filter(Boolean).join('、') }}
+            引用：{{ message.citations.map(item => item.display_label || item.title || '证据位置未记录').filter(Boolean).join('、') }}
           </div>
         </div>
       </div>

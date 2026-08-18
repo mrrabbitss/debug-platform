@@ -34,6 +34,7 @@ def search_persisted_log_evidence(
             func.lower(LogEvidenceMatch.message).contains(term, autoescape=True),
             func.lower(LogEvidenceMatch.pattern_text).contains(term, autoescape=True),
             func.lower(LogEvidenceMatch.reason).contains(term, autoescape=True),
+            func.lower(LogEvidenceMatch.meaning).contains(term, autoescape=True),
         ))
     if match_filters:
         filters.append(or_(*match_filters))
@@ -74,6 +75,7 @@ def search_persisted_log_evidence(
             "line_end": row.line_end,
             "pattern_id": row.pattern_id,
             "pattern_text": row.pattern_text,
+            "meaning": row.meaning or row.reason,
             "content": mask_sensitive(row.message)[:2000],
             "score": round(float(row.relevance_score or 0.0), 6),
             "occurrence_count": row.occurrence_count,
@@ -82,4 +84,3 @@ def search_persisted_log_evidence(
             "metadata": metadata,
         })
     return {"results": results, "total_candidates": total}
-

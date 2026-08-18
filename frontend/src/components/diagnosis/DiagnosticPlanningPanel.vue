@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 const props = defineProps<{
   planning?: Record<string, any>
+  evidenceLabels?: Record<string, string>
 }>()
 
 const methodCatalog = computed(() => props.planning?.method_usage || props.planning?.method_catalog || [])
@@ -14,7 +15,18 @@ const methodTitles = computed<Record<string, string>>(() => Object.fromEntries(
 ))
 
 function methodLabel(documentId: string): string {
-  return methodTitles.value[documentId] ? `${methodTitles.value[documentId]}（${documentId}）` : documentId
+  return methodTitles.value[documentId] || '诊断方法'
+}
+
+function displayText(value: unknown): string {
+  let rendered = String(value ?? '')
+  for (const [evidenceId, label] of Object.entries(props.evidenceLabels || {})) {
+    rendered = rendered.split(evidenceId).join(label)
+  }
+  return rendered.replace(
+    /\b(?:EVT|LEM|LEH|DOC|KCHUNK|LOCALDOC|SYM|COMMIT|MEM|ANL|AREV)-[A-Za-z0-9_.:-]+\b/g,
+    '证据位置未记录'
+  )
 }
 
 function coverageStatusLabel(status: string): string {
@@ -70,8 +82,8 @@ function coverageStatusType(status: string): 'success' | 'info' | 'warning' | 'd
             <template #default="scope"><el-tag :type="coverageStatusType(scope.row.status)" size="small">{{ coverageStatusLabel(scope.row.status) }}</el-tag></template>
           </el-table-column>
           <el-table-column label="已检索" width="90"><template #default="scope">{{ scope.row.attempted ? '是' : '否' }}</template></el-table-column>
-          <el-table-column prop="rationale" label="判断依据" min-width="320" show-overflow-tooltip />
-          <el-table-column prop="next_action" label="下一步" min-width="280" show-overflow-tooltip />
+          <el-table-column label="判断依据" min-width="320" show-overflow-tooltip><template #default="scope">{{ displayText(scope.row.rationale) }}</template></el-table-column>
+          <el-table-column label="下一步" min-width="280" show-overflow-tooltip><template #default="scope">{{ displayText(scope.row.next_action) }}</template></el-table-column>
           <el-table-column prop="line_start" label="方法行" width="90" />
         </el-table>
       </el-collapse-item>
@@ -85,7 +97,6 @@ function coverageStatusType(status: string): 'success' | 'info' | 'warning' | 'd
           <el-table-column prop="check_count" label="检查" width="80" />
           <el-table-column prop="tool_call_count" label="工具调用" width="100" />
           <el-table-column prop="evidence_hit_count" label="证据命中" width="100" />
-          <el-table-column prop="id" label="文档 ID" min-width="210" show-overflow-tooltip />
         </el-table>
       </el-collapse-item>
       <el-collapse-item title="原生只读工具调用" name="tool-calls">
@@ -96,7 +107,7 @@ function coverageStatusType(status: string): 'success' | 'info' | 'warning' | 'd
           <el-table-column label="关联方法" min-width="300" show-overflow-tooltip>
             <template #default="scope">{{ (scope.row.method_document_ids || []).map(methodLabel).join('、') || '—' }}</template>
           </el-table-column>
-          <el-table-column prop="rationale" label="调用原因" min-width="280" show-overflow-tooltip />
+          <el-table-column label="调用原因" min-width="280" show-overflow-tooltip><template #default="scope">{{ displayText(scope.row.rationale) }}</template></el-table-column>
           <el-table-column label="故障树节点" width="110"><template #default="scope">{{ (scope.row.fault_tree_item_ids || []).length }}</template></el-table-column>
           <el-table-column prop="status" label="状态" width="130" />
           <el-table-column prop="returned" label="返回" width="80" />
@@ -120,22 +131,22 @@ function coverageStatusType(status: string): 'success' | 'info' | 'warning' | 'd
         <el-table :data="round.method_assessments || []" size="small">
           <el-table-column label="方法文档" min-width="300"><template #default="scope">{{ methodLabel(scope.row.method_document_id) }}</template></el-table-column>
           <el-table-column prop="relevance" label="相关性" width="170" />
-          <el-table-column prop="rationale" label="判断理由" min-width="320" />
+          <el-table-column label="判断理由" min-width="320"><template #default="scope">{{ displayText(scope.row.rationale) }}</template></el-table-column>
         </el-table>
         <h4>按方法执行的检查</h4>
         <el-table :data="round.checks || []" size="small">
           <el-table-column label="来源方法" min-width="300"><template #default="scope">{{ methodLabel(scope.row.method_document_id) }}</template></el-table-column>
-          <el-table-column prop="description" label="检查" min-width="300" />
-          <el-table-column prop="evidence_needed" label="所需证据" min-width="280" />
-          <el-table-column prop="completion_rule" label="完成条件" min-width="260" />
+          <el-table-column label="检查" min-width="300"><template #default="scope">{{ displayText(scope.row.description) }}</template></el-table-column>
+          <el-table-column label="所需证据" min-width="280"><template #default="scope">{{ displayText(scope.row.evidence_needed) }}</template></el-table-column>
+          <el-table-column label="完成条件" min-width="260"><template #default="scope">{{ displayText(scope.row.completion_rule) }}</template></el-table-column>
         </el-table>
         <h4>实际调度的认知检索</h4>
         <el-table :data="round.search_queries || []" size="small">
-          <el-table-column prop="query" label="查询" min-width="320" />
+          <el-table-column label="查询" min-width="320"><template #default="scope">{{ displayText(scope.row.query) }}</template></el-table-column>
           <el-table-column label="来源方法" min-width="220">
             <template #default="scope">{{ (scope.row.method_document_ids || []).map(methodLabel).join('、') }}</template>
           </el-table-column>
-          <el-table-column prop="rationale" label="目的" min-width="280" />
+          <el-table-column label="目的" min-width="280"><template #default="scope">{{ displayText(scope.row.rationale) }}</template></el-table-column>
         </el-table>
       </el-collapse-item>
     </el-collapse>

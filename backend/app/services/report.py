@@ -19,6 +19,11 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_loads, new_id, sha256_file
 from app.models import AnalysisRun, Case, Report
+from app.services.evidence_display import (
+    build_evidence_label_map,
+    labels_for_evidence_ids,
+    replace_evidence_ids,
+)
 from app.services.storage import storage
 
 
@@ -29,14 +34,32 @@ def get_report_context(case_id: str, analysis_id: str) -> dict[str, Any]:
         if not case or not analysis or analysis.case_id != case_id:
             raise ValueError("Case or analysis not found")
         result = json_loads(analysis.result_json, {})
-        evidence = {item.get("evidence_id"): item for item in json_loads(analysis.evidence_json, [])}
+        evidence_items = json_loads(analysis.evidence_json, [])
+        evidence = {
+            item.get("evidence_id"): item
+            for item in evidence_items
+            if isinstance(item, dict) and item.get("evidence_id")
+        }
+    evidence_labels = build_evidence_label_map(evidence.values())
     return {
         "title": get_settings().report_title,
         "case": case,
         "analysis": analysis,
         "result": result,
         "evidence": evidence,
+        "evidence_labels": evidence_labels,
+        "display_text": lambda value: replace_evidence_ids(
+            str(value or ""), evidence_labels,
+        ),
     }
+
+
+def _render_evidence_labels(
+    evidence_ids: list[Any] | None,
+    evidence_labels: dict[str, str],
+) -> str:
+    labels = labels_for_evidence_ids(evidence_ids or [], evidence_labels)
+    return "、".join(labels) if labels else "未关联到可定位证据"
 
 
 def render_html(case_id: str, analysis_id: str) -> str:
@@ -126,6 +149,8 @@ def generate_docx(case_id: str, analysis_id: str) -> Report:
     context = get_report_context(case_id, analysis_id)
     result = context["result"]
     case = context["case"]
+    evidence_labels = context["evidence_labels"]
+    display_text = context["display_text"]
     document = Document()
     document.add_heading(context["title"], 0)
     document.add_heading("一、基本信息", level=1)
@@ -136,22 +161,42 @@ def generate_docx(case_id: str, analysis_id: str) -> Report:
     ]:
         document.add_paragraph(f"{label}：{value}")
     document.add_heading("二、综合摘要", level=1)
-    document.add_paragraph(result.get("summary", "暂无"))
-    document.add_heading("三、已确认事实", level=1)
-    for fact in result.get("confirmed_facts", []):
-        document.add_paragraph(fact.get("statement", ""), style="List Bullet")
-    document.add_heading("四、根因候选", level=1)
+    document.add_paragraph(display_text(result.get("summary", "暂无")))
+    document.add_heading("三、根因候选", level=1)
     for item in result.get("hypotheses", []):
-        document.add_heading(f"{item.get('rank', '-')}. {item.get('title', '')}", level=2)
-        document.add_paragraph(item.get("description", ""))
+        document.add_heading(
+            f"{item.get('rank', '-')}. {display_text(item.get('title', ''))}", level=2,
+        )
+        document.add_paragraph(display_text(item.get("description", "")))
         document.add_paragraph(f"可信等级：{item.get('confidence_level', 'UNKNOWN')}；优先级：{item.get('priority', 'UNKNOWN')}")
-        document.add_paragraph("证据：" + "、".join(item.get("supporting_evidence", [])))
-    document.add_heading("五、建议排查步骤", level=1)
+        document.add_paragraph(
+            "支持证据：" + _render_evidence_labels(
+                item.get("supporting_evidence"), evidence_labels,
+            )
+        )
+        document.add_paragraph(
+            "反证：" + _render_evidence_labels(
+                item.get("contradicting_evidence"), evidence_labels,
+            )
+        )
+    document.add_heading("四、建议排查步骤", level=1)
     for action in result.get("recommended_actions", []):
-        document.add_paragraph(f"[{action.get('priority')}] {action.get('action')} — {action.get('reason')}", style="List Number")
-    document.add_heading("六、缺失信息与限制", level=1)
+        document.add_paragraph(
+            f"[{action.get('priority')}] {display_text(action.get('action'))} — "
+            f"{display_text(action.get('reason'))}",
+            style="List Number",
+        )
+    document.add_heading("五、缺失信息与限制", level=1)
     for item in result.get("missing_information", []) + result.get("limitations", []):
-        document.add_paragraph(item, style="List Bullet")
+        document.add_paragraph(display_text(item), style="List Bullet")
+    document.add_heading("六、已确认事实", level=1)
+    for fact in result.get("confirmed_facts", []):
+        document.add_paragraph(display_text(fact.get("statement", "")), style="List Bullet")
+        document.add_paragraph(
+            "证据：" + _render_evidence_labels(
+                fact.get("evidence_ids"), evidence_labels,
+            )
+        )
     report = _reserve_report(case_id, analysis_id, "docx")
     path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.docx"
     temporary = path.with_name(f".{path.name}.{report.id}.tmp")
@@ -168,6 +213,8 @@ def generate_pdf(case_id: str, analysis_id: str) -> Report:
     context = get_report_context(case_id, analysis_id)
     result = context["result"]
     case = context["case"]
+    evidence_labels = context["evidence_labels"]
+    display_text = context["display_text"]
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("CNTitle", parent=styles["Title"], alignment=TA_CENTER, fontName="STSong-Light")
@@ -184,30 +231,43 @@ def generate_pdf(case_id: str, analysis_id: str) -> Report:
         table,
         Spacer(1, 5 * mm),
         Paragraph("Summary", heading),
-        Paragraph(escape(str(result.get("summary", "N/A"))), body),
+        Paragraph(escape(display_text(result.get("summary", "N/A"))), body),
     ]
-    story.append(Paragraph("Confirmed facts", heading))
-    for fact in result.get("confirmed_facts", [])[:30]:
-        story.append(Paragraph(
-            escape("• " + str(fact.get("statement", ""))),
-            body,
-        ))
     story.append(Paragraph("Root-cause hypotheses", heading))
     for item in result.get("hypotheses", []):
         story.append(Paragraph(escape(
-            f"{item.get('rank')}. {item.get('title')} "
+            f"{item.get('rank')}. {display_text(item.get('title'))} "
             f"[{item.get('confidence_level')}]"
         ), body))
         story.append(Paragraph(
-            escape(str(item.get("description", ""))),
+            escape(display_text(item.get("description", ""))),
             body,
         ))
+        story.append(Paragraph(escape(
+            "Evidence: " + _render_evidence_labels(
+                item.get("supporting_evidence"), evidence_labels,
+            )
+        ), body))
     story.append(PageBreak())
     story.append(Paragraph("Recommended actions", heading))
     for action in result.get("recommended_actions", []):
         story.append(Paragraph(escape(
-            f"[{action.get('priority')}] {action.get('action')} "
-            f"— {action.get('reason')}"
+            f"[{action.get('priority')}] {display_text(action.get('action'))} "
+            f"— {display_text(action.get('reason'))}"
+        ), body))
+    story.append(Paragraph("Missing information and limitations", heading))
+    for item in result.get("missing_information", []) + result.get("limitations", []):
+        story.append(Paragraph(escape("• " + display_text(item)), body))
+    story.append(Paragraph("Confirmed facts", heading))
+    for fact in result.get("confirmed_facts", [])[:30]:
+        story.append(Paragraph(
+            escape("• " + display_text(fact.get("statement", ""))),
+            body,
+        ))
+        story.append(Paragraph(escape(
+            "Evidence: " + _render_evidence_labels(
+                fact.get("evidence_ids"), evidence_labels,
+            )
         ), body))
     report = _reserve_report(case_id, analysis_id, "pdf")
     path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.pdf"

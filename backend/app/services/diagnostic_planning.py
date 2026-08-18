@@ -146,6 +146,7 @@ def _triage_evidence(
             "pattern_id": row.pattern_id,
             "pattern_text": row.pattern_text,
             "reason": row.reason,
+            "meaning": row.meaning or row.reason,
             "occurrence_count": row.occurrence_count,
             "score": row.relevance_score,
             "method_document_id": row.method_document_id,

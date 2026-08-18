@@ -84,6 +84,63 @@ const errorCount = computed(() => eventStats.value.level_counts.ERROR || 0)
 const modules = computed(() => Object.keys(eventStats.value.module_counts || {}).sort())
 const synthesisStatus = computed(() => diagnosis.value.synthesis_status || null)
 const synthesisFailure = computed(() => synthesisStatus.value?.failure || null)
+const analysisEvidence = computed<Record<string, any>>(() => {
+  if (!latestAnalysis.value) return {}
+  try {
+    const items = JSON.parse(latestAnalysis.value.evidence_json || '[]')
+    return Object.fromEntries(
+      (Array.isArray(items) ? items : [])
+        .filter(item => item && item.evidence_id)
+        .map(item => [String(item.evidence_id), item])
+    )
+  } catch {
+    return {}
+  }
+})
+
+function evidenceLabel(evidenceId: string): string {
+  const item = analysisEvidence.value[evidenceId] || {}
+  const metadata = item.metadata && typeof item.metadata === 'object' ? item.metadata : {}
+  const sourceFile = item.source_file || item.file_path || metadata.source_file || metadata.file_path
+  const lineStart = Number(item.line_start || metadata.line_start || metadata.line_number || 0)
+  const lineEnd = Number(item.line_end || metadata.line_end || 0)
+  if (sourceFile && lineStart > 0) {
+    return lineEnd > 0 && lineEnd !== lineStart
+      ? `${sourceFile} - 第 ${lineStart}-${lineEnd} 行`
+      : `${sourceFile} - 第 ${lineStart} 行`
+  }
+  if (sourceFile) return String(sourceFile)
+  if (item.title) return `《${item.title}》`
+  if (item.source_type === 'analysis') return '综合诊断结果'
+  return '证据位置未记录'
+}
+
+function evidenceLabels(evidenceIds?: string[]): string {
+  const labels = [...new Set((evidenceIds || []).map(evidenceLabel))]
+  return labels.join('、') || '未关联到可定位证据'
+}
+
+const analysisEvidenceLabels = computed<Record<string, string>>(() => Object.fromEntries(
+  Object.keys(analysisEvidence.value).map(evidenceId => [evidenceId, evidenceLabel(evidenceId)])
+))
+
+function displayDiagnosisText(value: unknown): string {
+  let rendered = String(value ?? '')
+  for (const [evidenceId, label] of Object.entries(analysisEvidenceLabels.value)) {
+    rendered = rendered.split(evidenceId).join(label)
+  }
+  return rendered.replace(
+    /\b(?:EVT|LEM|LEH|DOC|KCHUNK|LOCALDOC|SYM|COMMIT|MEM|ANL|AREV)-[A-Za-z0-9_.:-]+\b/g,
+    '证据位置未记录'
+  )
+}
+
+const displayedActions = computed(() => (diagnosis.value.recommended_actions || []).map((item: any) => ({
+  ...item,
+  action: displayDiagnosisText(item.action),
+  reason: displayDiagnosisText(item.reason),
+  expected_result: displayDiagnosisText(item.expected_result)
+})))
 
 async function loadAll() {
   const [caseRes, artifactRes, analysisRes, repoRes] = await Promise.all([
@@ -583,7 +640,7 @@ onBeforeUnmount(() => {
         />
         <el-drawer v-model="eventDrawerVisible" title="事件证据详情" size="52%">
           <div v-if="selectedEvent">
-            <el-descriptions :column="2" border><el-descriptions-item label="证据编号">{{ selectedEvent.id }}</el-descriptions-item><el-descriptions-item label="可信度">{{ selectedEvent.confidence }}</el-descriptions-item><el-descriptions-item label="文件">{{ selectedEvent.source_file }}</el-descriptions-item><el-descriptions-item label="行号">{{ selectedEvent.line_start }}-{{ selectedEvent.line_end }}</el-descriptions-item></el-descriptions>
+            <el-descriptions :column="2" border><el-descriptions-item label="可信度">{{ selectedEvent.confidence }}</el-descriptions-item><el-descriptions-item label="文件">{{ selectedEvent.source_file }}</el-descriptions-item><el-descriptions-item label="行号">{{ selectedEvent.line_start }}-{{ selectedEvent.line_end }}</el-descriptions-item></el-descriptions>
             <pre class="mono evidence-box">{{ selectedEvent.raw_text }}</pre>
             <el-button type="primary" @click="openEventSource(selectedEvent)">查看原始日志第 {{ selectedEvent.line_start }} 行</el-button>
           </div>
@@ -628,7 +685,7 @@ onBeforeUnmount(() => {
         />
         <el-empty v-if="!latestAnalysis" description="请先完成日志解析并启动综合诊断" />
         <template v-else>
-          <el-alert type="info" :closable="false" :title="diagnosis.summary || '诊断完成'" />
+          <el-alert type="info" :closable="false" :title="displayDiagnosisText(diagnosis.summary || '诊断完成')" />
           <el-alert
             v-if="synthesisStatus"
             :type="synthesisStatus.accepted ? 'success' : synthesisStatus.mode === 'SKIPPED' ? 'info' : 'warning'"
@@ -638,19 +695,19 @@ onBeforeUnmount(() => {
             :description="synthesisFailure ? `${synthesisFailure.code} · ${synthesisFailure.message}${synthesisFailure.field_path ? ` · 字段 ${synthesisFailure.field_path}` : ''}${synthesisStatus.finish_reason ? ` · 模型停止原因 ${synthesisStatus.finish_reason}` : ''}` : synthesisStatus.mode"
             style="margin-top:10px"
           />
-          <DiagnosticPlanningPanel :planning="diagnosis.diagnostic_planning" />
-          <h3 class="section-title">已确认事实</h3>
-          <div v-for="fact in diagnosis.confirmed_facts || []" :key="fact.statement" class="evidence-box">{{ fact.statement }}<div class="muted">证据：{{ fact.evidence_ids?.join('、') }}</div></div>
+          <DiagnosticPlanningPanel :planning="diagnosis.diagnostic_planning" :evidence-labels="analysisEvidenceLabels" />
           <h3 class="section-title">根因候选</h3>
           <el-collapse>
             <el-collapse-item v-for="item in diagnosis.hypotheses || []" :key="item.rank" :name="item.rank">
-              <template #title><strong>{{ item.rank }}. {{ item.title }}</strong>&nbsp;<el-tag size="small">{{ item.confidence_level }}</el-tag>&nbsp;<el-tag size="small" type="danger">{{ item.priority }}</el-tag></template>
-              <p>{{ item.description }}</p><p class="muted">支持证据：{{ item.supporting_evidence?.join('、') }}；反证：{{ item.contradicting_evidence?.join('、') || '无明确反证' }}</p>
+              <template #title><strong>{{ item.rank }}. {{ displayDiagnosisText(item.title) }}</strong>&nbsp;<el-tag size="small">{{ item.confidence_level }}</el-tag>&nbsp;<el-tag size="small" type="danger">{{ item.priority }}</el-tag></template>
+              <p>{{ displayDiagnosisText(item.description) }}</p><p class="muted">支持证据：{{ evidenceLabels(item.supporting_evidence) }}；反证：{{ item.contradicting_evidence?.length ? evidenceLabels(item.contradicting_evidence) : '无明确反证' }}</p>
             </el-collapse-item>
           </el-collapse>
           <h3 class="section-title">建议排查步骤</h3>
-          <el-table :data="diagnosis.recommended_actions || []"><el-table-column prop="priority" label="优先级" width="90"/><el-table-column prop="action" label="动作" min-width="240"/><el-table-column prop="reason" label="原因" min-width="280"/><el-table-column prop="expected_result" label="预期结果" min-width="240"/></el-table>
-          <h3 class="section-title">缺失信息与限制</h3><ul><li v-for="item in [...(diagnosis.missing_information || []), ...(diagnosis.limitations || [])]" :key="item">{{ item }}</li></ul>
+          <el-table :data="displayedActions"><el-table-column prop="priority" label="优先级" width="90"/><el-table-column prop="action" label="动作" min-width="240"/><el-table-column prop="reason" label="原因" min-width="280"/><el-table-column prop="expected_result" label="预期结果" min-width="240"/></el-table>
+          <h3 class="section-title">缺失信息与限制</h3><ul><li v-for="item in [...(diagnosis.missing_information || []), ...(diagnosis.limitations || [])]" :key="item">{{ displayDiagnosisText(item) }}</li></ul>
+          <h3 class="section-title">已确认事实</h3>
+          <div v-for="fact in diagnosis.confirmed_facts || []" :key="fact.statement" class="evidence-box">{{ displayDiagnosisText(fact.statement) }}<div class="muted">证据：{{ evidenceLabels(fact.evidence_ids) }}</div></div>
         </template>
       </el-tab-pane>
 

@@ -363,6 +363,7 @@ export interface AgentTraceEvent {
   duration_ms: number
   retry_count: number
   evidence_ids: string[]
+  evidence_labels: string[]
   stop_reason?: string
   metadata: Record<string, unknown>
   created_at: string
@@ -391,6 +392,7 @@ export interface AgentRun {
   duration_ms: number
   retry_count: number
   evidence_ids: string[]
+  evidence_labels: string[]
   stop_reason: string
   approval_status: string
   replay_of_run_id?: string
@@ -442,6 +444,7 @@ export interface LogEvidenceItem {
   pattern_text?: string
   match_kind?: string
   reason?: string
+  meaning?: string
   method_document_id?: string
   method_version?: number
   metadata: Record<string, any>
@@ -454,6 +457,24 @@ export interface LogEvidencePage {
   offset: number
   limit: number
   items: LogEvidenceItem[]
+}
+
+export interface LogEvidenceHit {
+  id: string
+  source_file: string
+  line_start: number
+  line_end: number
+  timestamp?: string
+  message: string
+}
+
+export interface LogEvidenceHitPage {
+  triage_run_id: string
+  match_id: string
+  total: number
+  offset: number
+  limit: number
+  items: LogEvidenceHit[]
 }
 
 export interface ConversationMessage {

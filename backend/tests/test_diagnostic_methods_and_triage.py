@@ -6,9 +6,10 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from app.api.diagnostics import list_log_triage_match_occurrences
 from app.core.db import Base
 from app.core.utils import json_dumps, json_loads
-from app.diagnostic_models import LogTriageRun
+from app.diagnostic_models import LogEvidenceHit, LogEvidenceMatch, LogTriageRun
 from app.models import AgentRun, AgentTraceEvent, Artifact, Case, KnowledgeDocument, LogEvent
 from app.services import (
     diagnosis,
@@ -135,6 +136,7 @@ def test_method_compiler_extracts_table_inline_and_template_patterns() -> None:
     assert re.search(template.regex, "send MID 545 failed for [radio-1]", re.IGNORECASE)
     assert template.document_id == "DOC-method"
     assert template.document_version == 3
+    assert template.meaning == "synthetic"
 
 
 def test_method_compiler_normalizes_markdown_and_symbolic_placeholders() -> None:
@@ -157,6 +159,9 @@ def test_method_compiler_normalizes_markdown_and_symbolic_placeholders() -> None
     leave = next(item for item in patterns if item.text.startswith("SyntheticLeave"))
     refresh = next(item for item in patterns if item.text.startswith("RefreshSyntheticTopo"))
     topology = next(item for item in patterns if item.text.startswith("AddSyntheticTopo"))
+    assert leave.meaning == "AP 离线"
+    assert refresh.meaning == "链路失败"
+    assert topology.meaning == "拓扑变化"
     assert re.search(leave.regex, "SyntheticLeave APInst offline:12", re.IGNORECASE)
     assert re.search(refresh.regex, "RefreshSyntheticTopo APInstId: 12 link failed", re.IGNORECASE)
     assert re.search(topology.regex, "AddSyntheticTopo, APInst: 12, Parent: 3", re.IGNORECASE)
@@ -324,7 +329,7 @@ def test_log_scanner_creates_ranked_clusters_and_occurrence_index(
             "line_start": 6,
         },
     ]
-    matches, occurrences, summary = log_triage._scan_events(
+    matches, hits, occurrences, summary = log_triage._scan_events(
         _JobContext(),
         triage=triage,
         searchers=searchers,
@@ -339,6 +344,82 @@ def test_log_scanner_creates_ranked_clusters_and_occurrence_index(
     assert selected["occurrence_count"] == 2
     assert selected["line_start"] == 10
     assert selected["line_end"] == 20
+    selected_hits = [item for item in hits if item["match_id"] == selected["id"]]
+    assert [item["line_start"] for item in selected_hits] == [10, 20]
+    assert [item["message"] for item in selected_hits] == [
+        "Heartbeat timeout 100",
+        "Heartbeat timeout 200",
+    ]
+    engine.dispose()
+
+
+def test_log_triage_occurrences_are_paginated_with_exact_source_lines(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'triage-hit-api.db'}")
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    with factory() as db:
+        db.add(Case(id="CASE-hit-api", title="Repeated timeout", device_type="AP"))
+        db.add(Artifact(
+            id="ART-hit-api",
+            case_id="CASE-hit-api",
+            original_name="ap.log",
+            stored_path="ap.log",
+            sha256="b" * 64,
+            size_bytes=100,
+            status="PARSED",
+            active_parse_run_id="PRUN-hit-api",
+        ))
+        db.add(LogTriageRun(
+            id="LTRIAGE-hit-api",
+            case_id="CASE-hit-api",
+            artifact_id="ART-hit-api",
+            parse_run_id="PRUN-hit-api",
+            status="COMPLETED",
+        ))
+        db.add(LogEvidenceMatch(
+            id="LEM-hit-api",
+            triage_run_id="LTRIAGE-hit-api",
+            case_id="CASE-hit-api",
+            artifact_id="ART-hit-api",
+            source_file="nested/ap.log",
+            line_start=10,
+            line_end=30,
+            bucket="LLM_RELEVANT",
+            relevance_score=0.9,
+            pattern_id="DPAT-hit-api",
+            pattern_text="Heartbeat timeout",
+            meaning="AP 心跳超时",
+            message="Heartbeat timeout 1",
+            occurrence_count=3,
+        ))
+        db.add_all([
+            LogEvidenceHit(
+                id=f"LEH-{line}",
+                triage_run_id="LTRIAGE-hit-api",
+                match_id="LEM-hit-api",
+                artifact_id="ART-hit-api",
+                source_file="nested/ap.log",
+                line_start=line,
+                line_end=line,
+                message=f"Heartbeat timeout {line}",
+            )
+            for line in (10, 20, 30)
+        ])
+        db.commit()
+
+        page = list_log_triage_match_occurrences(
+            "CASE-hit-api",
+            "LTRIAGE-hit-api",
+            "LEM-hit-api",
+            db,
+            offset=1,
+            limit=1,
+        )
+
+    assert page["total"] == 3
+    assert [item["line_start"] for item in page["items"]] == [20]
     engine.dispose()
 
 
@@ -406,7 +487,7 @@ def test_log_scanner_reads_complete_extracted_text_not_only_structured_events(
         db.commit()
         triage = db.get(LogTriageRun, "LTRIAGE-raw")
 
-    matches, occurrences, summary = log_triage._scan_events(
+    matches, hits, occurrences, summary = log_triage._scan_events(
         _JobContext(),
         triage=triage,
         searchers=[{
@@ -449,6 +530,8 @@ def test_log_scanner_reads_complete_extracted_text_not_only_structured_events(
     assert command_match["source_file"] == source.name
     assert command_match["line_start"] == 1
     assert command_match["message"] == "command-only diagnostic marker"
+    command_hits = [item for item in hits if item["match_id"] == command_match["id"]]
+    assert [item["line_start"] for item in command_hits] == [1]
     fallback_match = next(item for item in matches if item["pattern_id"] == "DPAT-fallback")
     assert fallback_match["source_file"] == "unavailable.log"
     assert fallback_match["line_start"] == 7

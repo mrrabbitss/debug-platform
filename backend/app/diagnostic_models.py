@@ -76,6 +76,7 @@ class LogEvidenceMatch(Base):
     pattern_text: Mapped[str] = mapped_column(Text)
     match_kind: Mapped[str] = mapped_column(String(32), default="literal")
     reason: Mapped[str] = mapped_column(Text, default="")
+    meaning: Mapped[str] = mapped_column(Text, default="")
     method_document_id: Mapped[str | None] = mapped_column(
         ForeignKey("knowledge_documents.id", ondelete="SET NULL"),
         nullable=True,
@@ -87,6 +88,38 @@ class LogEvidenceMatch(Base):
     first_timestamp: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_timestamp: Mapped[str | None] = mapped_column(String(128), nullable=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LogEvidenceHit(Base):
+    """One exact source location for a grouped log triage match."""
+
+    __tablename__ = "log_evidence_hits"
+    __table_args__ = (
+        Index("ix_log_evidence_hit_match_line", "match_id", "line_start"),
+        Index(
+            "ix_log_evidence_hit_triage_source_line",
+            "triage_run_id",
+            "source_file",
+            "line_start",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    triage_run_id: Mapped[str] = mapped_column(
+        ForeignKey("log_triage_runs.id", ondelete="CASCADE"), index=True
+    )
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("log_evidence_matches.id", ondelete="CASCADE"), index=True
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="CASCADE"), index=True
+    )
+    source_file: Mapped[str] = mapped_column(Text)
+    line_start: Mapped[int] = mapped_column(Integer)
+    line_end: Mapped[int] = mapped_column(Integer)
+    timestamp: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

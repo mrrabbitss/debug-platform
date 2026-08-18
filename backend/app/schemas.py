@@ -478,6 +478,7 @@ class LogEvidenceItem(BaseModel):
     pattern_text: str | None = None
     match_kind: str | None = None
     reason: str | None = None
+    meaning: str | None = None
     method_document_id: str | None = None
     method_version: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -490,6 +491,24 @@ class LogEvidencePage(BaseModel):
     offset: int
     limit: int
     items: list[LogEvidenceItem]
+
+
+class LogEvidenceHitItem(BaseModel):
+    id: str
+    source_file: str
+    line_start: int
+    line_end: int
+    timestamp: str | None = None
+    message: str
+
+
+class LogEvidenceHitPage(BaseModel):
+    triage_run_id: str
+    match_id: str
+    total: int
+    offset: int
+    limit: int
+    items: list[LogEvidenceHitItem]
 
 
 class AgenticSearchRequest(BaseModel):

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: GW/AP Debug Platform Workflow API
-  version: 0.6.0
+  version: 0.6.1
 servers:
   - url: http://localhost:8000/api/v1
 paths:
@@ -125,6 +125,31 @@ paths:
           schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
       responses:
         '200': { description: Ranked and paginated log evidence }
+  /cases/{case_id}/log-triage/{triage_run_id}/evidence/{match_id}/occurrences:
+    get:
+      operationId: listLogTriageMatchOccurrences
+      parameters:
+        - in: path
+          name: case_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: triage_run_id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: match_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200': { description: Every exact source location for one grouped triage match }
+        '404': { description: Case, triage run or grouped match was not found }
   /cases/{case_id}/chat:
     post:
       operationId: askAboutCase

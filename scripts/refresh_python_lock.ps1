@@ -3,6 +3,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "file_hash.ps1")
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $venvRoot = Join-Path $projectRoot ".venv"
 $venvPython = Join-Path $venvRoot "Scripts\python.exe"
@@ -68,8 +69,8 @@ try {
             if ($LASTEXITCODE -ne 0) {
                 throw "Could not export the pip constraints from backend\uv.lock."
             }
-            $expectedHash = (Get-FileHash -LiteralPath $temporaryConstraints -Algorithm SHA256).Hash
-            $actualHash = (Get-FileHash -LiteralPath $constraints -Algorithm SHA256).Hash
+            $expectedHash = Get-Sha256Hex -Path $temporaryConstraints
+            $actualHash = Get-Sha256Hex -Path $constraints
             if ($expectedHash -ne $actualHash) {
                 throw "backend\constraints.lock does not match backend\uv.lock."
             }

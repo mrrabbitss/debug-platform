@@ -5,6 +5,8 @@ import { api } from '../../api/client'
 import type {
   Artifact,
   LogEvidenceBucket,
+  LogEvidenceHit,
+  LogEvidenceHitPage,
   LogEvidenceItem,
   LogEvidencePage,
   LogTriageRun
@@ -32,6 +34,8 @@ const pages = reactive<Record<LogEvidenceBucket, LogEvidencePage>>({
   METHOD_REQUIRED: { triage_run_id: '', bucket: 'METHOD_REQUIRED', total: 0, offset: 0, limit: 100, items: [] },
   OTHER: { triage_run_id: '', bucket: 'OTHER', total: 0, offset: 0, limit: 100, items: [] }
 })
+const occurrencePages = reactive<Record<string, LogEvidenceHitPage>>({})
+const occurrenceLoading = reactive<Record<string, boolean>>({})
 let timer: number | null = null
 
 const parsedArtifacts = computed(() => props.artifacts.filter(item => item.status === 'PARSED'))
@@ -84,6 +88,9 @@ async function loadTriage() {
     const { data } = await api.get<LogTriageRun | null>(`/cases/${props.caseId}/log-triage`, {
       params: { artifact_id: selectedArtifactId.value }
     })
+    if (triage.value?.id !== data?.id) {
+      for (const key of Object.keys(occurrencePages)) delete occurrencePages[key]
+    }
     triage.value = data
     if (data?.status === 'COMPLETED') {
       await Promise.all((['LLM_RELEVANT', 'METHOD_REQUIRED', 'OTHER'] as LogEvidenceBucket[])
@@ -134,6 +141,54 @@ function openItem(item: LogEvidenceItem) {
     sourceFile: item.source_file,
     line: item.line_start
   })
+}
+
+function openOccurrence(item: LogEvidenceHit) {
+  emit('openSource', {
+    artifactId: selectedArtifactId.value,
+    sourceFile: item.source_file,
+    line: item.line_start
+  })
+}
+
+function methodSource(item: LogEvidenceItem): string {
+  const source = item.metadata?.method_source || {}
+  return [source.document_title, source.heading].filter(Boolean).join(' / ')
+    || (item.bucket === 'LLM_RELEVANT' ? 'LLM 规划' : '诊断 Skill')
+}
+
+async function loadOccurrences(item: LogEvidenceItem, page = 1) {
+  if (!triage.value || item.bucket === 'OTHER') return
+  const limit = occurrencePages[item.id]?.limit || 100
+  occurrenceLoading[item.id] = true
+  try {
+    const { data } = await api.get<LogEvidenceHitPage>(
+      `/cases/${props.caseId}/log-triage/${triage.value.id}/evidence/${item.id}/occurrences`,
+      { params: { offset: (page - 1) * limit, limit } }
+    )
+    occurrencePages[item.id] = data
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '命中位置加载失败')
+  } finally {
+    occurrenceLoading[item.id] = false
+  }
+}
+
+function occurrenceCurrentPage(matchId: string): number {
+  const page = occurrencePages[matchId]
+  return page ? Math.floor(page.offset / page.limit) + 1 : 1
+}
+
+function handleExpandChange(
+  item: LogEvidenceItem,
+  expandedRows: LogEvidenceItem[] | boolean
+) {
+  const expanded = typeof expandedRows === 'boolean'
+    ? expandedRows
+    : expandedRows.some(row => row.id === item.id)
+  if (expanded && !occurrencePages[item.id]) {
+    void loadOccurrences(item)
+  }
 }
 
 watch(parsedArtifacts, (items) => {
@@ -200,6 +255,13 @@ onBeforeUnmount(() => {
         :title="`模型返回 ${selectedPatternCandidateCount} 条候选规则；系统按相关度保留前 ${selectedPatternCount} 条，其余规则仍在“方法文档强制检查”中扫描。`"
         style="margin:12px 0"
       />
+      <el-alert
+        v-if="triage.status === 'COMPLETED' && triage.summary?.exact_hit_count === undefined"
+        type="info"
+        :closable="false"
+        title="这是升级前生成的筛查结果；请点击“重新执行 LLM 规划”以生成全部逐行命中位置。"
+        style="margin:12px 0"
+      />
       <el-row :gutter="14" style="margin:14px 0">
         <el-col :span="6"><el-card shadow="never"><div class="muted">强制阅读方法</div><strong>{{ triage.method_coverage?.document_count || 0 }}</strong><div class="muted">规则 {{ triage.method_coverage?.compiled_pattern_count || 0 }}</div></el-card></el-col>
         <el-col :span="6"><el-card shadow="never"><div class="muted">LLM 选择规则</div><strong>{{ selectedPatternCount }}</strong><div class="muted">已规划候选，不等于实际命中 · 补充关键词 {{ additionalKeywordCount }}</div></el-card></el-col>
@@ -218,7 +280,6 @@ onBeforeUnmount(() => {
             <el-table-column prop="selected_pattern_count" label="LLM 选择" width="100" />
             <el-table-column prop="matched_pattern_count" label="命中规则" width="100" />
             <el-table-column prop="occurrence_count" label="命中次数" width="100" />
-            <el-table-column prop="id" label="证据 ID" min-width="210" show-overflow-tooltip />
           </el-table>
           <h4>只读工具调用</h4>
           <el-table :data="toolCalls" size="small" max-height="240">
@@ -248,14 +309,53 @@ onBeforeUnmount(() => {
           :name="bucket"
           :label="`${bucketLabel(bucket)} (${pages[bucket].total})`"
         >
-          <el-table :data="pages[bucket].items" height="520" @row-click="openItem">
+          <el-table
+            :data="pages[bucket].items"
+            height="520"
+            row-key="id"
+            @expand-change="handleExpandChange"
+          >
+            <el-table-column v-if="bucket !== 'OTHER'" type="expand" width="48">
+              <template #default="scope">
+                <div class="occurrence-panel" v-loading="occurrenceLoading[scope.row.id]">
+                  <div class="occurrence-heading">
+                    全部命中位置（{{ occurrencePages[scope.row.id]?.total ?? scope.row.occurrence_count }}）
+                  </div>
+                  <el-table :data="occurrencePages[scope.row.id]?.items || []" size="small" max-height="330">
+                    <el-table-column prop="source_file" label="文件" min-width="190" show-overflow-tooltip />
+                    <el-table-column prop="line_start" label="行号" width="90" />
+                    <el-table-column prop="timestamp" label="时间" width="185" show-overflow-tooltip />
+                    <el-table-column prop="message" label="日志内容" min-width="430" show-overflow-tooltip />
+                    <el-table-column label="操作" width="100">
+                      <template #default="hitScope">
+                        <el-button link type="primary" @click.stop="openOccurrence(hitScope.row as LogEvidenceHit)">跳转</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                  <el-pagination
+                    v-if="(occurrencePages[scope.row.id]?.total || 0) > (occurrencePages[scope.row.id]?.limit || 100)"
+                    :current-page="occurrenceCurrentPage(scope.row.id)"
+                    :page-size="occurrencePages[scope.row.id]?.limit || 100"
+                    :total="occurrencePages[scope.row.id]?.total || 0"
+                    layout="total, prev, pager, next, jumper"
+                    style="margin-top:10px;justify-content:flex-end"
+                    @current-change="(page:number) => loadOccurrences(scope.row as LogEvidenceItem, page)"
+                  />
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column prop="relevance_score" label="相关度" width="90" />
             <el-table-column prop="occurrence_count" label="次数" width="80" />
             <el-table-column prop="pattern_text" label="命中规则" min-width="210" show-overflow-tooltip />
+            <el-table-column prop="meaning" label="Skill 含义" min-width="260" show-overflow-tooltip />
             <el-table-column prop="message" label="日志证据" min-width="420" show-overflow-tooltip />
             <el-table-column prop="source_file" label="文件" min-width="180" show-overflow-tooltip />
-            <el-table-column prop="line_start" label="首行" width="90" />
+            <el-table-column prop="line_start" :label="bucket === 'OTHER' ? '行号' : '首行'" width="90" />
+            <el-table-column v-if="bucket !== 'OTHER'" label="Skill 来源" min-width="230" show-overflow-tooltip><template #default="scope">{{ methodSource(scope.row as LogEvidenceItem) }}</template></el-table-column>
             <el-table-column prop="reason" label="排序理由" min-width="230" show-overflow-tooltip />
+            <el-table-column label="操作" width="110">
+              <template #default="scope"><el-button link type="primary" @click.stop="openItem(scope.row as LogEvidenceItem)">{{ bucket === 'OTHER' ? '跳转' : '首个位置' }}</el-button></template>
+            </el-table-column>
           </el-table>
           <el-pagination
             :current-page="currentPage(bucket)"
@@ -274,5 +374,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .triage-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .muted { color: #64748b; font-size: 12px; }
+.occurrence-panel { padding: 10px 18px 16px; background: #f8fafc; }
+.occurrence-heading { color: #334155; font-weight: 600; margin-bottom: 8px; }
 strong { font-size: 24px; }
 </style>

@@ -20,6 +20,10 @@ from app.services.diagnosis import (
     _validate_llm_diagnosis,
 )
 from app.services.diagnostic_methods import load_applicable_diagnostic_methods
+from app.services.evidence_display import (
+    build_evidence_label_map,
+    replace_evidence_ids,
+)
 from app.services.jobs import JobCancelledError, JobContext
 from app.services.llm import get_llm_provider
 
@@ -325,6 +329,10 @@ def analysis_revision_job(
             evidence=evidence,
             conversation_history=_conversation_history(case.id, message_id),
         ))
+        assistant_text = replace_evidence_ids(
+            assistant_text,
+            build_evidence_label_map(evidence),
+        )
         with SessionLocal() as db:
             append_live_trace(
                 db, agent_run_id, stage="diagnosis_revision_model",
@@ -363,6 +371,7 @@ def analysis_revision_job(
                     "evidence_id": revision.id,
                     "source_type": "analysis_revision",
                     "title": "待人工确认的诊断与报告修订",
+                    "display_label": "待人工确认的诊断与报告修订",
                     "source_analysis_id": revision.source_analysis_id,
                 }]),
                 status="COMPLETED", job_id=ctx.job_id,
