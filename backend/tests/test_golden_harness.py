@@ -25,6 +25,7 @@ def test_golden_dataset_quality_gates_pass() -> None:
         "fixture_integrity",
         "log_parser",
         "knowledge_curation",
+        "scenario_matrix",
         "code_graph",
         "commit_graph",
         "memory",

@@ -328,6 +328,7 @@ def validate_planning_round(
     diagnostic_patterns: list[DiagnosticPattern] | None = None,
     unattempted_fault_tree_item_ids: set[str] | None = None,
     valid_evidence_ids: set[str] | None = None,
+    valid_evidence_locator_ids: set[str] | None = None,
 ) -> None:
     expected = {method.id for method in methods}
     if set(parsed.read_document_ids) != expected:
@@ -381,7 +382,11 @@ def validate_planning_round(
         parsed.tool_calls,
         known_method_ids=expected,
         diagnostic_patterns=diagnostic_patterns or [],
-        valid_evidence_ids=valid_evidence_ids,
+        valid_evidence_ids=(
+            valid_evidence_locator_ids
+            if valid_evidence_locator_ids is not None
+            else valid_evidence_ids
+        ),
     )
     validate_fault_tree_bindings(
         parsed,

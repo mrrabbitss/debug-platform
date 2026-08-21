@@ -161,12 +161,20 @@ class OpenAICompatibleProvider(LLMProvider):
         prompt_tokens = getattr(usage_object, "prompt_tokens", None)
         completion_tokens = getattr(usage_object, "completion_tokens", None)
         total_tokens = getattr(usage_object, "total_tokens", None)
+        prompt_details = getattr(usage_object, "prompt_tokens_details", None)
+        completion_details = getattr(
+            usage_object, "completion_tokens_details", None
+        )
+        cached_tokens = getattr(prompt_details, "cached_tokens", None)
+        reasoning_tokens = getattr(completion_details, "reasoning_tokens", None)
         if total_tokens is None and (prompt_tokens is not None or completion_tokens is not None):
             total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
         usage = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "cached_tokens": cached_tokens,
+            "reasoning_tokens": reasoning_tokens,
         }
         duration_ms = int((perf_counter() - started) * 1000)
         self.last_usage = usage

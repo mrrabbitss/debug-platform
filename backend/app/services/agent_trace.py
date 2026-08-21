@@ -60,6 +60,27 @@ SAFE_EVENT_METADATA_KEYS = {
     "validation_code",
     "validation_path",
     "version",
+    "context_governance",
+}
+SAFE_CONTEXT_METRIC_KEYS = {
+    "attempt_count",
+    "context_window_tokens",
+    "input_budget_tokens",
+    "estimated_input_tokens",
+    "peak_estimated_input_tokens",
+    "actual_input_tokens_total",
+    "peak_actual_input_tokens",
+    "peak_actual_occupancy",
+    "within_budget",
+    "compaction_count",
+    "spill_handle_total",
+}
+SAFE_CONTEXT_SECTION_KEYS = {
+    "original_tokens",
+    "kept_tokens",
+    "allocation_tokens",
+    "original_items",
+    "omitted_items",
 }
 
 
@@ -124,6 +145,25 @@ def _event_metadata(event: dict[str, Any]) -> dict[str, Any]:
     candidates = {**(nested if isinstance(nested, dict) else {}), **event}
     for key, value in candidates.items():
         if key not in SAFE_EVENT_METADATA_KEYS:
+            continue
+        if key == "context_governance" and isinstance(value, dict):
+            safe_context = {
+                metric: _safe_scalar(item)
+                for metric, item in value.items()
+                if metric in SAFE_CONTEXT_METRIC_KEYS
+            }
+            sections = value.get("sections")
+            if isinstance(sections, dict):
+                safe_context["sections"] = {
+                    str(name)[:64]: {
+                        metric: _safe_scalar(item)
+                        for metric, item in section.items()
+                        if metric in SAFE_CONTEXT_SECTION_KEYS
+                    }
+                    for name, section in list(sections.items())[:10]
+                    if isinstance(section, dict)
+                }
+            metadata[key] = safe_context
             continue
         if isinstance(value, list):
             metadata[key] = [_safe_scalar(item, max_chars=128) for item in value[:50]]

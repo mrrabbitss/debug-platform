@@ -10,6 +10,14 @@ const methodCatalog = computed(() => props.planning?.method_usage || props.plann
 const toolCalls = computed(() => props.planning?.tool_calls || [])
 const faultTreeCoverage = computed(() => props.planning?.fault_tree_coverage || {})
 const faultTreeItems = computed(() => faultTreeCoverage.value.items || [])
+const agentBudget = computed(() => props.planning?.budget || {})
+const budgetLimits = computed(() => agentBudget.value.limits || {})
+const budgetUsage = computed(() => agentBudget.value.usage || {})
+const contextGovernance = computed(() => props.planning?.context_governance || {})
+const contextSections = computed(() => Object.entries(contextGovernance.value.sections || {}).map(([name, value]: [string, any]) => ({
+  name,
+  ...value
+})))
 const methodTitles = computed<Record<string, string>>(() => Object.fromEntries(
   methodCatalog.value.map((item: any) => [String(item.id), String(item.title || item.id)])
 ))
@@ -44,6 +52,19 @@ function coverageStatusType(status: string): 'success' | 'info' | 'warning' | 'd
   if (status === 'INSUFFICIENT_EVIDENCE') return 'warning'
   return 'danger'
 }
+
+function integer(value: unknown): string {
+  return Number(value || 0).toLocaleString('zh-CN')
+}
+
+function budgetStopLabel(reason: unknown): string {
+  return ({
+    TOKEN_BUDGET: '累计 Token 达到上限',
+    TIME_BUDGET: '运行时间达到上限',
+    TOOL_CALL_BUDGET: '工具调用达到上限',
+    NO_PROGRESS: '连续多轮没有新进展'
+  } as Record<string, string>)[String(reason || '')] || String(reason || '未触发')
+}
 </script>
 
 <template>
@@ -73,6 +94,46 @@ function coverageStatusType(status: string): 'success' | 'info' | 'warning' | 'd
       style="margin-bottom:10px"
     />
     <el-collapse style="margin-bottom:12px">
+      <el-collapse-item v-if="budgetLimits.max_rounds" title="Agent 预算与停止边界" name="agent-budget">
+        <el-alert
+          v-if="agentBudget.stop_reason"
+          type="warning"
+          :closable="false"
+          :title="budgetStopLabel(agentBudget.stop_reason)"
+          style="margin-bottom:10px"
+        />
+        <el-descriptions :column="3" border size="small">
+          <el-descriptions-item label="规划轮次">{{ integer(budgetUsage.rounds) }} / {{ integer(budgetLimits.max_rounds) }}</el-descriptions-item>
+          <el-descriptions-item label="累计 Token">{{ integer(budgetUsage.total_tokens) }} / {{ integer(budgetLimits.max_total_tokens) }}</el-descriptions-item>
+          <el-descriptions-item label="只读工具调用">{{ integer(budgetUsage.tool_calls) }} / {{ integer(budgetLimits.max_total_tool_calls) }}</el-descriptions-item>
+          <el-descriptions-item label="累计输入 Token">{{ integer(budgetUsage.input_tokens) }}</el-descriptions-item>
+          <el-descriptions-item label="累计输出 Token">{{ integer(budgetUsage.output_tokens) }}</el-descriptions-item>
+          <el-descriptions-item label="缓存输入 Token">{{ integer(budgetUsage.cached_input_tokens) }}</el-descriptions-item>
+          <el-descriptions-item label="工具输出估算">{{ integer(budgetUsage.tool_output_tokens) }}</el-descriptions-item>
+          <el-descriptions-item label="运行耗时">{{ (Number(budgetUsage.duration_ms || 0) / 1000).toFixed(1) }} 秒</el-descriptions-item>
+          <el-descriptions-item label="连续无进展">{{ integer(budgetUsage.stagnant_rounds) }} / {{ integer(budgetLimits.max_stagnant_rounds) }} 轮</el-descriptions-item>
+          <el-descriptions-item label="单轮工具上限">{{ integer(budgetLimits.max_tool_calls_per_round) }}</el-descriptions-item>
+          <el-descriptions-item label="最少规划轮次">{{ integer(budgetLimits.min_rounds) }}</el-descriptions-item>
+        </el-descriptions>
+      </el-collapse-item>
+      <el-collapse-item v-if="contextGovernance.context_window_tokens" title="上下文治理与压缩" name="context-governance">
+        <el-descriptions :column="3" border size="small" style="margin-bottom:10px">
+          <el-descriptions-item label="上下文窗口">{{ integer(contextGovernance.context_window_tokens) }}</el-descriptions-item>
+          <el-descriptions-item label="本轮输入预算">{{ integer(contextGovernance.input_budget_tokens) }}</el-descriptions-item>
+          <el-descriptions-item label="估算输入">{{ integer(contextGovernance.estimated_input_tokens) }}</el-descriptions-item>
+          <el-descriptions-item label="累计实际输入">{{ integer(contextGovernance.actual_input_tokens_total) }}</el-descriptions-item>
+          <el-descriptions-item label="压缩次数">{{ integer(contextGovernance.compaction_count) }}</el-descriptions-item>
+          <el-descriptions-item label="临时读取句柄">{{ integer(contextGovernance.spill_handle_total) }}</el-descriptions-item>
+        </el-descriptions>
+        <el-alert type="info" :closable="false" title="临时句柄只用于本次运行继续读取被压缩正文，不会作为事实证据，也不会保存公司日志正文。" style="margin-bottom:10px" />
+        <el-table :data="contextSections" size="small">
+          <el-table-column prop="name" label="上下文分区" min-width="220" />
+          <el-table-column label="原始估算"><template #default="scope">{{ integer(scope.row.original_tokens) }}</template></el-table-column>
+          <el-table-column label="保留估算"><template #default="scope">{{ integer(scope.row.kept_tokens) }}</template></el-table-column>
+          <el-table-column label="分区预算"><template #default="scope">{{ integer(scope.row.allocation_tokens) }}</template></el-table-column>
+          <el-table-column label="省略条目"><template #default="scope">{{ integer(scope.row.omitted_items) }}</template></el-table-column>
+        </el-table>
+      </el-collapse-item>
       <el-collapse-item v-if="faultTreeItems.length" title="故障树逐节点结论" name="fault-tree-coverage">
         <el-table :data="faultTreeItems" size="small" max-height="460">
           <el-table-column prop="label" label="节点" min-width="150" />

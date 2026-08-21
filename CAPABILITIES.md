@@ -3,7 +3,7 @@
 > 本文件是项目功能范围的唯一总账（Single Source of Truth）。
 > 新需求、在研能力、已交付能力、约束和冲突处理都必须同步更新本文件，防止跨迭代遗忘或重复建设。
 
-最后更新：2026-08-14
+最后更新：2026-08-21
 
 工程执行、验证、评测和 Agent 护栏的状态与优先级单独维护在
 [Harness Engineering 路线与状态总账](HARNESS_ENGINEERING.md)。本文件只判断业务能力是否
@@ -55,13 +55,14 @@
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
 | 规则诊断 | `AVAILABLE` | 基于事件码产生事实、假设、行动建议和限制 |
-| 证据约束 LLM 诊断 | `AVAILABLE` | 原生类型化只读工具 Agent 至少两轮、最多二十轮；策略先读取全部联合方法，并把故障树流程、判断点和根因分支编译为稳定节点。每个节点带跨方法 Pattern/检索词入口，必须绑定检查和实际只读检索，并得到“证据支持 / 已排除 / 证据不足”终态后规划才通过；模型每轮最多四次工具调用，工具参数和 GW/AP 双侧方法、Schema、方法/节点/Pattern/evidence ID 均在执行前受门禁约束，单轮最多纠正两次，失败显示原因并回退确定性诊断。证据 ID 只作内部关联与校验，诊断、问答、轨迹和报告统一显示“文件 - 行号”或文档标题，且“已确认事实”固定放在综合诊断和报告末尾 |
-| 模型网关 | `AVAILABLE` | 前端管理并切换 Chat、Embedding、Reranker 配置；开发/本地环境兼容 HTTP/HTTPS，HTTP 不再强制要求端点白名单，私网地址可由本机 `MODEL_ALLOW_PRIVATE_ENDPOINTS` 持久开关放行，回环/危险系统地址和生产白名单约束仍保留；Chat API 支持逐 Profile 加密代理，空值直连，代理启用时保留证书链/主机名校验并跳过吊销检查；Thinking 支持“跟随模型默认 / 强制开启 / 强制关闭”，GLM-5.1/5.2 关闭时显式发送 `thinking.type=disabled`；可配置 `max_tokens`，新 Profile 默认 300 秒超时 |
+| 证据约束 LLM 诊断 | `AVAILABLE` | 原生类型化只读工具 Agent 至少两轮、最多二十轮；策略先读取全部联合方法，并把故障树流程、判断点和根因分支编译为稳定节点。每个节点带跨方法 Pattern/检索词入口，必须绑定检查和实际只读检索，并得到“证据支持 / 已排除 / 证据不足”终态后规划才通过；模型每轮最多四次工具调用，工具参数和 GW/AP 双侧方法、Schema、方法/节点/Pattern/evidence ID 均在执行前受门禁约束，单轮最多纠正两次。生产循环累计供应商实际 usage、工具输出估算、墙钟时间、只读工具总数和连续无进展轮次；达到边界时以 `TOKEN_BUDGET`、`TIME_BUDGET`、`TOOL_CALL_BUDGET` 或 `NO_PROGRESS` 显式停止并回退。Token-aware Context Governor 按模型窗口为方法、日志、故障树、历史和工具观察分区，被压缩正文只进入本次运行内存 Spill Store，可经 `get_evidence` 分段续读；句柄不是事实证据且不持久化日志正文。前端可查看预算、上下文占用、压缩和分区指标。证据 ID 只作内部关联与校验，诊断、问答、轨迹和报告统一显示“文件 - 行号”或文档标题，且“已确认事实”固定放在综合诊断和报告末尾 |
+| 模型网关 | `AVAILABLE` | 前端管理并切换 Chat、Embedding、Reranker 配置；开发/本地环境兼容 HTTP/HTTPS，HTTP 不再强制要求端点白名单，私网地址可由本机 `MODEL_ALLOW_PRIVATE_ENDPOINTS` 持久开关放行，回环/危险系统地址和生产白名单约束仍保留；Chat API 支持逐 Profile 加密代理，空值直连，代理启用时保留证书链/主机名校验并跳过吊销检查；Thinking 支持“跟随模型默认 / 强制开启 / 强制关闭”，GLM-5.1/5.2 关闭时显式发送 `thinking.type=disabled`；可配置 `max_tokens`、真实上下文窗口及输出预留，新 Profile 默认 300 秒超时 |
 | 本地/API Embedding | `AVAILABLE` | 内置 Hashing、本地 Sentence Transformers、兼容 API |
 | 本地/API Reranker | `AVAILABLE` | 本地 CrossEncoder、Qwen Rerank API |
 | 混合检索 | `AVAILABLE` | 有界 BM25 候选、Dense top-K、加权 RRF、模块均衡和单次 Reranker |
 | Qdrant 镜像 | `AVAILABLE` | 数据库向量为权威存储，按 generation 镜像并执行有界 top-K |
 | 检索评测 | `AVAILABLE` | 固定 query/预期证据/根因和模块，输出 Recall@K、Precision@K、MRR、NDCG@K、Root Cause Top-K |
+| Agent 场景矩阵 | `LIMITED` | 36 个完全合成案例已作为 CI 分布契约覆盖设备、日志规模、证据质量、知识/记忆污染、Planner 故障和停止类别，并校验引用/证据/工具/冗余/上下文指标门槛字段；目前只有核心 Golden 案例为全链路可执行样本，其余场景仍需逐步升级为 Fake/真实模型可执行回归 |
 | 案例对话与诊断修订 | `AVAILABLE` | 可异步证据问答，也可要求模型生成综合诊断与报告修订草稿；前端预览后人工确认才创建新版不可变诊断，旧诊断/报告不覆盖；任务可恢复轮询、取消并查看轨迹 |
 
 ### 2.4 分层知识库

@@ -143,6 +143,36 @@ def test_planning_trace_keeps_safe_progress_metadata_without_document_content() 
     }
 
 
+def test_planning_trace_keeps_only_numeric_context_governance_metrics() -> None:
+    assert _event_metadata({
+        "context_governance": {
+            "context_window_tokens": 131072,
+            "input_budget_tokens": 81920,
+            "compaction_count": 3,
+            "raw_content": "private log body",
+            "sections": {
+                "ranked_log_evidence": {
+                    "original_tokens": 90000,
+                    "kept_tokens": 20000,
+                    "content": "private log body",
+                }
+            },
+        }
+    }) == {
+        "context_governance": {
+            "context_window_tokens": 131072,
+            "input_budget_tokens": 81920,
+            "compaction_count": 3,
+            "sections": {
+                "ranked_log_evidence": {
+                    "original_tokens": 90000,
+                    "kept_tokens": 20000,
+                }
+            },
+        }
+    }
+
+
 def test_live_trace_allocates_unique_sequences_without_intermediate_commit(
     tmp_path: Path,
 ) -> None:

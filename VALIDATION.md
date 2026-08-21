@@ -1,16 +1,18 @@
 # Validation Record
 
-Last validated: 2026-08-18 on Windows 11.
+Last validated: 2026-08-21 on Windows 11.
 
 ## Current local regression result
 
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 206 passed and 1 external-service test skipped locally.
-- Backend line coverage: 77.91%, above the enforced 75% quality gate.
-- Golden Dataset: all 9 evaluators passed for parser output, document curation,
-  Code Graph, Commit Graph, memory isolation, hybrid RAG and bounded Agentic Search.
+- Backend tests: 218 passed and 1 external-service test skipped locally.
+- Backend line coverage: 78.40%, above the enforced 75% quality gate.
+- Golden Dataset: all 10 evaluators passed for parser output, document curation,
+  the 36-case synthetic scenario-distribution contract, Code Graph, Commit Graph,
+  memory isolation, hybrid RAG and bounded Agentic Search. The matrix is explicitly
+  a distribution/schema gate; the core incident remains the full executable fixture.
 - Browser E2E: 3 complete Edge scenarios passed in an isolated runtime. They
   covered TXT, HTML, DOCX and PDF upload/preview, draft generation,
   conversational correction, human confirmation, trace inspection, safe replay,
@@ -19,7 +21,8 @@ Last validated: 2026-08-18 on Windows 11.
   two-to-twenty-round typed-tool diagnosis planning, explicit stop reason,
   recoverable case chat, GW/AP joint evidence scope and human-approved diagnosis/
   report revision. The diagnosis flow explicitly asserts non-zero total/input/output
-  Token counts, the called method/tool tables, Skill-derived match meanings, a
+  Token counts and the visible aggregate Agent budget, the called method/tool tables,
+  Skill-derived match meanings, a
   collapsed repeated-match group, all occurrences at synthetic lines 5 and 13, and
   exact navigation from the second occurrence to line 13. User-facing diagnosis,
   chat, trace and report evidence is rendered as a filename plus line number rather
@@ -30,7 +33,7 @@ Last validated: 2026-08-18 on Windows 11.
   operations. The local rerun checked 16 Markdown files in total because it also
   included two explicitly ignored private reference documents without adding them
   to Git.
-- Architecture checks: 97 Python files and 16 Vue files passed file-size,
+- Architecture checks: 105 Python files and 16 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest
   measured Python cyclomatic complexity was 50, at the enforced limit of 50.
 - Backend dependency consistency, lock synchronization, Ruff and Python
@@ -46,9 +49,12 @@ Last validated: 2026-08-18 on Windows 11.
   captured and compared without a false changed-dependency warning.
 
 Final local run artifacts:
-`artifacts\validation\20260818-112103-full\summary.json` (18/18 stages passed in
-379.95 seconds). The run used Windows PowerShell 5.1 and included Alembic 0016,
-exact-hit browser assertions and the new human-readable evidence presentation.
+`artifacts\validation\20260821-110616-full\summary.json` (18/18 stages passed in
+389.43 seconds). The run used Windows PowerShell 5.1 and included Alembic 0016,
+token-aware context/spill isolation, provider-observed usage and causal-depth budget
+regressions, the 36-case Golden distribution gate, budget/context-panel build checks,
+exact-hit navigation and human-readable evidence presentation. No persistent
+system, project or model proxy setting was changed.
 
 After removing the development-mode HTTP-only allowlist restriction, the focused
 model-profile suite passed 16/16 and
@@ -150,6 +156,12 @@ Run it independently with `scripts\run_golden_evals.bat`. Golden thresholds in
   consumed Tokens even when the result falls back. Final diagnosis synthesis is
   included in the same live usage total; missing provider totals are derived from
   input plus output.
+- Comprehensive diagnosis accumulates planning input/output/total Tokens, actual
+  read-only tool calls and wall-clock duration across all rounds. A request that
+  exhausts the remaining wall-clock allowance is cancelled; consecutive rounds are
+  considered stagnant only when coverage, evidence, queries and unique tool calls
+  all remain unchanged. Stable budget stops preserve incomplete coverage and use
+  deterministic fallback.
 
 ## Agentic execution status
 
@@ -190,8 +202,8 @@ human review feedback into a rule, test, document or evaluation case.
   source-file/line navigation;
 - multi-round comprehensive diagnosis with live planning trace, five typed read-only
   tools, called-document/method visibility, validated method/Pattern/evidence IDs,
-  a hard 20-round ceiling, explicit 27-node fault-tree coverage and diagnostic
-  deterministic fallback;
+  a hard 20-round ceiling, aggregate Token/time/tool-call and no-progress budgets,
+  explicit 27-node fault-tree coverage and diagnostic deterministic fallback;
 - joint GW/AP diagnosis that retrieves both device domains plus GENERAL knowledge,
   retains primary-GW/secondary-AP artifact provenance and balances evidence across
   uploaded logs before synthesis;

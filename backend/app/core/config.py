@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -64,6 +64,35 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_timeout_seconds: int = 300
     llm_max_retries: int = 2
+    diagnostic_agent_max_total_tokens: int = Field(
+        default=2_000_000, ge=1, le=100_000_000
+    )
+    diagnostic_agent_max_duration_seconds: int = Field(
+        default=3 * 60 * 60, ge=1, le=4 * 60 * 60
+    )
+    diagnostic_agent_max_total_tool_calls: int = Field(default=80, ge=1, le=80)
+    diagnostic_agent_max_stagnant_rounds: int = Field(default=3, ge=1, le=10)
+    diagnostic_context_window_tokens: int = Field(
+        default=131_072, ge=8_192, le=10_000_000
+    )
+    diagnostic_context_reserved_output_tokens: int = Field(
+        default=32_768, ge=256, le=2_000_000
+    )
+    diagnostic_context_safety_margin_tokens: int = Field(
+        default=2_048, ge=0, le=1_000_000
+    )
+    diagnostic_context_target_occupancy: float = Field(
+        default=0.85, gt=0.1, le=0.98
+    )
+    diagnostic_context_max_item_tokens: int = Field(
+        default=10_000, ge=256, le=1_000_000
+    )
+    diagnostic_context_preview_tokens: int = Field(
+        default=768, ge=64, le=100_000
+    )
+    diagnostic_context_spill_chunk_tokens: int = Field(
+        default=3_000, ge=256, le=100_000
+    )
     model_secret_key: str = ""
     model_endpoint_allowlist: str = ""
     model_allow_private_endpoints: bool = False
@@ -100,6 +129,14 @@ class Settings(BaseSettings):
             raise ValueError("AUTH_MODE=local is not allowed in APP_ENV=prod")
         if self.auth_mode == "api_key" and not self.api_key:
             raise ValueError("API_KEY is required when AUTH_MODE=api_key")
+        if (
+            self.diagnostic_context_reserved_output_tokens
+            + self.diagnostic_context_safety_margin_tokens
+            >= self.diagnostic_context_window_tokens
+        ):
+            raise ValueError(
+                "Diagnostic context reserve must leave room for model input"
+            )
         return self
 
     @property

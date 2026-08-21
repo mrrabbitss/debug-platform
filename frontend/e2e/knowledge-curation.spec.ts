@@ -417,6 +417,8 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
   await expect(page.getByTestId('diagnostic-planning-details')).toContainText(
     'Synthetic E2E authentication screening method'
   )
+  await page.getByText('Agent 预算与停止边界').click()
+  await expect(page.getByTestId('diagnostic-planning-details')).toContainText('累计 Token')
   await page.getByText('原生只读工具调用').click()
   await expect(page.getByTestId('diagnostic-planning-details')).toContainText('search_knowledge')
   await expect(page.getByText('Synthetic evidence-constrained comprehensive diagnosis completed.')).toBeVisible()

@@ -75,10 +75,11 @@ def fault_tree_items_for_prompt(
 def compact_ranked_log_evidence(
     evidence: list[dict[str, Any]],
     *,
-    limit: int = 250,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     compact: list[dict[str, Any]] = []
-    for original in evidence[:limit]:
+    selected = evidence if limit is None else evidence[:limit]
+    for original in selected:
         item = {
             key: deepcopy(original.get(key))
             for key in (
@@ -99,15 +100,14 @@ def compact_ranked_log_evidence(
             )
             if original.get(key) is not None
         }
-        content = str(original.get("content") or "")
-        item["content"] = content[:1200] + ("…[truncated]" if len(content) > 1200 else "")
+        item["content"] = str(original.get("content") or "")
         compact.append(item)
     return compact
 
 
 def compact_prior_rounds(rounds: list[dict[str, Any]]) -> list[dict[str, Any]]:
     compact: list[dict[str, Any]] = []
-    for original in rounds[-6:]:
+    for original in rounds:
         compact.append({
             "round": original.get("round"),
             "method_assessments": original.get("method_assessments", []),
@@ -133,9 +133,9 @@ def compact_search_observations(
     observations: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     compact: list[dict[str, Any]] = []
-    for original in observations[-24:]:
+    for original in observations:
         results = []
-        for result in original.get("results", [])[:8]:
+        for result in original.get("results", []):
             if not isinstance(result, dict):
                 continue
             item = {
@@ -147,10 +147,7 @@ def compact_search_observations(
                 )
                 if result.get(key) is not None
             }
-            content = str(result.get("content") or "")
-            item["content"] = content[:1000] + (
-                "…[truncated]" if len(content) > 1000 else ""
-            )
+            item["content"] = str(result.get("content") or "")
             results.append(item)
         compact.append({
             "round": original.get("round"),

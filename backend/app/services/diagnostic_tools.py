@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.utils import mask_sensitive
 from app.models import Case
+from app.services.agent_runtime import EvidenceSpillStore
 from app.services.agentic.tools import (
     ToolContext,
     ToolPermission,
@@ -76,6 +77,7 @@ class DiagnosticToolEnvironment:
     evidence: list[dict[str, Any]] = field(default_factory=list)
     knowledge_search: KnowledgeSearch | None = None
     log_search: LogSearch | None = None
+    spill_store: EvidenceSpillStore | None = None
 
     def __post_init__(self) -> None:
         self.method_by_id = {method.id: method for method in self.methods}
@@ -257,11 +259,15 @@ def _evidence_handler(
     _context: ToolContext,
     payload: GetEvidenceInput,
 ) -> EvidenceToolOutput:
-    results = [
-        environment.evidence_by_id[evidence_id]
-        for evidence_id in dict.fromkeys(payload.evidence_ids)
-        if evidence_id in environment.evidence_by_id
-    ]
+    results: list[dict[str, Any]] = []
+    for evidence_id in dict.fromkeys(payload.evidence_ids):
+        if evidence_id in environment.evidence_by_id:
+            results.append(environment.evidence_by_id[evidence_id])
+            continue
+        if environment.spill_store is not None:
+            resolved = environment.spill_store.resolve(evidence_id)
+            if resolved is not None:
+                results.append(resolved)
     return EvidenceToolOutput(
         results=results,
         returned=len(results),
@@ -310,7 +316,10 @@ def build_diagnostic_tool_registry(environment: DiagnosticToolEnvironment) -> To
     ))
     registry.register(ToolSpec(
         name="get_evidence",
-        description="按已有 evidence_id 读取证据详情；未知 ID 不会返回内容。",
+        description=(
+            "按已有 evidence_id 读取证据详情，或按 content_handle 分段读取被"
+            "上下文治理器压缩的正文；句柄本身不能作为事实证据引用。"
+        ),
         input_schema=GetEvidenceInput,
         output_schema=EvidenceToolOutput,
         handler=lambda context, payload: _evidence_handler(environment, context, payload),

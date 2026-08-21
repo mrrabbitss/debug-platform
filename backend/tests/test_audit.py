@@ -127,6 +127,8 @@ def test_json_generation_requests_json_object_and_tracks_usage(monkeypatch) -> N
         "prompt_tokens": 11,
         "completion_tokens": 7,
         "total_tokens": 18,
+        "cached_tokens": None,
+        "reasoning_tokens": None,
     }
 
 

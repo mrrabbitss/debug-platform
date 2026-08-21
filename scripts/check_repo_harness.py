@@ -263,12 +263,13 @@ def check_workflow_contract(checks: HarnessChecks) -> None:
         and ("human" in constraints or "approval" in constraints),
         "read-only-default": "read-only" in constraints,
         "write-approval": "write" in constraints and "approval" in constraints,
+        "bounded-diagnosis": "budget" in constraints and "stagnation" in constraints,
     }
     absent = [name for name, present in safeguards.items() if not present]
     checks.check(
         "workflow-safety-contract",
         not absent,
-        "untrusted input, evidence, DRAFT, read-only and write-approval gates are declared"
+        "untrusted input, evidence, DRAFT, read-only, write-approval and diagnostic budget gates are declared"
         if not absent
         else f"missing: {', '.join(absent)}",
     )
