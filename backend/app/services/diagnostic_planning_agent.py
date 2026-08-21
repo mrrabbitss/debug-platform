@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from time import perf_counter
 from typing import Any
 
@@ -8,7 +9,14 @@ from pydantic import ValidationError
 from app.core.utils import json_dumps
 from app.models import Case
 from app.services.agent_trace_runtime import append_live_trace
+from app.services.agent_runtime import ContextWindowPolicy, EvidenceSpillStore
 from app.services.agentic.tools import ToolContext
+from app.services.diagnostic_agent_budget import (
+    TIME_BUDGET,
+    DiagnosticAgentBudget,
+    DiagnosticAgentBudgetTracker,
+    budget_failure_details,
+)
 from app.services.diagnostic_methods import DiagnosticMethodDocument, DiagnosticPattern
 from app.services.diagnostic_planning_coverage import (
     TERMINAL_FAULT_TREE_STATUSES,
@@ -20,6 +28,181 @@ from app.services.fault_tree_coverage import FaultTreeCoverageItem
 from app.services.jobs import JobContext
 from app.services.llm import LLMError
 from app.services.planning_diagnostics import planning_failure_details
+
+
+def _valid_evidence_ids(
+    triage_evidence: list[dict[str, Any]],
+    baseline_search: dict[str, Any],
+    supplemental_results: list[dict[str, Any]],
+) -> set[str]:
+    return {
+        str(item["evidence_id"])
+        for item in [
+            *triage_evidence,
+            *baseline_search.get("results", []),
+            *supplemental_results,
+        ]
+        if isinstance(item, dict) and item.get("evidence_id")
+    }
+
+
+def _apply_fault_tree_assessments(
+    coverage: dict[str, dict[str, Any]],
+    planning_round: Any,
+    round_number: int,
+) -> None:
+    for assessment in planning_round.fault_tree_assessments:
+        current = coverage.get(assessment.item_id)
+        if current is None:
+            continue
+        if (
+            assessment.status == "PENDING"
+            and current.get("status") in TERMINAL_FAULT_TREE_STATUSES
+        ):
+            continue
+        current.update({
+            "status": assessment.status,
+            "rationale": assessment.rationale,
+            "evidence_ids": list(dict.fromkeys(assessment.evidence_ids)),
+            "next_action": assessment.next_action,
+            "last_round": round_number,
+        })
+
+
+def _execute_planned_tool_calls(
+    ctx: JobContext,
+    *,
+    planning_round: Any,
+    round_number: int,
+    budget: DiagnosticAgentBudget,
+    budget_tracker: DiagnosticAgentBudgetTracker,
+    prior_tool_calls: dict[str, dict[str, Any]],
+    coverage: dict[str, dict[str, Any]],
+    tool_registry: Any,
+    tool_context: ToolContext,
+    seen_queries: set[str],
+    supplemental_results: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+    executed_tool_calls: list[dict[str, Any]],
+    session_factory: Any,
+    agent_run_id: str,
+) -> tuple[list[dict[str, Any]], str | None, set[str]]:
+    rendered_calls: list[dict[str, Any]] = []
+    new_evidence_ids: set[str] = set()
+    budget_reason: str | None = None
+    for planned_call in planning_round.tool_calls[:budget.max_tool_calls_per_round]:
+        call_arguments = dict(planned_call.arguments)
+        if planned_call.method_document_ids:
+            call_arguments.setdefault(
+                "method_document_ids", planned_call.method_document_ids,
+            )
+        dedupe_key = f"{planned_call.tool_name}:{json_dumps(call_arguments)}"
+        if dedupe_key in prior_tool_calls:
+            previous_call = prior_tool_calls[dedupe_key]
+            reused_call = {
+                "round": round_number,
+                "call_id": planned_call.call_id,
+                "tool_name": planned_call.tool_name,
+                "invoked_by": "MODEL",
+                "method_document_ids": planned_call.method_document_ids,
+                "rationale": planned_call.rationale,
+                "fault_tree_item_ids": planned_call.fault_tree_item_ids,
+                "status": "REUSED_DUPLICATE",
+                "returned": previous_call.get("returned", 0),
+                "total_candidates": previous_call.get("total_candidates", 0),
+                "evidence_ids": previous_call.get("evidence_ids", []),
+            }
+            rendered_calls.append(reused_call)
+            executed_tool_calls.append(reused_call)
+            for item_id in planned_call.fault_tree_item_ids:
+                if item_id in coverage:
+                    coverage[item_id]["attempted"] = True
+            continue
+        if not budget_tracker.can_invoke_tool():
+            budget_reason = budget_tracker.stop_reason
+            break
+        ctx.raise_if_cancelled()
+        invocation = invoke_diagnostic_tool(
+            tool_registry,
+            tool_context,
+            tool_name=planned_call.tool_name,
+            arguments=call_arguments,
+        )
+        budget_tracker.record_tool_call()
+        output_budget_reason = budget_tracker.record_tool_output(invocation.output)
+        new_evidence_ids.update(invocation.evidence_ids)
+        output_results = invocation.output.get("results", [])
+        if planned_call.tool_name == "search_knowledge":
+            query = str(invocation.arguments.get("query") or "").strip()
+            if query:
+                seen_queries.add(query.casefold())
+        supplemental_results.extend(
+            item
+            for item in output_results
+            if str(item.get("source_type") or "") != "context_spill"
+        )
+        observations.append({
+            "round": round_number,
+            "tool_name": planned_call.tool_name,
+            "invoked_by": "MODEL",
+            "arguments": invocation.arguments,
+            "summary": {
+                "returned": invocation.output.get("returned", 0),
+                "total_candidates": invocation.output.get("total_candidates", 0),
+            },
+            "results": output_results,
+        })
+        rendered_call = {
+            "round": round_number,
+            "call_id": planned_call.call_id,
+            "tool_name": planned_call.tool_name,
+            "arguments": invocation.arguments,
+            "method_document_ids": planned_call.method_document_ids,
+            "rationale": planned_call.rationale,
+            "fault_tree_item_ids": planned_call.fault_tree_item_ids,
+            "status": "COMPLETED",
+            "returned": int(invocation.output.get("returned") or 0),
+            "total_candidates": int(
+                invocation.output.get("total_candidates") or 0
+            ),
+            "evidence_ids": invocation.evidence_ids,
+        }
+        rendered_calls.append(rendered_call)
+        executed_tool_calls.append(rendered_call)
+        prior_tool_calls[dedupe_key] = rendered_call
+        for item_id in planned_call.fault_tree_item_ids:
+            if item_id in coverage:
+                coverage[item_id]["attempted"] = True
+        with session_factory() as db:
+            append_live_trace(
+                db,
+                agent_run_id,
+                stage="execute_agent_tool",
+                tool_name=planned_call.tool_name,
+                status="COMPLETED",
+                duration_ms=invocation.duration_ms,
+                input_summary=invocation.arguments,
+                output_summary={
+                    "returned": invocation.output.get("returned", 0),
+                    "total_candidates": invocation.output.get(
+                        "total_candidates", 0,
+                    ),
+                },
+                evidence_ids=invocation.evidence_ids,
+                metadata={
+                    "round": round_number,
+                    "candidate_count": invocation.output.get("total_candidates", 0),
+                    "returned_count": invocation.output.get("returned", 0),
+                    "document_id": ",".join(
+                        planned_call.method_document_ids
+                    )[:500],
+                    "fault_tree_item_ids": planned_call.fault_tree_item_ids,
+                },
+            )
+        if output_budget_reason:
+            budget_reason = output_budget_reason
+            break
+    return rendered_calls, budget_reason, new_evidence_ids
 
 
 async def execute_llm_planning_rounds(
@@ -38,9 +221,9 @@ async def execute_llm_planning_rounds(
     fault_tree_items: list[FaultTreeCoverageItem],
     diagnostic_patterns: list[DiagnosticPattern],
     request_round: Any,
-    max_rounds: int,
-    min_rounds: int,
-    max_tool_calls_per_round: int,
+    budget: DiagnosticAgentBudget,
+    context_policy: ContextWindowPolicy,
+    spill_store: EvidenceSpillStore,
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -48,6 +231,7 @@ async def execute_llm_planning_rounds(
     str,
     list[dict[str, Any]],
     dict[str, Any] | None,
+    dict[str, Any],
     dict[str, Any],
 ]:
     """Execute the model and typed tools until coverage is complete or the hard limit."""
@@ -62,13 +246,27 @@ async def execute_llm_planning_rounds(
     prior_tool_calls: dict[str, dict[str, Any]] = {}
     executed_tool_calls: list[dict[str, Any]] = []
     coverage = initial_fault_tree_coverage(fault_tree_items)
+    budget_tracker = DiagnosticAgentBudgetTracker(budget)
     failure: dict[str, Any] | None = None
     stop_reason = "MAX_PLANNING_ROUNDS"
+    budget_stop_triggered = False
+    active_round_usage_recorded = False
     active_round = 0
     active_round_started = perf_counter()
     try:
-        for round_number in range(1, max_rounds + 1):
+        for round_number in range(1, budget.max_rounds + 1):
             active_round = round_number
+            active_round_usage_recorded = False
+            budget_reason = budget_tracker.check_limits()
+            if budget_reason:
+                stop_reason = budget_reason
+                failure = budget_failure_details(
+                    budget_reason,
+                    budget_tracker.snapshot(),
+                    finish_reason=getattr(provider, "last_finish_reason", None),
+                )
+                budget_stop_triggered = True
+                break
             ctx.update(
                 min(86, 50 + round_number * 4),
                 f"LLM diagnostic tool-agent round {round_number}",
@@ -77,58 +275,58 @@ async def execute_llm_planning_rounds(
             started = perf_counter()
             active_round_started = started
             coverage_before = coverage_snapshot(coverage)
-            valid_evidence_ids = {
-                str(item.get("evidence_id"))
-                for item in [
-                    *triage_evidence,
-                    *baseline_search.get("results", []),
-                    *supplemental_results,
-                ]
-                if isinstance(item, dict) and item.get("evidence_id")
-            }
-            planning_round = await request_round(
-                provider,
-                round_number=round_number,
-                case=case,
-                methods=methods,
-                triage_evidence=triage_evidence,
-                prior_rounds=prior_rounds,
-                search_observations=observations,
-                tool_manifest=tool_registry.manifest(role=tool_context.role),
-                document_observation=document_observation,
-                fault_tree_items=fault_tree_items,
-                diagnostic_patterns=diagnostic_patterns,
-                fault_tree_coverage=coverage_before,
-                unattempted_fault_tree_item_ids={
-                    item_id
-                    for item_id, item in coverage.items()
-                    if not item.get("attempted")
-                },
-                valid_evidence_ids=valid_evidence_ids,
+            valid_evidence_ids = _valid_evidence_ids(
+                triage_evidence, baseline_search, supplemental_results,
             )
+            try:
+                planning_round = await asyncio.wait_for(
+                    request_round(
+                        provider,
+                        round_number=round_number,
+                        case=case,
+                        methods=methods,
+                        triage_evidence=triage_evidence,
+                        prior_rounds=prior_rounds,
+                        search_observations=observations,
+                        tool_manifest=tool_registry.manifest(role=tool_context.role),
+                        document_observation=document_observation,
+                        fault_tree_items=fault_tree_items,
+                        diagnostic_patterns=diagnostic_patterns,
+                        fault_tree_coverage=coverage_before,
+                        unattempted_fault_tree_item_ids={
+                            item_id
+                            for item_id, item in coverage.items()
+                            if not item.get("attempted")
+                        },
+                        valid_evidence_ids=valid_evidence_ids,
+                        context_policy=context_policy,
+                        spill_store=spill_store,
+                    ),
+                    timeout=max(0.001, budget_tracker.remaining_duration_ms / 1000),
+                )
+            except TimeoutError:
+                budget_tracker.stop_reason = TIME_BUDGET
+                stop_reason = TIME_BUDGET
+                failure = budget_failure_details(
+                    stop_reason,
+                    budget_tracker.snapshot(),
+                    finish_reason=getattr(provider, "last_finish_reason", None),
+                )
+                budget_stop_triggered = True
+                break
             rendered = planning_round.model_dump(mode="json")
             rendered["round"] = round_number
             rendered["planning_attempts"] = int(
                 getattr(provider, "last_validation_retry_count", 0) or 0
             ) + 1
-            for assessment in planning_round.fault_tree_assessments:
-                current = coverage.get(assessment.item_id)
-                if current is None:
-                    continue
-                if (
-                    assessment.status == "PENDING"
-                    and current.get("status") in TERMINAL_FAULT_TREE_STATUSES
-                ):
-                    continue
-                current.update({
-                    "status": assessment.status,
-                    "rationale": assessment.rationale,
-                    "evidence_ids": list(dict.fromkeys(assessment.evidence_ids)),
-                    "next_action": assessment.next_action,
-                    "last_round": round_number,
-                })
+            context_metrics = getattr(provider, "last_context_metrics", {}) or {}
+            rendered["context_governance"] = context_metrics
+            _apply_fault_tree_assessments(coverage, planning_round, round_number)
             prior_rounds.append(rendered)
             usage = getattr(provider, "last_usage", {}) or {}
+            budget_tracker.rounds_completed = round_number
+            budget_reason = budget_tracker.record_model_usage(usage)
+            active_round_usage_recorded = True
             with session_factory() as db:
                 append_live_trace(
                     db,
@@ -160,119 +358,91 @@ async def execute_llm_planning_rounds(
                         "fault_tree_pending_before": int(
                             coverage_before.get("status_counts", {}).get("PENDING", 0)
                         ),
+                        "aggregate_tokens": budget_tracker.total_tokens,
+                        "token_budget": budget.max_total_tokens,
+                        "context_governance": context_metrics,
                     },
                 )
             rendered_calls: list[dict[str, Any]] = []
-            for planned_call in planning_round.tool_calls[:max_tool_calls_per_round]:
-                call_arguments = dict(planned_call.arguments)
-                if planned_call.method_document_ids:
-                    call_arguments.setdefault(
-                        "method_document_ids", planned_call.method_document_ids,
+            if budget_reason:
+                rendered["executed_tool_calls"] = rendered_calls
+                rendered["fault_tree_coverage_after_round"] = coverage_snapshot(coverage)
+                successful_stop = (
+                    round_number >= budget.min_rounds
+                    and not planning_round.continue_analysis
+                    and (
+                        rendered["fault_tree_coverage_after_round"]["complete"]
+                        or not fault_tree_items
                     )
-                dedupe_key = f"{planned_call.tool_name}:{json_dumps(call_arguments)}"
-                if dedupe_key in prior_tool_calls:
-                    previous_call = prior_tool_calls[dedupe_key]
-                    reused_call = {
-                        "round": round_number,
-                        "call_id": planned_call.call_id,
-                        "tool_name": planned_call.tool_name,
-                        "invoked_by": "MODEL",
-                        "method_document_ids": planned_call.method_document_ids,
-                        "rationale": planned_call.rationale,
-                        "fault_tree_item_ids": planned_call.fault_tree_item_ids,
-                        "status": "REUSED_DUPLICATE",
-                        "returned": previous_call.get("returned", 0),
-                        "total_candidates": previous_call.get("total_candidates", 0),
-                        "evidence_ids": previous_call.get("evidence_ids", []),
-                    }
-                    rendered_calls.append(reused_call)
-                    executed_tool_calls.append(reused_call)
-                    for item_id in planned_call.fault_tree_item_ids:
-                        if item_id in coverage:
-                            coverage[item_id]["attempted"] = True
-                    continue
-                ctx.raise_if_cancelled()
-                invocation = invoke_diagnostic_tool(
-                    tool_registry,
-                    tool_context,
-                    tool_name=planned_call.tool_name,
-                    arguments=call_arguments,
                 )
-                output_results = invocation.output.get("results", [])
-                if planned_call.tool_name == "search_knowledge":
-                    query = str(invocation.arguments.get("query") or "").strip()
-                    if query:
-                        seen_queries.add(query.casefold())
-                supplemental_results.extend(output_results)
-                observations.append({
-                    "round": round_number,
-                    "tool_name": planned_call.tool_name,
-                    "invoked_by": "MODEL",
-                    "arguments": invocation.arguments,
-                    "summary": {
-                        "returned": invocation.output.get("returned", 0),
-                        "total_candidates": invocation.output.get("total_candidates", 0),
-                    },
-                    "results": output_results,
-                })
-                rendered_call = {
-                    "round": round_number,
-                    "call_id": planned_call.call_id,
-                    "tool_name": planned_call.tool_name,
-                    "arguments": invocation.arguments,
-                    "method_document_ids": planned_call.method_document_ids,
-                    "rationale": planned_call.rationale,
-                    "fault_tree_item_ids": planned_call.fault_tree_item_ids,
-                    "status": "COMPLETED",
-                    "returned": int(invocation.output.get("returned") or 0),
-                    "total_candidates": int(
-                        invocation.output.get("total_candidates") or 0
-                    ),
-                    "evidence_ids": invocation.evidence_ids,
-                }
-                rendered_calls.append(rendered_call)
-                executed_tool_calls.append(rendered_call)
-                prior_tool_calls[dedupe_key] = rendered_call
-                for item_id in planned_call.fault_tree_item_ids:
-                    if item_id in coverage:
-                        coverage[item_id]["attempted"] = True
-                with session_factory() as db:
-                    append_live_trace(
-                        db,
-                        agent_run_id,
-                        stage="execute_agent_tool",
-                        tool_name=planned_call.tool_name,
-                        status="COMPLETED",
-                        duration_ms=invocation.duration_ms,
-                        input_summary=invocation.arguments,
-                        output_summary={
-                            "returned": invocation.output.get("returned", 0),
-                            "total_candidates": invocation.output.get(
-                                "total_candidates", 0,
-                            ),
-                        },
-                        evidence_ids=invocation.evidence_ids,
-                        metadata={
-                            "round": round_number,
-                            "candidate_count": invocation.output.get(
-                                "total_candidates", 0,
-                            ),
-                            "returned_count": invocation.output.get("returned", 0),
-                            "document_id": ",".join(
-                                planned_call.method_document_ids
-                            )[:500],
-                            "fault_tree_item_ids": planned_call.fault_tree_item_ids,
-                        },
+                if successful_stop:
+                    budget_tracker.stop_reason = None
+                    rendered["agent_budget_after_round"] = budget_tracker.snapshot()
+                    stop_reason = (
+                        planning_round.stop_reason or "MODEL_SUFFICIENT_EVIDENCE"
                     )
+                    break
+                rendered["agent_budget_after_round"] = budget_tracker.snapshot()
+                stop_reason = budget_reason
+                failure = budget_failure_details(
+                    budget_reason,
+                    budget_tracker.snapshot(),
+                    finish_reason=getattr(provider, "last_finish_reason", None),
+                )
+                budget_stop_triggered = True
+                break
+            queries_before = len(seen_queries)
+            tool_calls_before = budget_tracker.tool_calls
+            rendered_calls, tool_budget_reason, new_evidence_ids = (
+                _execute_planned_tool_calls(
+                    ctx,
+                    planning_round=planning_round,
+                    round_number=round_number,
+                    budget=budget,
+                    budget_tracker=budget_tracker,
+                    prior_tool_calls=prior_tool_calls,
+                    coverage=coverage,
+                    tool_registry=tool_registry,
+                    tool_context=tool_context,
+                    seen_queries=seen_queries,
+                    supplemental_results=supplemental_results,
+                    observations=observations,
+                    executed_tool_calls=executed_tool_calls,
+                    session_factory=session_factory,
+                    agent_run_id=agent_run_id,
+                )
+            )
+            budget_reason = budget_reason or tool_budget_reason
             rendered["executed_tool_calls"] = rendered_calls
             rendered["fault_tree_coverage_after_round"] = coverage_snapshot(coverage)
+            budget_reason = budget_reason or budget_tracker.record_round_progress(
+                round_number=round_number,
+                coverage_before=coverage_before,
+                coverage_after=rendered["fault_tree_coverage_after_round"],
+                new_tool_calls=budget_tracker.tool_calls - tool_calls_before,
+                new_evidence_ids=len(new_evidence_ids),
+                new_queries=len(seen_queries) - queries_before,
+            )
+            rendered["agent_budget_after_round"] = budget_tracker.snapshot()
             coverage_complete = rendered["fault_tree_coverage_after_round"]["complete"]
-            if (
-                round_number >= min_rounds
+            successful_stop = (
+                round_number >= budget.min_rounds
                 and not planning_round.continue_analysis
                 and (coverage_complete or not fault_tree_items)
-            ):
+            )
+            if successful_stop:
+                budget_tracker.stop_reason = None
+                rendered["agent_budget_after_round"] = budget_tracker.snapshot()
                 stop_reason = planning_round.stop_reason or "MODEL_SUFFICIENT_EVIDENCE"
+                break
+            if budget_reason:
+                stop_reason = budget_reason
+                failure = budget_failure_details(
+                    budget_reason,
+                    budget_tracker.snapshot(),
+                    finish_reason=getattr(provider, "last_finish_reason", None),
+                )
+                budget_stop_triggered = True
                 break
             if not planning_round.continue_analysis and not coverage_complete:
                 rendered["coverage_forced_continue"] = True
@@ -280,12 +450,18 @@ async def execute_llm_planning_rounds(
         stop_reason = "PLANNER_VALIDATION_FALLBACK"
         failure = planning_failure_details(exc, provider)
         usage = getattr(provider, "last_usage", {}) or {}
+        if not active_round_usage_recorded:
+            budget_tracker.record_model_usage(usage)
         metadata = {
             "round": active_round or 1,
             "error_type": failure["error_type"],
             "validation_code": failure["code"],
             "validation_path": failure.get("field_path"),
             "finish_reason": failure.get("finish_reason"),
+            "agent_budget": budget_tracker.snapshot(),
+            "context_governance": (
+                getattr(provider, "last_context_metrics", {}) or {}
+            ),
         }
         with session_factory() as db:
             append_live_trace(
@@ -315,6 +491,29 @@ async def execute_llm_planning_rounds(
                 stop_reason=stop_reason,
                 metadata=metadata,
             )
+    if budget_stop_triggered and failure:
+        metadata = {
+            "round": active_round,
+            "error_type": failure["error_type"],
+            "validation_code": failure["code"],
+            "validation_path": failure.get("field_path"),
+            "finish_reason": failure.get("finish_reason"),
+            "agent_budget": budget_tracker.snapshot(),
+            "context_governance": (
+                getattr(provider, "last_context_metrics", {}) or {}
+            ),
+        }
+        with session_factory() as db:
+            append_live_trace(
+                db,
+                agent_run_id,
+                stage="diagnostic_planner_fallback",
+                tool_name="deterministic_planner",
+                status="COMPLETED",
+                output_summary={"completed_rounds": len(prior_rounds)},
+                stop_reason=stop_reason,
+                metadata=metadata,
+            )
     final_coverage = coverage_snapshot(coverage)
     if fault_tree_items and not final_coverage["complete"] and failure is None:
         stop_reason = "FAULT_TREE_COVERAGE_INCOMPLETE"
@@ -322,7 +521,7 @@ async def execute_llm_planning_rounds(
             "code": "FAULT_TREE_COVERAGE_INCOMPLETE",
             "message": (
                 "The model did not investigate and conclude every compiled fault-tree item "
-                f"within {max_rounds} rounds"
+                f"within {budget.max_rounds} rounds"
             ),
             "field_path": "fault_tree_coverage",
             "error_type": "FaultTreeCoverageError",
@@ -336,4 +535,5 @@ async def execute_llm_planning_rounds(
         executed_tool_calls,
         failure,
         final_coverage,
+        budget_tracker.snapshot(),
     )

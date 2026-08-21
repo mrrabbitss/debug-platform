@@ -1,5 +1,5 @@
 name: gw-ap-debug-assistant
-version: 0.6.1
+version: 0.6.2
 description: Upload and diagnose GW/AP collectDebuginfo through the internal Debug Platform API.
 entrypoints:
   create_case:
@@ -101,3 +101,4 @@ constraints:
   - LLM log planning sends case context and approved method documents only; raw log scanning remains local.
   - GW and AP are one diagnostic scope; diagnostic tools must consider both device knowledge and preserve artifact device-role provenance.
   - Diagnosis/report revisions remain drafts until an authorized human explicitly applies or rejects them; applying creates a new immutable analysis.
+  - Comprehensive diagnosis keeps a twenty-round ceiling and must expose aggregate Token, time, tool-call and stagnation budgets; a budget stop preserves incomplete coverage and falls back deterministically.

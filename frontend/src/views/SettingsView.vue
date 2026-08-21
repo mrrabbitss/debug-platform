@@ -35,6 +35,8 @@ const form = reactive({
   temperature: 0.1,
   thinking_mode: 'inherit' as ThinkingMode,
   max_tokens: 0,
+  context_window_tokens: 0,
+  context_reserved_output_tokens: 0,
   timeout_seconds: 300,
   max_retries: 2,
   dimension: undefined as number | undefined,
@@ -119,6 +121,8 @@ function resetForm(task: ModelTask) {
   form.temperature = 0.1
   form.thinking_mode = 'inherit'
   form.max_tokens = 0
+  form.context_window_tokens = 0
+  form.context_reserved_output_tokens = 0
   form.timeout_seconds = 300
   form.max_retries = 2
   form.dimension = undefined
@@ -161,6 +165,8 @@ function openEdit(profile: ModelProfile) {
       ? (profile.config.thinking_enabled ? 'enabled' : 'disabled')
       : 'inherit'
   form.max_tokens = Number(profile.config.max_tokens ?? 0)
+  form.context_window_tokens = Number(profile.config.context_window_tokens ?? 0)
+  form.context_reserved_output_tokens = Number(profile.config.context_reserved_output_tokens ?? 0)
   form.timeout_seconds = Number(profile.config.timeout_seconds ?? 300)
   form.max_retries = Number(profile.config.max_retries ?? 2)
   form.dimension = profile.config.dimension ? Number(profile.config.dimension) : undefined
@@ -178,6 +184,8 @@ function modelConfig() {
       temperature: form.temperature,
       thinking_mode: form.thinking_mode,
       max_tokens: form.max_tokens > 0 ? form.max_tokens : undefined,
+      context_window_tokens: form.context_window_tokens > 0 ? form.context_window_tokens : undefined,
+      context_reserved_output_tokens: form.context_reserved_output_tokens > 0 ? form.context_reserved_output_tokens : undefined,
       timeout_seconds: form.timeout_seconds,
       max_retries: form.max_retries
     }
@@ -451,6 +459,18 @@ onMounted(load)
             <div>
               <el-input-number v-model="form.max_tokens" :min="0" :max="2000000" :step="1024" />
               <div class="muted">0 表示使用模型默认值；GLM-5.1/5.2 可填写 65536。</div>
+            </div>
+          </el-form-item>
+          <el-form-item label="上下文窗口 Tokens">
+            <div>
+              <el-input-number v-model="form.context_window_tokens" :min="0" :max="10000000" :step="8192" />
+              <div class="muted">0 使用后端默认 131072；应填写模型真实的输入+输出上下文窗口。</div>
+            </div>
+          </el-form-item>
+          <el-form-item label="预留输出 Tokens">
+            <div>
+              <el-input-number v-model="form.context_reserved_output_tokens" :min="0" :max="2000000" :step="1024" />
+              <div class="muted">0 优先沿用“最大输出 Tokens”；综合诊断会把剩余容量用于方法、日志证据和历史轨迹。</div>
             </div>
           </el-form-item>
         </template>

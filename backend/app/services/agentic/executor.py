@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
-from enum import StrEnum
 from time import monotonic, perf_counter
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 
 from app.services.agent_trace import summary_hash
+from app.services.agent_runtime.budget import ExecutionBudgetLedger
+from app.services.agent_runtime.execution import causal_depth, sync_execution_state
+from app.services.agentic.contracts import (
+    AgentBudget,
+    AgentExecutionResult,
+    AgentExecutionState,
+    AgentStopReason,
+    Fallback,
+    Planner,
+    PlannerDecision,
+)
 from app.services.agentic.timeouts import (
     PlannerTimedOut,
     ToolTimedOut,
@@ -22,65 +31,6 @@ from app.services.agentic.tools import (
     ToolRegistry,
     ToolRegistryError,
 )
-
-
-class AgentStopReason(StrEnum):
-    COMPLETED = "COMPLETED"
-    MAX_STEPS = "MAX_STEPS"
-    MAX_HOPS = "MAX_HOPS"
-    TOKEN_BUDGET = "TOKEN_BUDGET"
-    COST_BUDGET = "COST_BUDGET"
-    TIME_BUDGET = "TIME_BUDGET"
-    CANCELLED = "CANCELLED"
-    TOOL_NOT_ALLOWED = "TOOL_NOT_ALLOWED"
-    WRITE_APPROVAL_REQUIRED = "WRITE_APPROVAL_REQUIRED"
-    CIRCUIT_OPEN = "CIRCUIT_OPEN"
-    TOOL_FAILED = "TOOL_FAILED"
-    PLANNER_ERROR = "PLANNER_ERROR"
-    FALLBACK_DETERMINISTIC = "FALLBACK_DETERMINISTIC"
-
-
-class AgentBudget(BaseModel):
-    max_steps: int = Field(default=8, ge=1, le=50)
-    max_hops: int = Field(default=3, ge=0, le=10)
-    max_tokens: int = Field(default=12_000, ge=1, le=2_000_000)
-    max_cost: float = Field(default=1.0, ge=0, le=10_000)
-    max_duration_ms: int = Field(default=30_000, ge=100, le=3_600_000)
-
-
-class PlannerDecision(BaseModel):
-    action: Literal["tool", "finish"]
-    tool_name: str | None = Field(default=None, max_length=128)
-    arguments: dict[str, Any] = Field(default_factory=dict)
-    hop: int = Field(default=0, ge=0, le=100)
-    estimated_tokens: int = Field(default=0, ge=0)
-    estimated_cost: float = Field(default=0.0, ge=0)
-    stop_reason: str = Field(default="COMPLETED", max_length=128)
-
-
-class AgentExecutionState(BaseModel):
-    step: int = 0
-    tokens: int = 0
-    cost: float = 0.0
-    outputs: list[dict[str, Any]] = Field(default_factory=list)
-    trajectory: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class AgentExecutionResult(BaseModel):
-    status: Literal["COMPLETED", "FAILED", "CANCELLED", "FALLBACK"]
-    stop_reason: AgentStopReason
-    steps: int
-    tokens: int
-    cost: float
-    duration_ms: int
-    outputs: list[dict[str, Any]]
-    trajectory: list[dict[str, Any]]
-    fallback_result: dict[str, Any] | None = None
-
-
-Planner = Callable[[AgentExecutionState], PlannerDecision | dict[str, Any]]
-Fallback = Callable[[AgentExecutionState, AgentStopReason], dict[str, Any]]
-
 
 class BoundedAgentExecutor:
     def __init__(
@@ -129,6 +79,7 @@ class BoundedAgentExecutor:
         stop_reason: AgentStopReason,
         started: float,
         fallback_result: dict[str, Any] | None = None,
+        budget_snapshot: dict[str, Any] | None = None,
     ) -> AgentExecutionResult:
         return AgentExecutionResult(
             status=status,
@@ -136,9 +87,13 @@ class BoundedAgentExecutor:
             steps=state.step,
             tokens=state.tokens,
             cost=round(state.cost, 8),
+            planner_tokens=state.planner_tokens,
+            tool_output_tokens=state.tool_output_tokens,
+            causal_depth=state.causal_depth,
             duration_ms=int((perf_counter() - started) * 1000),
             outputs=state.outputs,
             trajectory=state.trajectory,
+            budget=budget_snapshot or {},
             fallback_result=fallback_result,
         )
 
@@ -148,6 +103,7 @@ class BoundedAgentExecutor:
         reason: AgentStopReason,
         started: float,
         fallback: Fallback | None,
+        ledger: ExecutionBudgetLedger,
     ) -> AgentExecutionResult:
         if fallback:
             fallback_result = fallback(state, reason)
@@ -163,6 +119,7 @@ class BoundedAgentExecutor:
                 stop_reason=AgentStopReason.FALLBACK_DETERMINISTIC,
                 started=started,
                 fallback_result=fallback_result,
+                budget_snapshot=ledger.snapshot(),
             )
         status = "CANCELLED" if reason == AgentStopReason.CANCELLED else "FAILED"
         return self._result(
@@ -170,6 +127,7 @@ class BoundedAgentExecutor:
             status=status,
             stop_reason=reason,
             started=started,
+            budget_snapshot=ledger.snapshot(),
         )
 
     def run(
@@ -183,19 +141,25 @@ class BoundedAgentExecutor:
         limits = budget or AgentBudget()
         state = AgentExecutionState()
         started = perf_counter()
+        ledger = ExecutionBudgetLedger(
+            max_tokens=limits.max_tokens,
+            max_cost=limits.max_cost,
+            max_duration_ms=limits.max_duration_ms,
+            max_tool_calls=limits.max_steps,
+        )
         while True:
             elapsed_ms = int((perf_counter() - started) * 1000)
             if context.cancel_event.is_set():
                 return self._stop_or_fallback(
-                    state, AgentStopReason.CANCELLED, started, fallback
+                    state, AgentStopReason.CANCELLED, started, fallback, ledger
                 )
             if elapsed_ms >= limits.max_duration_ms:
                 return self._stop_or_fallback(
-                    state, AgentStopReason.TIME_BUDGET, started, fallback
+                    state, AgentStopReason.TIME_BUDGET, started, fallback, ledger
                 )
             if state.step >= limits.max_steps:
                 return self._stop_or_fallback(
-                    state, AgentStopReason.MAX_STEPS, started, fallback
+                    state, AgentStopReason.MAX_STEPS, started, fallback, ledger
                 )
             remaining_seconds = max(
                 0.001,
@@ -212,19 +176,37 @@ class BoundedAgentExecutor:
                 )
             except PlannerTimedOut:
                 return self._stop_or_fallback(
-                    state, AgentStopReason.TIME_BUDGET, started, fallback
+                    state, AgentStopReason.TIME_BUDGET, started, fallback, ledger
                 )
             except (ValidationError, ValueError, TypeError, RuntimeError):
                 return self._stop_or_fallback(
-                    state, AgentStopReason.PLANNER_ERROR, started, fallback
+                    state, AgentStopReason.PLANNER_ERROR, started, fallback, ledger
                 )
             except Exception:  # noqa: BLE001
                 return self._stop_or_fallback(
-                    state, AgentStopReason.PLANNER_ERROR, started, fallback
+                    state, AgentStopReason.PLANNER_ERROR, started, fallback, ledger
                 )
             if int((perf_counter() - started) * 1000) >= limits.max_duration_ms:
                 return self._stop_or_fallback(
-                    state, AgentStopReason.TIME_BUDGET, started, fallback
+                    state, AgentStopReason.TIME_BUDGET, started, fallback, ledger
+                )
+            planner_usage = getattr(planner, "last_usage", {}) or {}
+            reported_cost = getattr(planner, "last_cost", None)
+            ledger.record_model_usage(
+                planner_usage,
+                fallback_payload=decision.model_dump(mode="json"),
+                fallback_tokens=decision.estimated_tokens,
+                reported_cost=reported_cost,
+                fallback_cost=decision.estimated_cost,
+            )
+            sync_execution_state(state, ledger)
+            if state.tokens >= limits.max_tokens:
+                return self._stop_or_fallback(
+                    state, AgentStopReason.TOKEN_BUDGET, started, fallback, ledger
+                )
+            if limits.max_cost > 0 and state.cost >= limits.max_cost:
+                return self._stop_or_fallback(
+                    state, AgentStopReason.COST_BUDGET, started, fallback, ledger
                 )
             if decision.action == "finish":
                 return self._result(
@@ -232,28 +214,29 @@ class BoundedAgentExecutor:
                     status="COMPLETED",
                     stop_reason=AgentStopReason.COMPLETED,
                     started=started,
+                    budget_snapshot=ledger.snapshot(),
                 )
             if not decision.tool_name:
                 return self._stop_or_fallback(
-                    state, AgentStopReason.PLANNER_ERROR, started, fallback
+                    state, AgentStopReason.PLANNER_ERROR, started, fallback, ledger
                 )
-            if decision.hop > limits.max_hops:
-                return self._stop_or_fallback(
-                    state, AgentStopReason.MAX_HOPS, started, fallback
+            try:
+                step_depth = causal_depth(
+                    state.step_depths, decision.depends_on_step
                 )
-            if state.tokens + decision.estimated_tokens > limits.max_tokens:
+            except ValueError:
                 return self._stop_or_fallback(
-                    state, AgentStopReason.TOKEN_BUDGET, started, fallback
+                    state, AgentStopReason.PLANNER_ERROR, started, fallback, ledger
                 )
-            if state.cost + decision.estimated_cost > limits.max_cost:
+            if step_depth > limits.max_hops:
                 return self._stop_or_fallback(
-                    state, AgentStopReason.COST_BUDGET, started, fallback
+                    state, AgentStopReason.MAX_HOPS, started, fallback, ledger
                 )
             try:
                 spec = self.registry.get(decision.tool_name, role=context.role)
             except (ToolRegistryError, ToolNotAllowedError):
                 return self._stop_or_fallback(
-                    state, AgentStopReason.TOOL_NOT_ALLOWED, started, fallback
+                    state, AgentStopReason.TOOL_NOT_ALLOWED, started, fallback, ledger
                 )
             if (
                 spec.permission == ToolPermission.WRITE
@@ -264,27 +247,29 @@ class BoundedAgentExecutor:
                     AgentStopReason.WRITE_APPROVAL_REQUIRED,
                     started,
                     fallback,
+                    ledger,
                 )
             if self._circuit_is_open(spec.name):
                 return self._stop_or_fallback(
-                    state, AgentStopReason.CIRCUIT_OPEN, started, fallback
+                    state, AgentStopReason.CIRCUIT_OPEN, started, fallback, ledger
                 )
             try:
                 validated_input = spec.input_schema.model_validate(decision.arguments)
             except ValidationError:
                 return self._stop_or_fallback(
-                    state, AgentStopReason.PLANNER_ERROR, started, fallback
+                    state, AgentStopReason.PLANNER_ERROR, started, fallback, ledger
                 )
 
             state.step += 1
-            state.tokens += decision.estimated_tokens
-            state.cost += decision.estimated_cost
+            state.step_depths.append(step_depth)
+            state.causal_depth = max(state.causal_depth, step_depth)
+            ledger.record_tool_call()
             tool_started = perf_counter()
             final_error: Exception | None = None
             for attempt in range(spec.max_retries + 1):
                 if context.cancel_event.is_set():
                     return self._stop_or_fallback(
-                        state, AgentStopReason.CANCELLED, started, fallback
+                        state, AgentStopReason.CANCELLED, started, fallback, ledger
                     )
                 try:
                     raw_output = invoke_tool_with_timeout(
@@ -306,6 +291,8 @@ class BoundedAgentExecutor:
                     output = spec.output_schema.model_validate(raw_output)
                     self._record_tool_success(spec.name)
                     rendered = output.model_dump(mode="json")
+                    output_tokens = ledger.record_tool_output(rendered)
+                    sync_execution_state(state, ledger)
                     state.outputs.append({
                         "tool_name": spec.name,
                         "output": rendered,
@@ -319,6 +306,13 @@ class BoundedAgentExecutor:
                         "duration_ms": int((perf_counter() - tool_started) * 1000),
                         "input_summary_hash": summary_hash(decision.arguments),
                         "output_summary_hash": summary_hash(rendered),
+                        "causal_depth": step_depth,
+                        "depends_on_step": decision.depends_on_step,
+                        "planner_advisory_hop": decision.hop,
+                        "usage_source": next(
+                            reversed(state.usage_sources), "runtime_estimate"
+                        ),
+                        "tool_output_tokens": output_tokens,
                     })
                     break
                 except Exception as exc:  # noqa: BLE001
@@ -345,18 +339,22 @@ class BoundedAgentExecutor:
                     delay = self.retry_base_seconds * (2 ** attempt)
                     if context.cancel_event.wait(delay):
                         return self._stop_or_fallback(
-                            state, AgentStopReason.CANCELLED, started, fallback
+                            state, AgentStopReason.CANCELLED, started, fallback, ledger
                         )
+            if state.tokens >= limits.max_tokens:
+                return self._stop_or_fallback(
+                    state, AgentStopReason.TOKEN_BUDGET, started, fallback, ledger
+                )
             if final_error is not None and (
                 not state.trajectory
                 or state.trajectory[-1].get("status") == "FAILED"
             ):
                 if int((perf_counter() - started) * 1000) >= limits.max_duration_ms:
                     return self._stop_or_fallback(
-                        state, AgentStopReason.TIME_BUDGET, started, fallback
+                        state, AgentStopReason.TIME_BUDGET, started, fallback, ledger
                     )
                 return self._stop_or_fallback(
-                    state, AgentStopReason.TOOL_FAILED, started, fallback
+                    state, AgentStopReason.TOOL_FAILED, started, fallback, ledger
                 )
 
 

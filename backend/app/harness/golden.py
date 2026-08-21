@@ -19,6 +19,7 @@ from sqlalchemy.orm import aliased, sessionmaker
 
 from app.core.db import Base, configure_sqlite_engine
 from app.harness.timing import run_timed_check
+from app.harness.scenario_matrix import evaluate_scenario_matrix
 from app.models import (
     AgentMemory,
     Artifact,
@@ -89,7 +90,12 @@ def _sha256(path: Path) -> str:
 def _evaluate_fixture_integrity(root: Path, corpus: dict[str, Any]) -> EvaluationOutcome:
     failures: list[str] = []
     checked: dict[str, str] = {}
-    required = ["corpus.json", "fake_model_responses.json", *corpus["documents"]]
+    required = [
+        "corpus.json",
+        "fake_model_responses.json",
+        corpus["scenario_matrix"]["path"],
+        *corpus["documents"],
+    ]
     for relative in required:
         path = root / relative
         if not path.is_file():
@@ -119,6 +125,16 @@ def _event_projection(event: Any) -> dict[str, Any]:
         "line_end": event.line_end,
         "timestamp_raw": event.timestamp_raw,
     }
+
+
+def _evaluate_scenario_contract(
+    root: Path,
+    corpus: dict[str, Any],
+) -> EvaluationOutcome:
+    metrics, failures = evaluate_scenario_matrix(
+        root / corpus["scenario_matrix"]["path"]
+    )
+    return EvaluationOutcome(metrics=metrics, failures=failures)
 
 
 def _evaluate_parser(root: Path, corpus: dict[str, Any]) -> EvaluationOutcome:
@@ -746,6 +762,12 @@ def run_golden_suite(
             max_duration_ms=int(corpus["curation"]["max_duration_ms"]),
             enforce_duration_budget=enforce_duration_budgets,
         ),
+        run_timed_check(
+            "scenario_matrix",
+            lambda: _evaluate_scenario_contract(root, corpus),
+            max_duration_ms=1000,
+            enforce_duration_budget=enforce_duration_budgets,
+        ),
     ]
     graph_started = perf_counter()
     try:
@@ -811,7 +833,7 @@ def run_golden_suite(
         for failure in check["failures"]
     ]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "corpus_id": corpus["corpus_id"],
         "status": "PASS" if not failures else "FAIL",
         "check_count": len(checks),

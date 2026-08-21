@@ -13,7 +13,12 @@
     "case/solution.docx",
     "case/validation.pdf"
   ],
+  "scenario_matrix": {
+    "path": "scenario_matrix.json",
+    "phase": "distribution_contract"
+  },
   "fixture_sha256": {
+    "scenario_matrix.json": "d03f290d0a169dbcd9095de5506bb9898767801d13f912c735885794856e10a6",
     "case/solution.docx": "ed72d9af7e74a3f7350dc035b95090fb037070f556f12ecf50f09066414fb219",
     "case/validation.pdf": "20d57a81366bf9b0a0ee6431d31338e706f73541b04f6ad755a46b0b9b27d734"
   },

@@ -1,6 +1,6 @@
 # 质量评测、Agent 轨迹与有界执行
 
-最后更新：2026-08-14
+最后更新：2026-08-21
 
 本文说明如何重复验证日志解析、知识提炼、认知检索和 Agent 执行质量。所有仓库样本均为
 合成数据，禁止把公司日志或凭据加入 Golden Dataset。
@@ -60,11 +60,12 @@ scripts\new_agent_workspace.bat -TaskName fix-auth-timeout
 - [HTML 人工分析](../sample_data/golden_incident/case/analysis.html)；
 - [DOCX 解决方案](../sample_data/golden_incident/case/solution.docx)；
 - [PDF 验证记录](../sample_data/golden_incident/case/validation.pdf)。
+- [36 场景 Agent 分布矩阵](../sample_data/golden_incident/scenario_matrix.json)。
 
 DOCX/PDF 是可重复生成的固定二进制样本；执行
 `python scripts/generate_golden_documents.py --check` 会校验内容哈希，不匹配即失败。
 
-Golden 套件当前包含九类阻断检查：
+Golden 套件当前包含十类阻断检查：
 
 | 检查 | 核心断言 |
 | --- | --- |
@@ -77,6 +78,7 @@ Golden 套件当前包含九类阻断检查：
 | RAG | Recall@K、MRR、NDCG@K、引用准确率均达到清单阈值 |
 | Agentic Search | 模块选择、最大跳数、停止原因和耗时 |
 | 有界执行器 | 类型化工具、步骤/tokens 预算、轨迹和显式停止原因 |
+| 场景矩阵 | 至少 30 个合成场景、维度覆盖、唯一 ID、隐私声明及引用/证据/工具/冗余/上下文门槛字段 |
 
 指标阈值存放在 corpus 清单中。任一必需证据缺失、禁止结论出现、耗时超限或停止原因变化，
 `Golden Dataset Quality` CI 都会失败。
@@ -85,6 +87,11 @@ Golden 套件当前包含九类阻断检查：
 功能断言、记录实际耗时与预算，但不重复用 coverage 插桩后的墙钟时间判定成败，避免慢速
 共享 runner 产生假回归；这不会放宽独立 Golden job 的任何阈值。
 所有 CI job 另有 10～30 分钟的墙钟硬超时，超时会直接阻断合并。
+
+场景矩阵当前是第一阶段“分布与指标契约”：36 行覆盖 AP/GW/联合组网、Controller/ONU、
+不同日志规模和缺失/冲突/噪声证据，以及知识、记忆、Planner 故障与攻击输入。CI 会阻断维度
+退化，但不会把这些定义误报为 36 次模型执行；核心 Golden 仍是完整可执行样本，后续按风险
+逐行补 Fake Model 和经审批脱敏的内网样本。
 
 ## 3. Fake OpenAI-compatible 服务与浏览器 E2E
 
@@ -140,7 +147,7 @@ Agent 运行使用 `AgentRun + AgentTraceEvent` 保存：
 同一事务连续写入会先 flush 分配出的 sequence，避免多个方法读取事件复用同一序号。规划元数据只
 放行文档 ID、版本、角色、轮次、校验错误码/字段、模型 `finish_reason` 和停止原因；方法标题/正文、
 原始日志和 Prompt 不进入轨迹。文档标题只在案例权限内的诊断/筛查结果中显示，不写入通用轨迹。
-Token 会从供应商 usage 映射到每个模型阶段；缺少 total 时由输入与输出求和。日志规划的结构校验
+Token 会从供应商 usage 映射到每个模型阶段，并保留供应商可用的缓存输入/推理 Token；缺少 total 时由输入与输出求和。日志规划的结构校验
 失败、一次有界纠正，以及综合诊断单轮最多两次纠正和最终诊断合成都写入用量；验证报告按完整
 Agent 轨迹累计多轮 Token，前端也可从事件明细回算旧运行的总量。
 模型失败轨迹只保存内容安全的稳定分类与上游异常类型，不保存端点响应正文。日志 JSON 规划
@@ -153,7 +160,10 @@ Agent 轨迹累计多轮 Token，前端也可从事件明细回算旧运行的�
 ## 6. 有界 Agent 与故障回退
 
 类型化 `ToolRegistry` 为每个工具声明 Pydantic 输入/输出、角色白名单、只读/写权限、幂等性、
-超时和最大重试。`BoundedAgentExecutor` 同时限制步骤、跳数、tokens、成本和墙钟时间，支持：
+超时和最大重试。`BoundedAgentExecutor` 同时限制步骤、实际因果深度、tokens、成本和墙钟时间。
+因果深度由 `depends_on_step` 指向的已执行步骤计算，不信任 Planner 自报 `hop`；Token/Cost
+优先使用供应商观测值，无 usage 的确定性 Planner 才使用结构估算和兼容估算值。工具输出也按
+运行时序列化大小计入 Token 压力。执行器支持：
 
 - 取消；
 - 指数退避；
@@ -170,6 +180,14 @@ Golden 门禁，但尚未默认替换通用检索器。综合诊断是一个范�
 `search_knowledge`、`search_log` 或 `get_evidence`，重复调用复用前次结果。工具名、Pydantic 输入输出、
 角色、只读权限、方法/Pattern/节点/evidence ID 都在执行前经过校验；尚未绑定检查和证据工具的节点
 不得提前进入终态，单轮输出最多纠正两次；失败后显示稳定诊断并保留确定性结果。
+该生产循环还累计所有规划轮次的输入/输出/总 Token、墙钟时间和实际只读工具调用；连续多轮既没有
+新覆盖状态、也没有新查询、新证据或唯一工具调用时判定为停滞。触达边界后分别以
+`TOKEN_BUDGET`、`TIME_BUDGET`、`TOOL_CALL_BUDGET` 或 `NO_PROGRESS` 停止，不再继续消耗模型，且
+未完成的故障树覆盖仍保持失败门禁。预算及剩余量随诊断结果持久化并在前端规划面板显示。
+每轮 Prompt 还经过 token-aware Context Governor：根据 Profile 的上下文窗口和输出预留，给方法
+文档、排序日志、故障树、检索观察和历史轮次分配预算。超长正文进入仅存在于当前进程/运行的
+Spill Store，Prompt 只保留预览和 `content_handle`；模型可用 `get_evidence` 分段续读，但句柄
+不能通过事实引用校验，也不会写入数据库。轨迹只记录窗口、占用、压缩次数和分区统计。
 多轮请求在同一异步事件循环内执行，避免复用 HTTP 客户端时跨事件循环导致第二轮
 `APIConnectionError`。
 

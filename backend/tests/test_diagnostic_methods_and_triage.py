@@ -23,6 +23,7 @@ from app.services import (
 from app.services.diagnosis import _evidence_for_persistence
 from app.services.agent_trace_runtime import create_live_agent_run
 from app.services.agentic.tools import ToolContext, ToolPermission
+from app.services.diagnostic_agent_budget import DiagnosticAgentBudget
 from app.services.diagnostic_methods import (
     DiagnosticMethodDocument,
     compile_diagnostic_patterns,
@@ -1390,6 +1391,142 @@ def test_comprehensive_planner_stops_at_twenty_round_hard_limit(
     assert len(result.public_plan["rounds"]) == 20
     assert result.public_plan["stop_reason"] == "MAX_PLANNING_ROUNDS"
     assert result.public_plan["method_coverage"]["all_documents_read"] is True
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    (
+        "max_total_tokens",
+        "max_stagnant_rounds",
+        "max_duration_ms",
+        "expected_reason",
+        "expected_calls",
+    ),
+    [
+        (150, 10, 10_000, "TOKEN_BUDGET", 2),
+        (2_000_000, 3, 10_000, "NO_PROGRESS", 4),
+        (2_000_000, 10, 1_000, "TIME_BUDGET", 1),
+    ],
+)
+def test_comprehensive_planner_safely_falls_back_on_aggregate_budget_or_stagnation(
+    tmp_path: Path,
+    monkeypatch,
+    max_total_tokens: int,
+    max_stagnant_rounds: int,
+    max_duration_ms: int,
+    expected_reason: str,
+    expected_calls: int,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / f'planning-{expected_reason.lower()}.db'}"
+    )
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(diagnostic_methods, "_LOCAL_METHOD_FILES", {})
+    calls = 0
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+        last_usage = {}
+
+        async def generate_json(self, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if expected_reason == "TIME_BUDGET":
+                await asyncio.sleep(2)
+            self.last_usage = {
+                "prompt_tokens": 80,
+                "completion_tokens": 20,
+                "total_tokens": 100,
+            } if expected_reason == "TOKEN_BUDGET" else {}
+            return {
+                "read_document_ids": ["DOC-budget"],
+                "method_assessments": [{
+                    "method_document_id": "DOC-budget",
+                    "relevance": "POSSIBLY_RELEVANT",
+                    "rationale": "Continue bounded verification",
+                }],
+                "hypotheses": ["The evidence remains incomplete"],
+                "checks": [{
+                    "check_id": "same-check",
+                    "method_document_id": "DOC-budget",
+                    "description": "Repeat the same bounded verification",
+                    "evidence_needed": "More evidence",
+                    "completion_rule": "Stop safely when no progress is possible",
+                }],
+                "search_queries": [{
+                    "query_id": "same-query",
+                    "query": "same bounded verification query",
+                    "method_document_ids": ["DOC-budget"],
+                    "rationale": "Verify the same unresolved question",
+                    "expected_evidence": "More evidence",
+                }],
+                "evidence_gaps": ["More evidence required"],
+                "continue_analysis": True,
+                "stop_reason": "MORE_EVIDENCE_NEEDED",
+            }
+
+    monkeypatch.setattr(diagnostic_planning, "get_llm_provider", lambda: _Provider())
+    monkeypatch.setattr(diagnostic_planning, "agentic_search", lambda *args, **kwargs: {
+        "run_id": "ARUN-budget-search",
+        "plan": {"selected_modules": ["knowledge"]},
+        "summary": {},
+        "results": [],
+        "paths": [],
+    })
+    with factory() as db:
+        case = Case(
+            id="CASE-budget", title="Bounded planning", device_type="AP",
+            model_egress_approved=True,
+        )
+        db.add_all([
+            case,
+            KnowledgeDocument(
+                id="DOC-budget", title="GW/AP joint method",
+                source_type="analysis_method", device_type="GW",
+                content="# Joint method", active=True, review_status="ACTIVE",
+            ),
+        ])
+        db.flush()
+        run = create_live_agent_run(
+            db, operation="comprehensive_diagnosis", case_id=case.id,
+            resource_type="analysis", resource_id="RUN-budget",
+            input_summary={"case_id": case.id},
+        )
+        db.commit()
+
+    result = diagnostic_planning.run_diagnostic_planning(
+        _JobContext(),
+        case=case,
+        agent_run_id=run.id,
+        baseline_search={"summary": {}, "results": []},
+        session_factory=factory,
+        budget=DiagnosticAgentBudget(
+            max_total_tokens=max_total_tokens,
+            max_stagnant_rounds=max_stagnant_rounds,
+            max_duration_ms=max_duration_ms,
+        ),
+    )
+
+    assert calls == expected_calls
+    assert result.public_plan["planner_mode"] == (
+        "deterministic_fallback"
+        if expected_reason == "TIME_BUDGET"
+        else "llm_multiround_with_fallback"
+    )
+    assert result.public_plan["planner_accepted"] is False
+    assert result.public_plan["stop_reason"] == expected_reason
+    assert result.public_plan["planner_failure"]["code"] == expected_reason
+    assert result.public_plan["budget"]["stop_reason"] == expected_reason
+    with factory() as db:
+        fallback = db.scalars(select(AgentTraceEvent).where(
+            AgentTraceEvent.run_id == run.id,
+            AgentTraceEvent.stage == "diagnostic_planner_fallback",
+            AgentTraceEvent.stop_reason == expected_reason,
+        )).one()
+    assert fallback.status == "COMPLETED"
     engine.dispose()
 
 

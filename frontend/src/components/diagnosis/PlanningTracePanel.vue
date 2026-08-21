@@ -49,7 +49,11 @@ function eventDescription(event: AgentTraceEvent): string {
     return `${metadata.title || metadata.document_id || '方法文档'} · v${metadata.version || '?'}`
   }
   if (event.stage.startsWith('llm_planning_round_')) {
-    return `第 ${metadata.round || '?'} 轮 · ${metadata.validation_code || metadata.stop_reason || '继续分析'}${metadata.validation_path ? ` · 字段 ${metadata.validation_path}` : ''}${event.retry_count ? ` · 结构纠错 ${event.retry_count} 次` : ''}`
+    const context = (metadata.context_governance || {}) as Record<string, any>
+    const contextText = context.context_window_tokens
+      ? ` · 上下文 ${context.estimated_input_tokens || 0}/${context.input_budget_tokens || 0} · 压缩 ${context.compaction_count || 0}`
+      : ''
+    return `第 ${metadata.round || '?'} 轮 · ${metadata.validation_code || metadata.stop_reason || '继续分析'}${metadata.validation_path ? ` · 字段 ${metadata.validation_path}` : ''}${event.retry_count ? ` · 结构纠错 ${event.retry_count} 次` : ''}${contextText}`
   }
   if (event.stage === 'execute_planned_search') {
     return `按 LLM 规划执行认知检索${metadata.document_id ? ` · 方法 ${metadata.document_id}` : ''}`

@@ -170,6 +170,32 @@ Profile 明确直连；历史 `MODEL-chat-env` 环境变量 Profile 仍保留读
 
 诊断结果不是直接信任模型返回值：后端会检查固定 JSON 结构、方法/Pattern/故障树节点 ID、置信度范围以及每个事实/假设引用的 `evidence_id`。综合诊断在同一后台任务和同一异步事件循环中执行两至二十轮原生只读工具循环，避免异步 HTTP 客户端跨事件循环复用造成后续轮次 `APIConnectionError`。每轮最多调用四次方法目录/全文、知识检索、全部持久化日志筛查证据检索或 evidence 读取工具；重复调用复用已有结果。故障树流程、判断点和根因分支必须逐项检索并形成“证据支持、已排除或证据不足”结论，未执行的节点不能提前写终态。工具参数、方法/Pattern/节点/evidence ID 在调用前校验，单轮最多纠正两次；未完成覆盖时规划与最终合成都不能被标记为通过。GW/AP 诊断使用联合知识范围，普通认知检索仍可保持单设备过滤。如果模型引用不存在的证据、返回非法 JSON 或调用失败，诊断会保留规则与 RAG 的确定性结果，并在前端显示内容安全的错误码、字段路径和 `finish_reason`。通过问答发起的诊断/报告修订也必须保留同一故障树覆盖账本并通过证据校验，经人工确认后才创建新诊断版本。历史诊断还会保存当时模型名称、配置 ID、Base URL 和非密钥参数快照，API Key 永远不会进入该快照。
 
+二十轮是穷尽排查的上限，不是必须消耗的轮数。系统默认允许单次综合诊断规划累计 2,000,000
+Tokens、三小时、80 次只读工具调用，以及最多三轮连续无进展；只有完全重复且没有新覆盖、查询、
+证据或唯一工具调用才计入停滞。可在本机 Git 忽略的 `.env` 调整：
+
+```env
+DIAGNOSTIC_AGENT_MAX_TOTAL_TOKENS=2000000
+DIAGNOSTIC_AGENT_MAX_DURATION_SECONDS=10800
+DIAGNOSTIC_AGENT_MAX_TOTAL_TOOL_CALLS=80
+DIAGNOSTIC_AGENT_MAX_STAGNANT_ROUNDS=3
+DIAGNOSTIC_CONTEXT_WINDOW_TOKENS=131072
+DIAGNOSTIC_CONTEXT_RESERVED_OUTPUT_TOKENS=32768
+DIAGNOSTIC_CONTEXT_SAFETY_MARGIN_TOKENS=2048
+DIAGNOSTIC_CONTEXT_TARGET_OCCUPANCY=0.85
+DIAGNOSTIC_CONTEXT_MAX_ITEM_TOKENS=10000
+DIAGNOSTIC_CONTEXT_PREVIEW_TOKENS=768
+DIAGNOSTIC_CONTEXT_SPILL_CHUNK_TOKENS=3000
+```
+
+触达边界不会把未完成结果标记为通过，而是保留故障树覆盖状态、显示明确停止原因并回退确定性诊断。
+已经在边界调用中完整达到成功条件的结果仍可正常完成，不会因恰好用完预算而被丢弃。
+
+Chat Profile 可在前端额外填写“上下文窗口 Tokens”和“预留输出 Tokens”。前者是模型真实的
+输入+输出总窗口，后者为结构化诊断答案预留；留空时使用上面的默认值，预留输出会优先沿用
+Profile 的 `max_tokens`。系统只把剩余容量的目标 85% 用作输入，避免代理/模型端因 Token
+估算差异拒绝请求。被压缩正文使用本次运行内存句柄分段续读，不持久化原始日志。
+
 “运行轨迹”中的 Tokens 显示总量及输入/输出明细。日志规划的格式纠正、失败回退和最终诊断合成
 都会保留供应商返回的 usage；供应商只给输入/输出而没有总量时，后端与前端都按两者之和回算。
 

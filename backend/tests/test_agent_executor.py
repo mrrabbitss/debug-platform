@@ -104,16 +104,28 @@ def test_write_tool_requires_role_and_explicit_approval() -> None:
 def test_executor_enforces_hop_token_and_step_budgets() -> None:
     executor = BoundedAgentExecutor(_registry())
     hop = executor.run(
-        sequence_planner([PlannerDecision(
-            action="tool",
-            tool_name="knowledge.search",
-            arguments={"query": "x"},
-            hop=2,
-        )]),
+        sequence_planner([
+            PlannerDecision(
+                action="tool",
+                tool_name="knowledge.search",
+                arguments={"query": "root"},
+                hop=99,
+            ),
+            PlannerDecision(
+                action="tool",
+                tool_name="knowledge.search",
+                arguments={"query": "dependent"},
+                depends_on_step=1,
+                hop=0,
+            ),
+        ]),
         context=ToolContext(role="VIEWER"),
         budget=AgentBudget(max_hops=1),
     )
     assert hop.stop_reason == AgentStopReason.MAX_HOPS
+    assert hop.steps == 1
+    assert hop.causal_depth == 1
+    assert hop.trajectory[0]["planner_advisory_hop"] == 99
 
     tokens = executor.run(
         sequence_planner([PlannerDecision(
@@ -151,6 +163,36 @@ def test_executor_enforces_hop_token_and_step_budgets() -> None:
         budget=AgentBudget(max_cost=0.1),
     )
     assert cost.stop_reason == AgentStopReason.COST_BUDGET
+
+
+def test_executor_prefers_provider_usage_over_planner_estimates() -> None:
+    class UsageReportingPlanner:
+        last_usage = {
+            "prompt_tokens": 30,
+            "completion_tokens": 20,
+            "total_tokens": 50,
+        }
+        last_cost = 0.25
+
+        def __call__(self, state):
+            return PlannerDecision(
+                action="tool",
+                tool_name="knowledge.search",
+                arguments={"query": "x"},
+                estimated_tokens=0,
+                estimated_cost=0,
+            )
+
+    result = BoundedAgentExecutor(_registry()).run(
+        UsageReportingPlanner(),
+        context=ToolContext(role="VIEWER"),
+        budget=AgentBudget(max_tokens=40, max_cost=1),
+    )
+
+    assert result.stop_reason == AgentStopReason.TOKEN_BUDGET
+    assert result.tokens == 50
+    assert result.steps == 0
+    assert result.budget["usage"]["usage_sources"] == {"provider_reported": 1}
 
 
 def test_planner_and_tool_are_bounded_by_wall_clock() -> None:
