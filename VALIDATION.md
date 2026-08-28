@@ -4,18 +4,18 @@
 > an expected answer, or a substitute for the current run's authenticated
 > context and tool trace.
 
-Date: 2026-08-26 (Asia/Shanghai)
+Date: 2026-08-29 (Asia/Shanghai)
 
 Source baseline: Debug Platform `main` / `origin/main` commit
 `181dae7b26863accd02e8206895d3cfb670739ac`.
 
 ## Snapshot fidelity
 
-- Candidate version: `0.3.5` (deployment-only packaging update over the
+- Candidate version: `0.3.6` (installer, release-validation, and CI packaging update over the
   v0.3.4 runtime behavior).
-- Release tree: 154 files with `VALIDATION.md` and `__pycache__` excluded.
-  The published `skillonly` Git commit and tree IDs are the authoritative
-  release fingerprint.
+- The published `skillonly` Git commit and tree IDs are the authoritative
+  release fingerprint; the release file count is intentionally not used as a
+  mutable identity check.
 - Vendored runtime files: 137.
 - Raw-byte identical to the source commit: 104. After Git text/EOL
   normalization, 130 runtime files match the source commit, 5 are deliberate
@@ -31,11 +31,17 @@ Source baseline: Debug Platform `main` / `origin/main` commit
 - `python -B -m unittest discover -s tests -v`: 44 passed.
 - Skill Creator `quick_validate.py`: passed.
 - `python -B scripts/check_provenance.py`: passed.
+- `python -B scripts/validate_release.py`: passed.
+- Windows user-registration script: plan and isolated three-client junction
+  registration passed without overwriting pre-existing paths.
+- POSIX registration script: Bash syntax check and plan passed locally; the
+  Ubuntu CI job provides the authoritative symlink execution environment.
 - `host-search-hypothesis-log --help`: passed and exposes no fault-tree
   binding option.
 - Fresh dependency-only bootstrap on Python 3.14: passed with the locked
   backend environment and no editable source install.
-- Candidate-to-isolated-snapshot comparison: 151/151 release files matched.
+- Fresh-checkout validation covers tests, provenance, release envelope, and
+  Skill Creator format validation.
 - Candidate and retained validated-run credential-shape scans: zero matches.
 
 The regression suite covers authenticated state and trace rollback protection,

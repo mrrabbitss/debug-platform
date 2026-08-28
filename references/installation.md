@@ -18,6 +18,22 @@ OpenCode also discovers the Claude-compatible and agent-compatible locations, so
 
 OpenCode also discovers `~/.agents/skills` and `~/.claude/skills`.
 
+For a user-level installation shared across projects and CLIs, keep one Git
+checkout as the canonical copy and register it with the supplied setup script.
+The script creates only missing junctions or symlinks and refuses to overwrite
+an existing unrelated directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_user_skill.ps1 -Clients All -RunBootstrap -RunValidation
+```
+
+```bash
+bash scripts/setup_user_skill.sh --clients all --bootstrap --validate
+```
+
+Use `-PlanOnly` or `--plan` to preview changes. Use `-Update` or `--update` on
+later runs for a fast-forward-only update from `origin/skillonly`.
+
 ## Host model credentials
 
 The Skill uses the model already selected by the host CLI and never needs that model provider's API credential. Do not pass a provider key to `debug_platform_skill.py`, store it in the Skill, or expose it as a Skill-specific environment variable.

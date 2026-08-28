@@ -1,0 +1,61 @@
+name: Skill-only validation
+
+on:
+  push:
+    branches: [skillonly]
+  pull_request:
+    branches: [skillonly]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        run: python -B -m unittest discover -s tests -q
+      - name: Runtime provenance
+        run: python -B scripts/check_provenance.py
+      - name: Release envelope
+        run: python -B scripts/validate_release.py
+      - name: Windows installer registration
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $testHome = "${{ runner.temp }}\gw-ap-debug-registration"
+          .\scripts\setup_user_skill.ps1 -Clients All -HomeRoot $testHome -Python python
+          .\scripts\setup_user_skill.ps1 -Clients All -HomeRoot $testHome -Python python
+          $targets = @(
+            "$testHome\.agents\skills\gw-ap-debug",
+            "$testHome\.claude\skills\gw-ap-debug",
+            "$testHome\.config\opencode\skills\gw-ap-debug"
+          )
+          foreach ($target in $targets) {
+            $item = Get-Item -LiteralPath $target -Force
+            if (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw "Expected a junction: $target"
+            }
+          }
+      - name: POSIX installer registration
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          test_home="$RUNNER_TEMP/gw-ap-debug-registration"
+          bash scripts/setup_user_skill.sh --clients all --home-root "$test_home" --python python
+          bash scripts/setup_user_skill.sh --clients all --home-root "$test_home" --python python
+          test -L "$test_home/.agents/skills/gw-ap-debug"
+          test -L "$test_home/.claude/skills/gw-ap-debug"
+          test -L "$test_home/.config/opencode/skills/gw-ap-debug"

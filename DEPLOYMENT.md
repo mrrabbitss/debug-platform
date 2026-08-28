@@ -1,6 +1,6 @@
 # GW/AP Debug Skill-only MVP 部署指南
 
-本文适用于 `gw-ap-debug` v0.3.5。该分支是独立的 Skill-only MVP，
+本文适用于 `gw-ap-debug` v0.3.6。该分支是独立的 Skill-only MVP，
 不是 Debug Platform `main` 分支的后续版本。它不需要 Vue 前端、Docker、
 PostgreSQL 或 Qdrant；诊断推理默认使用当前 OpenCode、Claude Code 或 Codex
 CLI 会话已经选择的模型。
@@ -16,11 +16,45 @@ CLI 会话已经选择的模型。
 Skill 不需要也不会索取当前 CLI 模型的 API Key。模型提供商、模型名称和
 凭据继续由宿主 CLI 自己管理。
 
-## 2. 从 `skillonly` 分支安装
+## 2. 新电脑推荐安装
+
+推荐只保留一份 Git 检出，再用仓库自带脚本把它注册到三个 CLI 的用户级 Skill
+目录。以后更新、校验和回滚都针对这一份副本，不会出现三个复制版本不一致。
+
+### 2.1 Windows 11（PowerShell）
+
+```powershell
+$skillDir = Join-Path $env:LOCALAPPDATA "gw-ap-debug-skill"
+git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug-platform.git $skillDir
+powershell -NoProfile -ExecutionPolicy Bypass -File "$skillDir\scripts\setup_user_skill.ps1" -Clients All -RunBootstrap -RunValidation
+```
+
+脚本会注册以下三个目录，并全部指向 `$skillDir`：
+
+- Codex：`~/.agents/skills/gw-ap-debug`；
+- Claude Code：`~/.claude/skills/gw-ap-debug`；
+- OpenCode：`~/.config/opencode/skills/gw-ap-debug`。
+
+它不会覆盖已存在的普通目录，也不会改写指向其他位置的链接。先预览而不修改时，
+加上 `-PlanOnly`。只安装某一个 CLI 时使用 `-Clients Codex`、
+`-Clients Claude` 或 `-Clients OpenCode`。
+
+### 2.2 Linux / macOS
+
+```bash
+skill_dir="${XDG_DATA_HOME:-$HOME/.local/share}/gw-ap-debug-skill"
+git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug-platform.git "$skill_dir"
+bash "$skill_dir/scripts/setup_user_skill.sh" --clients all --bootstrap --validate
+```
+
+先预览时加 `--plan`；只注册部分 CLI 时，例如使用
+`--clients codex,claude`。
+
+## 3. 手动从 `skillonly` 分支安装
 
 仓库地址：`https://github.com/mrrabbitss/debug-platform.git`
 
-### 2.1 Codex 与 OpenCode 共用安装
+### 3.1 Codex 与 OpenCode 共用安装
 
 两者都能发现 `.agents/skills`。进入需要使用该 Skill 的项目根目录后执行：
 
@@ -35,7 +69,7 @@ git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug
 git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug-platform.git .opencode/skills/gw-ap-debug
 ```
 
-### 2.2 Claude Code 安装
+### 3.2 Claude Code 安装
 
 进入项目根目录后执行：
 
@@ -43,7 +77,7 @@ git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug
 git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug-platform.git .claude/skills/gw-ap-debug
 ```
 
-### 2.3 用户级安装
+### 3.3 用户级安装
 
 需要让多个项目共用时，可以安装到用户目录：
 
@@ -61,7 +95,7 @@ git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug
 
 目标目录已存在时不要覆盖或嵌套克隆；应进入已有目录执行本文的更新流程。
 
-## 3. 初始化运行环境
+## 4. 初始化运行环境
 
 将 `<SKILL_DIR>` 替换为包含 `SKILL.md` 的绝对目录。先检查软件包和 Python：
 
@@ -91,7 +125,7 @@ $env:GW_AP_DEBUG_STATE_DIR = "D:\gw-ap-debug-state"
 
 不要把状态目录放进 Git 仓库或 Skill 安装目录。
 
-## 4. 使用当前 CLI 内置模型诊断
+## 5. 使用当前 CLI 内置模型诊断
 
 在 CLI 中明确要求使用 `gw-ap-debug` Skill，并授权当前模型读取内置诊断方法和
 经过本地限界、脱敏后的证据。原始日志不会发送给宿主模型。
@@ -114,7 +148,7 @@ python "<SKILL_DIR>/scripts/debug_platform_skill.py" run --mode host-agent --app
 
 最终报告为输出目录中的 `host-diagnosis.md`。
 
-## 5. 无模型的确定性模式
+## 6. 无模型的确定性模式
 
 只验证上传、解析、规则诊断和报告链路时，可以完全不调用模型：
 
@@ -124,13 +158,14 @@ python "<SKILL_DIR>/scripts/debug_platform_skill.py" run --mode deterministic --
 
 确定性模式适合安装验收，但不等同于宿主模型完成的故障树综合诊断。
 
-## 6. 安装后验收
+## 7. 安装后验收
 
 在 `<SKILL_DIR>` 中执行：
 
 ```powershell
 python -B -m unittest discover -s tests -v
 python -B scripts/check_provenance.py
+python -B scripts/validate_release.py
 python scripts/debug_platform_skill.py doctor --check host-agent
 ```
 
@@ -138,13 +173,24 @@ python scripts/debug_platform_skill.py doctor --check host-agent
 
 - 44 个单元测试全部通过；
 - provenance 输出 `"ok": true`；
+- release validation 输出 `"ok": true`；
 - host-agent doctor 没有缺失依赖或版本错误。
 
 随后使用一份允许测试的日志完成一次真实宿主 CLI 诊断，并确认最终验证状态。
 
-## 7. 更新与回滚
+## 8. 更新与回滚
 
-更新现有安装：
+推荐用注册脚本更新。它只允许 fast-forward，不会自动合并或覆盖本地修改：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\setup_user_skill.ps1" -Clients All -Update -RunBootstrap -RunValidation
+```
+
+```bash
+bash "<SKILL_DIR>/scripts/setup_user_skill.sh" --clients all --update --bootstrap --validate
+```
+
+也可以手动更新现有安装：
 
 ```powershell
 git -C "<SKILL_DIR>" pull --ff-only origin skillonly
@@ -156,7 +202,7 @@ python "<SKILL_DIR>/scripts/debug_platform_skill.py" doctor --check host-agent
 目录。需要回滚时，先查看分支提交记录，再检出明确的已知提交；不要删除状态目录
 来代替代码回滚。
 
-## 8. 常见问题
+## 9. 常见问题
 
 ### CLI 没有发现 Skill
 
@@ -183,7 +229,7 @@ CLI 已配置的可用模型后重新执行；不要把模型 API Key 传给 Ski
 确认 CLI 没有停在 `run` 之后，并继续完成 `host-agent-instructions.md` 中的工具
 循环。未通过 finalizer 时，Skill 会拒绝把草稿当作最终报告。
 
-## 9. 能力边界
+## 10. 能力边界
 
 该 MVP 保留日志安全接入、GW/AP 来源、解析、方法必查、故障树覆盖、限界检索、
 证据校验和报告生成能力。它不包含主平台的 Vue 管理界面、RBAC、多租户、代码和

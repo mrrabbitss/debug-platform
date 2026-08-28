@@ -3,7 +3,7 @@ name: gw-ap-debug
 description: Diagnose GW/AP collectDebuginfo and network-device logs with local parsing, mandatory method scans, fault-tree coverage, and evidence validation. Use for GW/AP log upload, triage, root-cause analysis, or evidence-grounded reports. Prefer the current OpenCode, Claude Code, or Codex CLI model; do not use for generic application debugging or unsupported device domains.
 license: MIT
 metadata:
-  version: "0.3.5"
+  version: "0.3.6"
   source_commit: "181dae7b26863accd02e8206895d3cfb670739ac"
   compatibility: "Python >=3.11,<3.15; OpenCode, Claude Code, or Codex CLI"
 ---
@@ -106,4 +106,4 @@ This is a diagnostic-only parallel MVP, not a continuation of the platform main 
 
 The bundled diagnostic methods are intentionally included in this full-capability release. Preserve the distribution decision and audience recorded in [security-and-distribution.md](references/security-and-distribution.md) when repackaging it.
 
-For the complete clone, bootstrap, CLI discovery, update, and troubleshooting flow, read [DEPLOYMENT.md](DEPLOYMENT.md). For installation-path details shared by OpenCode, Claude Code, and Codex, read [installation.md](references/installation.md).
+For the complete clone, one-command user registration, bootstrap, CLI discovery, update, and troubleshooting flow, read [DEPLOYMENT.md](DEPLOYMENT.md). The supported registration entry points are `scripts/setup_user_skill.ps1` on Windows and `scripts/setup_user_skill.sh` on Linux/macOS. For installation-path details shared by OpenCode, Claude Code, and Codex, read [installation.md](references/installation.md).
