@@ -1,0 +1,2 @@
+# Preserve the exact vendored runtime bytes used by provenance verification.
+* -text

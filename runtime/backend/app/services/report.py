@@ -1,0 +1,288 @@
+from pathlib import Path
+from typing import Any
+from xml.sax.saxutils import escape
+
+from docx import Document
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+
+from app.core.config import get_settings
+from app.core.db import SessionLocal
+from app.core.utils import json_loads, new_id, sha256_file
+from app.models import AnalysisRun, Case, Report
+from app.services.evidence_display import (
+    build_evidence_label_map,
+    labels_for_evidence_ids,
+    replace_evidence_ids,
+)
+from app.services.storage import storage
+
+
+def get_report_context(case_id: str, analysis_id: str) -> dict[str, Any]:
+    with SessionLocal() as db:
+        case = db.get(Case, case_id)
+        analysis = db.get(AnalysisRun, analysis_id)
+        if not case or not analysis or analysis.case_id != case_id:
+            raise ValueError("Case or analysis not found")
+        result = json_loads(analysis.result_json, {})
+        evidence_items = json_loads(analysis.evidence_json, [])
+        evidence = {
+            item.get("evidence_id"): item
+            for item in evidence_items
+            if isinstance(item, dict) and item.get("evidence_id")
+        }
+    evidence_labels = build_evidence_label_map(evidence.values())
+    return {
+        "title": get_settings().report_title,
+        "case": case,
+        "analysis": analysis,
+        "result": result,
+        "evidence": evidence,
+        "evidence_labels": evidence_labels,
+        "display_text": lambda value: replace_evidence_ids(
+            str(value or ""), evidence_labels,
+        ),
+    }
+
+
+def _render_evidence_labels(
+    evidence_ids: list[Any] | None,
+    evidence_labels: dict[str, str],
+) -> str:
+    labels = labels_for_evidence_ids(evidence_ids or [], evidence_labels)
+    return "、".join(labels) if labels else "未关联到可定位证据"
+
+
+def render_html(case_id: str, analysis_id: str) -> str:
+    context = get_report_context(case_id, analysis_id)
+    template_dir = Path(__file__).resolve().parents[1] / "templates"
+    env = Environment(
+        loader=FileSystemLoader(template_dir),
+        autoescape=select_autoescape(
+            enabled_extensions=("html", "xml", "j2"),
+            default_for_string=True,
+            default=True,
+        ),
+    )
+    return env.get_template("report.html.j2").render(**context)
+
+
+def _reserve_report(case_id: str, analysis_id: str, fmt: str) -> Report:
+    for _attempt in range(10):
+        with SessionLocal() as db:
+            current = db.scalar(select(func.max(Report.version)).where(
+                Report.case_id == case_id,
+                Report.analysis_run_id == analysis_id,
+                Report.format == fmt,
+            ))
+            report = Report(
+                id=new_id("RPT"),
+                case_id=case_id,
+                analysis_run_id=analysis_id,
+                format=fmt,
+                version=int(current or 0) + 1,
+                stored_path="",
+                sha256="",
+            )
+            db.add(report)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                continue
+            db.refresh(report)
+            return report
+    raise RuntimeError("Unable to reserve a unique report version")
+
+
+def _discard_report(report_id: str) -> None:
+    with SessionLocal() as db:
+        report = db.get(Report, report_id)
+        if report:
+            db.delete(report)
+            db.commit()
+
+
+def _publish_report(report: Report, temporary: Path, target: Path) -> Report:
+    try:
+        temporary.replace(target)
+        with SessionLocal() as db:
+            persisted = db.get(Report, report.id)
+            if not persisted:
+                raise RuntimeError("Report reservation was lost")
+            persisted.stored_path = storage.storage_key(target)
+            persisted.sha256 = sha256_file(target)
+            db.commit()
+            db.refresh(persisted)
+            return persisted
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
+        _discard_report(report.id)
+        raise
+
+
+def generate_html_file(case_id: str, analysis_id: str) -> Report:
+    rendered = render_html(case_id, analysis_id)
+    report = _reserve_report(case_id, analysis_id, "html")
+    path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.html"
+    temporary = path.with_name(f".{path.name}.{report.id}.tmp")
+    try:
+        temporary.write_text(rendered, encoding="utf-8")
+        return _publish_report(report, temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        _discard_report(report.id)
+        raise
+
+
+def generate_docx(case_id: str, analysis_id: str) -> Report:
+    context = get_report_context(case_id, analysis_id)
+    result = context["result"]
+    case = context["case"]
+    evidence_labels = context["evidence_labels"]
+    display_text = context["display_text"]
+    document = Document()
+    document.add_heading(context["title"], 0)
+    document.add_heading("一、基本信息", level=1)
+    for label, value in [
+        ("案例编号", case.id), ("问题标题", case.title), ("设备类型", case.device_type),
+        ("设备型号", case.device_model or "未提供"), ("固件版本", case.firmware_version or "未提供"),
+        ("问题发生时间", case.issue_time or "未提供"),
+    ]:
+        document.add_paragraph(f"{label}：{value}")
+    document.add_heading("二、综合摘要", level=1)
+    document.add_paragraph(display_text(result.get("summary", "暂无")))
+    document.add_heading("三、根因候选", level=1)
+    for item in result.get("hypotheses", []):
+        document.add_heading(
+            f"{item.get('rank', '-')}. {display_text(item.get('title', ''))}", level=2,
+        )
+        document.add_paragraph(display_text(item.get("description", "")))
+        document.add_paragraph(f"可信等级：{item.get('confidence_level', 'UNKNOWN')}；优先级：{item.get('priority', 'UNKNOWN')}")
+        document.add_paragraph(
+            "支持证据：" + _render_evidence_labels(
+                item.get("supporting_evidence"), evidence_labels,
+            )
+        )
+        document.add_paragraph(
+            "反证：" + _render_evidence_labels(
+                item.get("contradicting_evidence"), evidence_labels,
+            )
+        )
+    document.add_heading("四、建议排查步骤", level=1)
+    for action in result.get("recommended_actions", []):
+        document.add_paragraph(
+            f"[{action.get('priority')}] {display_text(action.get('action'))} — "
+            f"{display_text(action.get('reason'))}",
+            style="List Number",
+        )
+    document.add_heading("五、缺失信息与限制", level=1)
+    for item in result.get("missing_information", []) + result.get("limitations", []):
+        document.add_paragraph(display_text(item), style="List Bullet")
+    document.add_heading("六、已确认事实", level=1)
+    for fact in result.get("confirmed_facts", []):
+        document.add_paragraph(display_text(fact.get("statement", "")), style="List Bullet")
+        document.add_paragraph(
+            "证据：" + _render_evidence_labels(
+                fact.get("evidence_ids"), evidence_labels,
+            )
+        )
+    report = _reserve_report(case_id, analysis_id, "docx")
+    path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.docx"
+    temporary = path.with_name(f".{path.name}.{report.id}.tmp")
+    try:
+        document.save(temporary)
+        return _publish_report(report, temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        _discard_report(report.id)
+        raise
+
+
+def generate_pdf(case_id: str, analysis_id: str) -> Report:
+    context = get_report_context(case_id, analysis_id)
+    result = context["result"]
+    case = context["case"]
+    evidence_labels = context["evidence_labels"]
+    display_text = context["display_text"]
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("CNTitle", parent=styles["Title"], alignment=TA_CENTER, fontName="STSong-Light")
+    heading = ParagraphStyle("CNHeading", parent=styles["Heading2"], fontName="STSong-Light", spaceBefore=8)
+    body = ParagraphStyle("CNBody", parent=styles["BodyText"], fontName="STSong-Light", leading=15)
+    story = [Paragraph("GW/AP Intelligent Diagnosis Report", title_style), Spacer(1, 6 * mm)]
+    info = [
+        ["Case ID", case.id], ["Title", case.title], ["Device", f"{case.device_type} / {case.device_model or '-'}"],
+        ["Firmware", case.firmware_version or "-"], ["Issue time", case.issue_time or "-"],
+    ]
+    table = Table(info, colWidths=[35 * mm, 140 * mm])
+    table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    story += [
+        table,
+        Spacer(1, 5 * mm),
+        Paragraph("Summary", heading),
+        Paragraph(escape(display_text(result.get("summary", "N/A"))), body),
+    ]
+    story.append(Paragraph("Root-cause hypotheses", heading))
+    for item in result.get("hypotheses", []):
+        story.append(Paragraph(escape(
+            f"{item.get('rank')}. {display_text(item.get('title'))} "
+            f"[{item.get('confidence_level')}]"
+        ), body))
+        story.append(Paragraph(
+            escape(display_text(item.get("description", ""))),
+            body,
+        ))
+        story.append(Paragraph(escape(
+            "Evidence: " + _render_evidence_labels(
+                item.get("supporting_evidence"), evidence_labels,
+            )
+        ), body))
+    story.append(PageBreak())
+    story.append(Paragraph("Recommended actions", heading))
+    for action in result.get("recommended_actions", []):
+        story.append(Paragraph(escape(
+            f"[{action.get('priority')}] {display_text(action.get('action'))} "
+            f"— {display_text(action.get('reason'))}"
+        ), body))
+    story.append(Paragraph("Missing information and limitations", heading))
+    for item in result.get("missing_information", []) + result.get("limitations", []):
+        story.append(Paragraph(escape("• " + display_text(item)), body))
+    story.append(Paragraph("Confirmed facts", heading))
+    for fact in result.get("confirmed_facts", [])[:30]:
+        story.append(Paragraph(
+            escape("• " + display_text(fact.get("statement", ""))),
+            body,
+        ))
+        story.append(Paragraph(escape(
+            "Evidence: " + _render_evidence_labels(
+                fact.get("evidence_ids"), evidence_labels,
+            )
+        ), body))
+    report = _reserve_report(case_id, analysis_id, "pdf")
+    path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.pdf"
+    temporary = path.with_name(f".{path.name}.{report.id}.tmp")
+    try:
+        SimpleDocTemplate(
+            str(temporary),
+            pagesize=A4,
+            rightMargin=15 * mm,
+            leftMargin=15 * mm,
+            topMargin=15 * mm,
+            bottomMargin=15 * mm,
+        ).build(story)
+        return _publish_report(report, temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        _discard_report(report.id)
+        raise

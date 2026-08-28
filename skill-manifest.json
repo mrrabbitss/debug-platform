@@ -1,0 +1,27 @@
+{
+  "schema": "gw-ap-debug-skill-manifest/v1",
+  "name": "gw-ap-debug",
+  "version": "0.3.5",
+  "default_execution_mode": "host-agent",
+  "source": {
+    "repository": "debugplatform",
+    "branch": "main",
+    "commit": "181dae7b26863accd02e8206895d3cfb670739ac",
+    "snapshot_note": "Vendored backend snapshot with Skill-only portability and host-agent bridge patches"
+  },
+  "runtime": {
+    "tree_sha256": "e3ad23bb7020c3b4fa0870a1ed68175a3bad3bb4731ed90dcd27775a5c65477a",
+    "file_count": 137,
+    "local_patches": [
+      "external DATA_ROOT support",
+      "external user-writable diagnostic-method root",
+      "dependency-only bootstrap without editable source writes",
+      "deterministic Triage when backend model egress is not approved",
+      "Mako 1.4.1 non-yanked dependency lock"
+    ]
+  },
+  "entrypoint": "scripts/debug_platform_skill.py",
+  "python": ">=3.11,<3.15",
+  "distribution_status": "PUBLIC_RELEASE_WITH_BUNDLED_METHODS_BY_OWNER_DIRECTION",
+  "tests": "python -m unittest discover -s tests -v"
+}
