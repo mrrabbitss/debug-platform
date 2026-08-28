@@ -35,8 +35,8 @@
 - 知识正文新增、上传、修改、删除和修改后自动重建索引；
 - 按章节和段落切分；
 - 错误码、函数名、文件路径、中文语义共同参与的本地混合检索；
-- 可切换的内置 Hashing、本地 BGE、OpenAI-Compatible Embedding；
-- 可切换的本地 Qwen3 Reranker 和 Qwen Rerank API；
+- 可切换的内置 Hashing、OpenAI-Compatible Embedding，以及为既有高级源码环境保留的进程内 BGE；
+- 默认关闭或使用 Qwen Rerank API；进程内 Qwen3 Reranker 仅作高级兼容能力；
 - 设备类型、模块和可信等级元数据；
 - 结构化 Markdown 故障案例（错误形式、日志分析、错误定位、解决方案和验证）；
 - 上传包含日志、错误现象、分析和解决方案的文件夹，由大模型生成带来源行号的案例草稿；
@@ -106,11 +106,47 @@ gw_ap_debug_platform/
 ├── harness/                 Golden、覆盖率、架构和性能阈值
 ├── sample_data/             可直接演示和回归的纯合成数据
 ├── scripts/                 Windows/Linux 启动及 Demo 初始化
+├── deploy/windows-portable/ Win11 自包含启动器与交付说明
 ├── docker-compose.yml
 └── .env.example
 ```
 
-## 3. 本地运行
+## 3. Windows 11 便携部署（普通使用推荐）
+
+从 GitHub 的 `Windows Portable Package` 工作流或版本 Release 下载
+`debug-platform-windows-x64.zip`，完整解压后双击：
+
+```bat
+start.bat
+```
+
+便携包已经包含 64 位 Python 运行时、FastAPI 基础依赖和编译后的 Vue 前端。目标电脑
+不需要安装 Python、Node.js、pip、npm 或 Docker，也不需要配置 pip/npm 代理。默认只监听
+`127.0.0.1:8080`，配置与数据保存在
+`%LOCALAPPDATA%\GWAPDebugPlatform\`，运行 `start.bat --check` 可以做无外网自检。
+
+便携运行时明确不包含 Torch、Sentence Transformers 和模型权重，默认使用 Hashing
+Embedding 并关闭 Reranker，从部署层消除本地模型 DLL 对平台主进程的影响。完整构建、
+升级、备份和模型隔离说明见
+[Windows 11 便携部署与本地模型隔离](docs/windows-portable-deployment.md)。
+复用旧数据库时，便携模式会停用旧的活动进程内模型并自动切回 Hashing/Disabled，不会再次
+尝试从平台进程加载 Torch。
+
+如需准备 BGE/Qwen 权重，可在“系统设置 → 本地模型权重下载”选择镜像和 revision，按需填写
+HTTP/HTTPS 代理并查看断点续传进度。后端把 revision 解析为不可变 Commit，同模型下载自动
+串行化，新版本完整校验后才原子切换；失败或取消不会破坏上一可用版本。文件写入外置数据
+目录，不会修改便携包，也不会安装 Torch；下载完成后仍应由独立模型服务加载并通过 API
+Profile 接入。
+
+仓库维护者可在受控 Windows 构建电脑执行：
+
+```bat
+scripts\build_windows_portable.bat
+```
+
+输出 ZIP、SHA-256 和真实启动冒烟结果位于被 Git 忽略的 `artifacts\portable\`。
+
+## 4. 源码开发运行
 
 要求：Python 3.11+、Node.js 20.19+ 或 22.12+。Python、Node.js 和 npm 需要加入 `PATH`。
 
@@ -300,7 +336,7 @@ scripts\inspect_log_file.bat "D:\logs\your_collectDebuginfo_file"
 完整操作、安全边界、大小限制、状态流转和接口说明见
 [大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。
 
-## 4. Docker 部署
+## 5. Docker 部署
 
 ```bash
 cp .env.example .env
@@ -311,7 +347,7 @@ docker compose up --build
 
 Docker Desktop 需要支持 Compose 2.24+。镜像额外安装 cppcheck 和 clang-tidy；数据库使用 PostgreSQL，向量服务使用 Qdrant，数据库、向量和文件分别保存在 Docker Volume 中。宿主机端口只绑定 `127.0.0.1`，Qdrant/PostgreSQL 不直接暴露。SQLite 中的 Embedding 向量仍是权威回退，因此 Qdrant 暂时不可用不会阻断基本检索。
 
-## 5. 配置 Qwen / GLM
+## 6. 配置 Qwen / GLM
 
 编辑 `.env`：
 
@@ -328,68 +364,33 @@ Qwen、GLM 或内部模型只要提供兼容的 `/chat/completions` 接口即可
 
 公司中间人代理可以在 Chat Profile 中填写标准 HTTP/HTTPS 代理 URL，例如 `http://proxy.corp.example:8080`。启用代理后，模型客户端强制关闭证书吊销检查，但仍要求证书链可信且目标主机名匹配，不会使用不安全的 `verify=false`。如果公司根证书尚未进入 Python 可用的信任源，请由管理员安装根证书或配置受管的 `SSL_CERT_FILE`；不要关闭完整 TLS 校验。
 
-本地 BGE Embedding 和 Qwen3 Reranker 属于可选大型依赖。先启动过一次项目以建立 `.venv`，关闭服务窗口。公司网络、代理或镜像情况不确定时，可以先双击以下检测脚本：
+旧的一体化 BGE/Qwen 安装器已删除。它曾把权重下载和
+`torch / sentence-transformers / transformers` 安装同时写入平台主 `.venv`，使 FastAPI
+进程直接承受原生 DLL、VC++ 运行库和 CPU/GPU 包兼容风险；Windows 上可能表现为
+`Model connection failed: WinError 1114`。
 
-```bat
-scripts\check_hf_model_access.bat
-```
+标准源码环境和便携包现在都以以下组合开箱运行：
 
-它只下载 BGE 的 `config.json`，不会下载模型权重，并在项目根目录生成 `hf_model_access_report_*.txt`。结果为 `PASS_HF_CLI` 表示官方 CLI 可用；`PASS_CURL_FALLBACK` 表示 CLI 的元数据请求失败，但正式安装器可以自动使用 `curl.exe` 回退。
+1. 内置 Hashing Embedding；
+2. Reranker Disabled；
+3. Chat 使用 Mock 或公司批准的 API。
 
-然后运行：
+权重本身可以在前端“系统设置 → 本地模型权重下载”中准备。该功能重构自本机 `A.py`，
+提供远端文件清单、`.partial` 断点续传、进度、取消、完整大小/SHA-256 校验和可选显式代理；
+代理在任务数据库中加密，页面、任务消息和审计不会记录凭据。下载固定到镜像解析出的 Commit，
+使用同模型跨线程/跨进程锁和独立 generation，只有整代完成后才原子更新当前版本指针。它不会
+安装任何推理依赖。
 
-```bat
-scripts\install_local_models.bat
-```
+需要 BGE Embedding 或 Qwen Reranker 时，推荐在独立模型服务中加载权重，然后在前端创建
+Embedding API / Reranker API Profile。代码中的进程内 Sentence Transformers Provider
+仅为已有人工维护的高级源码安装保留，不属于便携部署承诺。
 
-安装器默认使用 `https://hf-mirror.com` 和 `Auto` 下载模式。它会关闭误继承的离线模式、安装固定兼容版 Hugging Face Hub、锁定两个模型的 revision，并先用 `hf download --local-dir` 下载小型 `config.json` 作为预检。若公司代理或镜像导致 `LocalEntryNotFoundError`，则自动切换到 Win11 内置 `curl.exe`：从镜像 API 读取文件清单，支持 `.partial` 断点续传，并校验文件大小和权重 SHA-256。完成后还会执行项目适配器真实加载测试。它会创建以下目录：
+本机未跟踪的 `A.py` 可以作为公司内网下载参考，但它只下载权重，不能安装推理运行库或
+解决 1114；其中还包含硬编码目录、`verify=False` 和不完整的文件完成判断，因此不会提交
+GitHub 或进入便携包。详细边界和改造要求见
+[Windows 11 便携部署与本地模型隔离](docs/windows-portable-deployment.md)。
 
-```text
-models/
-├─ inference/                         # 预留给后续本地诊断推理模型
-├─ embedding/bge-base-zh-v1.5/       # BAAI/bge-base-zh-v1.5
-└─ reranker/Qwen3-Reranker-0.6B/     # Qwen/Qwen3-Reranker-0.6B
-```
-
-对应的首选下载命令如下。为了保持“推理 / Reranker / Embedding”三级目录，Qwen 模型放在 `models\reranker` 下，而不是直接放在 `models` 根目录：
-
-```powershell
-$env:HF_ENDPOINT = "https://hf-mirror.com"
-
-.\.venv\Scripts\hf.exe download BAAI/bge-base-zh-v1.5 `
-  --local-dir .\models\embedding\bge-base-zh-v1.5
-
-.\.venv\Scripts\hf.exe download Qwen/Qwen3-Reranker-0.6B `
-  --local-dir .\models\reranker\Qwen3-Reranker-0.6B
-```
-
-`models` 已被 Git 忽略，模型权重不会被提交或上传。建议至少预留 6 GiB 磁盘空间；CPU 可以运行，但首次加载 Qwen Reranker 可能需要几分钟。下载中断后重新运行同一个 BAT 文件即可复用已经完成的文件。
-
-如需强制指定下载路径：
-
-```powershell
-# 跳过 hf CLI，直接使用可续传并校验哈希的 curl.exe 路径
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -DownloadMode Curl
-
-# 只允许 hf CLI；CLI 失败时不自动回退
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -DownloadMode HfCli
-```
-
-安装完成后重新运行 `scripts\start_local.bat`，打开“系统设置”：
-
-1. 在“Embedding 模型”中测试并激活带“项目 models 目录”的 BGE Base 配置；
-2. 点击“重建向量索引”；
-3. 在“Reranker 模型”中测试并激活带“项目 models 目录”的 Qwen3 配置。
-
-只检查已下载文件和适配器、不重新下载：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_local_models.ps1 -VerifyOnly
-```
-
-如果公司使用其他 Hugging Face 镜像，可通过 `-Mirror` 指定；如果 Python 包已经由管理员统一安装，可增加 `-SkipRuntimeInstall`。检测报告只记录软件版本、端点、离线开关、代理是否存在以及下载错误，不记录代理地址、API Key、日志或数据库内容。本地 Qwen3 Reranker 的“排序指令”和“推理批量”、BGE 的“检索查询指令”和批量大小均可在系统设置中调整。普通 Win11 CPU 建议先保持默认小批量。
-
-详细的数据结构、分类、切换方式、离线模型目录和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。从案例文件夹生成并多轮校正知识草稿见 [大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。故障案例、代码/Commit 图谱、三类记忆和 Agentic Search 见 [认知检索与图谱使用说明](docs/cognitive-retrieval.md)。知识审核、领域 GraphRAG、检索评测和人工反馈见 [知识治理、领域图谱与检索评测](docs/quality-governance-and-evaluation.md)。Golden、Playwright、轨迹和有界 Agent 见 [质量评测、Agent 轨迹与有界执行](docs/quality-harness-and-agent-runtime.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
+详细的数据结构、分类、切换方式、模型运行边界和重建索引说明见 [模型网关与分层知识库使用说明](docs/model-and-knowledge-configuration.md)。从案例文件夹生成并多轮校正知识草稿见 [大模型文件夹案例提炼与人工校正](docs/llm-knowledge-curation.md)。故障案例、代码/Commit 图谱、三类记忆和 Agentic Search 见 [认知检索与图谱使用说明](docs/cognitive-retrieval.md)。知识审核、领域 GraphRAG、检索评测和人工反馈见 [知识治理、领域图谱与检索评测](docs/quality-governance-and-evaluation.md)。Golden、Playwright、轨迹和有界 Agent 见 [质量评测、Agent 轨迹与有界执行](docs/quality-harness-and-agent-runtime.md)。项目的完整架构、技术栈、优缺点、迭代历程和后续路线见 [项目架构与迭代说明](docs/project-architecture-and-evolution.md)。
 
 企业环境中必须确认：
 
@@ -411,7 +412,7 @@ MODEL_ALLOW_PRIVATE_ENDPOINTS=true
 `APP_ENV=prod` 时所有 API 模型端点和模型代理仍需白名单。HTTP 不提供传输加密，是否在
 公司网络中使用由部署方决定，平台不再以协议为由阻止开发环境配置。
 
-## 6. 核心数据流
+## 7. 核心数据流
 
 ```text
 创建案例
@@ -450,7 +451,7 @@ git bundle create repository.bundle --all
 上传后点击“建立索引”。普通归档仍可建立代码图谱，但 Commit 图谱会明确显示
 `UNAVAILABLE`，不会伪造历史。
 
-## 7. API 概览
+## 8. API 概览
 
 ```text
 POST /api/v1/cases
@@ -505,7 +506,7 @@ POST /api/v1/cases/{case_id}/analyses/{analysis_id}/reports/{format}
 
 完整接口和请求结构见 Swagger。
 
-## 8. 增加新的日志解析器
+## 9. 增加新的日志解析器
 
 实现 `Parser` 协议并注册：
 
@@ -526,7 +527,7 @@ registry.register(VendorGwParser())
 
 厂商专用日志格式、错误码和模块映射应单独维护，不建议直接修改通用解析器。
 
-## 9. 安全边界
+## 10. 安全边界
 
 已实现：
 
@@ -556,7 +557,7 @@ registry.register(VendorGwParser())
 - Kubernetes 资源隔离和 NetworkPolicy；
 - 真实厂商日志解析器与回归数据集。
 
-## 10. 测试
+## 11. 测试
 
 Windows 11 推荐直接运行统一入口：
 
@@ -588,7 +589,7 @@ scripts\run_browser_e2e.bat
 
 GitHub Actions 会在 Windows/Ubuntu 构建前后端并执行 75% 覆盖率门禁，运行九类 Golden 评测和 Playwright E2E，在 Windows 执行隔离启动闭环，并在 Linux 服务容器中验证 PostgreSQL 迁移和 Qdrant 写入/检索。后端启动时会自动执行 Alembic 数据库迁移；升级前请运行备份工具，不要手工修改 `alembic_version` 表。
 
-## 11. 已知限制
+## 12. 已知限制
 
 - 内置解析器是面向常见 GW/AP 语义的通用实现，真实产品日志格式仍需根据公司内部样例扩展；
 - 本地检索使用 BM25/精确词项、当前 Embedding 向量和可选 Reranker；SQLite 保存向量回退，配置 Qdrant 后会同步写入按模型隔离的 collection；

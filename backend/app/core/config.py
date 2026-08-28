@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -8,7 +9,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BACKEND_ROOT.parent
-DEFAULT_DATA_ROOT = BACKEND_ROOT / "data"
 
 
 class Settings(BaseSettings):
@@ -22,7 +22,10 @@ class Settings(BaseSettings):
     app_env: Literal["dev", "test", "prod"] = "dev"
     api_prefix: str = "/api/v1"
     database_url: str = "sqlite:///./data/gw_ap_debug.db"
+    data_root: Path = Path("./data")
     storage_root: Path = Path("./data/storage")
+    model_download_root: Path | None = None
+    static_frontend_root: Path | None = None
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     api_key: str | None = None
     auth_mode: Literal["local", "api_key", "rbac"] = "local"
@@ -96,6 +99,24 @@ class Settings(BaseSettings):
     model_secret_key: str = ""
     model_endpoint_allowlist: str = ""
     model_allow_private_endpoints: bool = False
+    model_disable_in_process_local: bool = False
+    model_download_mirrors: str = (
+        "https://hf-mirror.com,https://huggingface.co"
+    )
+    model_download_max_files: int = Field(default=1000, ge=1, le=10000)
+    model_download_max_file_bytes: int = Field(
+        default=12 * 1024 * 1024 * 1024,
+        ge=1024 * 1024,
+    )
+    model_download_max_total_bytes: int = Field(
+        default=20 * 1024 * 1024 * 1024,
+        ge=1024 * 1024,
+    )
+    model_download_timeout_seconds: int = Field(
+        default=6 * 60 * 60,
+        ge=60,
+        le=24 * 60 * 60,
+    )
 
     qdrant_url: str = ""
     qdrant_api_key: str = ""
@@ -125,6 +146,25 @@ class Settings(BaseSettings):
             self.storage_root = (BACKEND_ROOT / self.storage_root).resolve()
         else:
             self.storage_root = self.storage_root.resolve()
+        if not self.data_root.is_absolute():
+            self.data_root = (BACKEND_ROOT / self.data_root).resolve()
+        else:
+            self.data_root = self.data_root.resolve()
+        if self.model_download_root is None:
+            self.model_download_root = (self.data_root / "models").resolve()
+        elif not self.model_download_root.is_absolute():
+            self.model_download_root = (
+                BACKEND_ROOT / self.model_download_root
+            ).resolve()
+        else:
+            self.model_download_root = self.model_download_root.resolve()
+        if self.static_frontend_root is not None:
+            if not self.static_frontend_root.is_absolute():
+                self.static_frontend_root = (
+                    PROJECT_ROOT / self.static_frontend_root
+                ).resolve()
+            else:
+                self.static_frontend_root = self.static_frontend_root.resolve()
         if self.app_env == "prod" and self.auth_mode == "local":
             raise ValueError("AUTH_MODE=local is not allowed in APP_ENV=prod")
         if self.auth_mode == "api_key" and not self.api_key:
@@ -140,10 +180,6 @@ class Settings(BaseSettings):
         return self
 
     @property
-    def data_root(self) -> Path:
-        return DEFAULT_DATA_ROOT
-
-    @property
     def model_secret_key_path(self) -> Path:
         return self.data_root / "model_secret.key"
 
@@ -155,11 +191,21 @@ class Settings(BaseSettings):
     def model_endpoint_allowlist_entries(self) -> list[str]:
         return [x.strip().lower() for x in self.model_endpoint_allowlist.split(",") if x.strip()]
 
+    @property
+    def model_download_mirror_entries(self) -> list[str]:
+        return [x.strip() for x in self.model_download_mirrors.split(",") if x.strip()]
+
 
 @lru_cache
 
 def get_settings() -> Settings:
-    settings = Settings()
+    env_override = os.environ.get("DEBUG_PLATFORM_ENV_FILE", "").strip()
+    env_file = (
+        Path(env_override).expanduser().resolve()
+        if env_override
+        else PROJECT_ROOT / ".env"
+    )
+    settings = Settings(_env_file=env_file)
     settings.storage_root.mkdir(parents=True, exist_ok=True)
     settings.data_root.mkdir(parents=True, exist_ok=True)
     return settings

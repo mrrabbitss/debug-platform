@@ -174,6 +174,35 @@ export interface ModelProfile {
   updated_at: string
 }
 
+export interface ModelDownloadItem {
+  model_id: 'BAAI/bge-base-zh-v1.5' | 'Qwen/Qwen3-Reranker-0.6B'
+  display_name: string
+  task_type: 'embedding' | 'reranker'
+  status: 'NOT_DOWNLOADED' | 'PARTIAL' | 'READY'
+  target_directory: string
+  file_count: number
+  partial_file_count: number
+  size_bytes: number
+  revision?: string
+  resolved_revision?: string
+  completed_at?: string
+}
+
+export interface ModelDownloadJob extends Job {
+  model_id?: string
+  mirror_base?: string
+  revision?: string
+  proxy_configured?: boolean
+}
+
+export interface ModelDownloadCatalog {
+  download_root: string
+  mirrors: string[]
+  models: ModelDownloadItem[]
+  jobs: ModelDownloadJob[]
+  runtime_installed: boolean
+}
+
 export interface KnowledgeCategory {
   id: string
   name: string

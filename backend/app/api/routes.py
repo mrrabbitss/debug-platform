@@ -6,20 +6,11 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.agent_runs import router as agent_runs_router
-from app.api.diagnostics import router as diagnostics_router
-from app.api.jobs import router as jobs_router
-from app.api.knowledge import router as knowledge_router
-from app.api.knowledge_governance import router as knowledge_governance_router
-from app.api.knowledge_graph import router as knowledge_graph_router
-from app.api.knowledge_curation import router as knowledge_curation_router
-from app.api.retrieval_evaluation import router as retrieval_evaluation_router
+from app.api.route_registry import include_modular_routers
 from app.api.repositories import (
     patch_suggestion as patch_suggestion,
-    router as repositories_router,
     upload_repository as upload_repository,
 )
-from app.api.system import router as system_router
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.utils import json_dumps, json_loads, new_id
@@ -50,16 +41,7 @@ from app.services.storage import normalize_debug_log_filename, storage
 from app.services.text_files import read_text_range, search_text_lines
 
 router = APIRouter()
-router.include_router(agent_runs_router)
-router.include_router(diagnostics_router)
-router.include_router(jobs_router)
-router.include_router(knowledge_router)
-router.include_router(knowledge_governance_router)
-router.include_router(knowledge_graph_router)
-router.include_router(knowledge_curation_router)
-router.include_router(retrieval_evaluation_router)
-router.include_router(repositories_router)
-router.include_router(system_router)
+include_modular_routers(router)
 Db = Annotated[Session, Depends(get_db)]
 
 job_runner.register("parse_artifact", parse_artifact_job, ("case_id", "artifact_id"), cancellable=True)

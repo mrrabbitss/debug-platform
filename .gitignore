@@ -7,8 +7,11 @@ __pycache__/
 .coverage
 coverage.xml
 backend/data/
+/backend/build/
 backups/
 /models/
+/A.py
+/*.rar
 frontend/node_modules/
 frontend/dist/
 vscode-extension/node_modules/
@@ -20,6 +23,7 @@ hf_model_access_report*.txt
 .local_dependency_stamp
 /artifacts/validation/
 /artifacts/e2e/
+/artifacts/portable/
 .agent-runtime/
 .DS_Store
 /故障树.md

@@ -7,6 +7,7 @@
 ## 架构与演进
 
 - [项目结构、技术栈、优缺点和迭代历程](project-architecture-and-evolution.md)
+- [Windows 11 便携部署与本地模型隔离](windows-portable-deployment.md)
 - [模型网关、Embedding/Reranker 与分层知识库](model-and-knowledge-configuration.md)
 - [质量评测、Agent 轨迹与有界执行](quality-harness-and-agent-runtime.md)
 

@@ -1,6 +1,6 @@
 # Harness Engineering 路线与状态总账
 
-最后更新：2026-08-21
+最后更新：2026-08-28
 
 本文维护“让人和 Agent 能稳定理解、执行、验证和追溯本项目”的工程能力。
 业务功能总账仍以 `CAPABILITIES.md` 为准；两份文件必须互相链接，避免把工程护栏
@@ -21,6 +21,9 @@ Harness 的目标不是让模型自由度无限增大，而是让每一步都有
 ### 已完成
 
 - [x] Python 跨平台 `uv.lock` 与 pip 兼容 constraints，Win11/CI/Docker 共用；
+- [x] Win11 自包含便携构建：目标电脑无需 Python/Node/pip/npm，构建时真实启动并验证前端、API、SQLite 和 Vue 路由；
+- [x] 平台运行时与本地模型原生运行时隔离；便携包门禁禁止打入 Torch、Sentence Transformers 和权重，并拒绝继承目标电脑全局/用户 Python 包；
+- [x] 前端模型权重下载使用持久任务、密文代理、受管目录、路径穿越/文件数/大小门禁、不可变 Commit、Range 续传和完整 SHA-256 校验；同模型线程/跨进程锁保护 staging generation，活动指针只在全量成功后原子切换，失败与取消保留上一代；模型运行时仍保持隔离；
 - [x] Ubuntu/Windows 后端和前端、扩展、依赖审计、外部服务、Docker、Win11 冒烟 CI；
 - [x] 隔离临时数据库、存储和端口的 `runtime_smoke`；
 - [x] 数据库持久化后台任务、重启恢复、取消、重试和去重；
@@ -89,6 +92,7 @@ Harness 的目标不是让模型自由度无限增大，而是让每一步都有
 - [x] 增加 API → service → persistence 导入边界检查；
 - [x] 增加文件大小、圈复杂度、Vue/TypeScript 类型检查和后端覆盖率下降门禁；
 - [x] 将 Workflow 白名单同时与手写最小 OpenAPI 和 FastAPI 运行时 OpenAPI 比对。
+- [x] 可选静态前端托管与源码 Vite 模式共用同一 API；便携数据根、环境文件和前端根均使用显式可测试路径，不依赖启动工作目录。
 
 ## 4. P2：有界 Agent 与多任务运行
 

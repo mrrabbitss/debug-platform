@@ -38,6 +38,48 @@ def create_test_session(tmp_path: Path):
     return sessionmaker(bind=engine, expire_on_commit=False)()
 
 
+def test_local_model_dll_failure_recommends_runtime_isolation() -> None:
+    class NativeRuntimeError(Exception):
+        winerror = 1114
+
+    error = retrieval_models._local_model_runtime_error(
+        "reranker",
+        "models/reranker/example",
+        NativeRuntimeError("DLL initialization failed"),
+    )
+
+    assert "WinError 1114" in str(error)
+    assert "separate model service" in str(error)
+    assert "do not install it into the platform runtime" in str(error)
+
+
+def test_local_model_dll_failure_during_inference_uses_same_guidance(
+    monkeypatch,
+) -> None:
+    class BrokenEncoder:
+        def encode(self, *_args, **_kwargs):
+            error = OSError("DLL initialization routine failed")
+            error.winerror = 1114
+            raise error
+
+    monkeypatch.setattr(
+        retrieval_models,
+        "_load_sentence_transformer",
+        lambda *_args: BrokenEncoder(),
+    )
+    profile = ModelProfile(
+        id="MODEL-broken-native-runtime",
+        name="Broken native runtime",
+        task_type="embedding",
+        mode="local",
+        provider="sentence_transformers",
+        model_name="local-model",
+    )
+
+    with pytest.raises(retrieval_models.RetrievalModelError, match="separate model service"):
+        retrieval_models.embed_texts(profile, ["test"])
+
+
 def test_seeded_profiles_can_switch_and_hashing_embeddings_are_persisted(tmp_path: Path):
     db = create_test_session(tmp_path)
     seed_knowledge_categories(db)
@@ -80,18 +122,55 @@ def test_seeded_profiles_can_switch_and_hashing_embeddings_are_persisted(tmp_pat
     db.close()
 
 
-def test_seeded_project_model_profiles_match_installer_layout(tmp_path: Path):
+def test_seeded_profiles_do_not_offer_unbundled_native_models(tmp_path: Path):
     db = create_test_session(tmp_path)
     seed_model_profiles(db)
 
-    embedding = db.get(ModelProfile, "MODEL-embedding-local-bge-base-project")
-    reranker = db.get(ModelProfile, "MODEL-reranker-local-qwen-project")
-    assert embedding is not None
-    assert embedding.model_name == "models/embedding/bge-base-zh-v1.5"
-    assert json.loads(embedding.config_json)["query_instruction"].startswith("为这个句子")
-    assert reranker is not None
-    assert reranker.model_name == "models/reranker/Qwen3-Reranker-0.6B"
-    assert json.loads(reranker.config_json)["batch_size"] == 4
+    native_profiles = list(
+        db.scalars(
+            select(ModelProfile).where(
+                ModelProfile.provider == "sentence_transformers"
+            )
+        ).all()
+    )
+    assert native_profiles == []
+    assert db.get(ModelProfile, "MODEL-embedding-hashing") is not None
+    assert db.get(ModelProfile, "MODEL-reranker-disabled") is not None
+    db.close()
+
+
+def test_portable_policy_deactivates_an_old_in_process_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db = create_test_session(tmp_path)
+    local_profile = ModelProfile(
+        id="MODEL-existing-local",
+        name="Existing local model",
+        task_type="embedding",
+        mode="local",
+        provider="sentence_transformers",
+        model_name="models/embedding/existing",
+        is_active=True,
+    )
+    db.add(local_profile)
+    db.commit()
+    monkeypatch.setattr(
+        model_profiles,
+        "get_settings",
+        lambda: SimpleNamespace(
+            llm_provider="mock",
+            llm_api_key="",
+            llm_base_url="",
+            llm_model="",
+            model_disable_in_process_local=True,
+        ),
+    )
+
+    seed_model_profiles(db)
+
+    assert db.get(ModelProfile, local_profile.id).is_active is False
+    assert db.get(ModelProfile, "MODEL-embedding-hashing").is_active is True
     db.close()
 
 

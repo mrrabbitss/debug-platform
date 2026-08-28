@@ -21,7 +21,8 @@ commit. Do not describe an unverified feature as available.
 - `backend/tests`: backend, migration, security and repository-contract tests.
 - `frontend/src`: Vue 3 administrator and diagnosis workbench.
 - `vscode-extension`: internal VS Code client.
-- `scripts`: Win11 bootstrap, diagnostics, model installation and validation.
+- `deploy/windows-portable`: self-contained Win11 launcher assets.
+- `scripts`: Win11 bootstrap, diagnostics, portable builds and validation.
 - `workflow`: deliberately allowlisted API contract for agent integrations.
 - `sample_data`: synthetic regression fixtures only; never add company data.
 

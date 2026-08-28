@@ -3,7 +3,7 @@
 > 本文件是项目功能范围的唯一总账（Single Source of Truth）。
 > 新需求、在研能力、已交付能力、约束和冲突处理都必须同步更新本文件，防止跨迭代遗忘或重复建设。
 
-最后更新：2026-08-21
+最后更新：2026-08-28
 
 工程执行、验证、评测和 Agent 护栏的状态与优先级单独维护在
 [Harness Engineering 路线与状态总账](HARNESS_ENGINEERING.md)。本文件只判断业务能力是否
@@ -25,15 +25,16 @@
 
 | 能力 | 状态 | 入口 | 说明 |
 | --- | --- | --- | --- |
-| 双击启动前后端 | `AVAILABLE` | `scripts/start_local.bat` | 自动准备 Python/Node 依赖并启动 FastAPI、Vue |
+| Win11 自包含便携运行 | `AVAILABLE` | GitHub `Windows Portable Package` / 解压后 `start.bat` | 目标电脑无需 Python、Node、pip、npm 或 Docker；同一 FastAPI 进程托管编译前端，配置/数据默认外置到 `%LOCALAPPDATA%`；解释器禁止读取全局/用户包，文件清单逐项校验 SHA-256，默认 SQLite、Hashing Embedding、Reranker Disabled |
+| 源码双击启动前后端 | `AVAILABLE` | `scripts/start_local.bat` | 面向开发电脑，自动准备 Python/Node 开发依赖并启动 FastAPI、Vite |
 | 本地环境检测 | `AVAILABLE` | `scripts/doctor_local.bat` | 检测版本、依赖、端口和服务根路径 |
 | 隔离运行冒烟 | `AVAILABLE` | `scripts/runtime_smoke.bat` | 使用临时数据库和独立端口验证前后端 |
 | 统一仓库验证 | `AVAILABLE` | `scripts/validate_all.bat` | Fast/Full/External 三档，保存 JSON 摘要和逐步日志 |
 | 真实 GLM Chat 功能验证 | `AVAILABLE` | `scripts/validate_glm_chat_features.bat` | `--preflight-only` 无需密钥即可检查私有故障树编译/检索入口；真实验证的密钥仅从当前进程环境读取，使用临时数据库和合成日志覆盖模型网关、日志规划、20 轮故障树 Agent、最终合成、问答、修订、知识提炼和补丁建议，安全报告不保存正文、模型回复或凭据 |
 | 仓库 Harness 契约 | `AVAILABLE` | `scripts/check_repo_harness.py` | 检查文档、CI、依赖治理和 Agent API 合同漂移 |
 | SQLite 备份恢复 | `AVAILABLE` | `scripts/backup_local.bat`、`restore_local.bat` | 带清单、哈希校验和回滚保留 |
-| 本地模型网络检测 | `AVAILABLE` | `scripts/check_hf_model_access.bat` | 检查镜像、CLI 和 curl 回退并生成脱敏报告 |
-| 本地模型安装 | `AVAILABLE` | `scripts/install_local_models.bat` | BGE Embedding、Qwen3 Reranker，支持断点续传和哈希校验 |
+| 前端受管模型权重下载 | `AVAILABLE` | 系统设置 → 本地模型权重下载 | 将原 `A.py` 的文件清单、Range 断点续传和进度能力重构为持久后台任务；支持 BGE Base 与 Qwen3 Reranker、可选显式 HTTP/HTTPS 代理和加密任务凭据。镜像返回的不可变 Commit 用于全部文件请求；同模型任务由线程与跨进程文件锁串行化，每个版本先写独立 staging generation，完整大小/SHA-256 校验后再原子切换活动指针，失败或取消继续使用上一版本。只下载到 `DATA_ROOT/models`（可由 `MODEL_DOWNLOAD_ROOT` 覆盖），不安装 Torch 或推理运行时 |
+| 旧本地模型一体化安装 | `DEPRECATED` | 已删除 | 下载权重并向平台主 `.venv` 注入 Torch/Sentence Transformers 会制造 WinError 1114 等原生 DLL 风险；标准部署改用独立模型服务/API |
 | 私网模型端点显式启用 | `AVAILABLE` | `scripts/enable_private_model_endpoints.bat` | 主动运行一次后幂等写入本机 Git 忽略的 `.env`，后续启动持续生效且不输出密钥 |
 
 ### 2.2 日志接入与解析
@@ -57,8 +58,8 @@
 | 规则诊断 | `AVAILABLE` | 基于事件码产生事实、假设、行动建议和限制 |
 | 证据约束 LLM 诊断 | `AVAILABLE` | 原生类型化只读工具 Agent 至少两轮、最多二十轮；策略先读取全部联合方法，并把故障树流程、判断点和根因分支编译为稳定节点。每个节点带跨方法 Pattern/检索词入口，必须绑定检查和实际只读检索，并得到“证据支持 / 已排除 / 证据不足”终态后规划才通过；模型每轮最多四次工具调用，工具参数和 GW/AP 双侧方法、Schema、方法/节点/Pattern/evidence ID 均在执行前受门禁约束，单轮最多纠正两次。生产循环累计供应商实际 usage、工具输出估算、墙钟时间、只读工具总数和连续无进展轮次；达到边界时以 `TOKEN_BUDGET`、`TIME_BUDGET`、`TOOL_CALL_BUDGET` 或 `NO_PROGRESS` 显式停止并回退。Token-aware Context Governor 按模型窗口为方法、日志、故障树、历史和工具观察分区，被压缩正文只进入本次运行内存 Spill Store，可经 `get_evidence` 分段续读；句柄不是事实证据且不持久化日志正文。前端可查看预算、上下文占用、压缩和分区指标。证据 ID 只作内部关联与校验，诊断、问答、轨迹和报告统一显示“文件 - 行号”或文档标题，且“已确认事实”固定放在综合诊断和报告末尾 |
 | 模型网关 | `AVAILABLE` | 前端管理并切换 Chat、Embedding、Reranker 配置；开发/本地环境兼容 HTTP/HTTPS，HTTP 不再强制要求端点白名单，私网地址可由本机 `MODEL_ALLOW_PRIVATE_ENDPOINTS` 持久开关放行，回环/危险系统地址和生产白名单约束仍保留；Chat API 支持逐 Profile 加密代理，空值直连，代理启用时保留证书链/主机名校验并跳过吊销检查；Thinking 支持“跟随模型默认 / 强制开启 / 强制关闭”，GLM-5.1/5.2 关闭时显式发送 `thinking.type=disabled`；可配置 `max_tokens`、真实上下文窗口及输出预留，新 Profile 默认 300 秒超时 |
-| 本地/API Embedding | `AVAILABLE` | 内置 Hashing、本地 Sentence Transformers、兼容 API |
-| 本地/API Reranker | `AVAILABLE` | 本地 CrossEncoder、Qwen Rerank API |
+| Embedding | `LIMITED` | 内置 Hashing 和兼容 API 为标准能力；进程内 Sentence Transformers 仅为既有高级源码安装保留，不进入便携包 |
+| Reranker | `LIMITED` | Disabled 和 Qwen Rerank API 为标准能力；进程内 CrossEncoder 仅为既有高级源码安装保留，不进入便携包 |
 | 混合检索 | `AVAILABLE` | 有界 BM25 候选、Dense top-K、加权 RRF、模块均衡和单次 Reranker |
 | Qdrant 镜像 | `AVAILABLE` | 数据库向量为权威存储，按 generation 镜像并执行有界 top-K |
 | 检索评测 | `AVAILABLE` | 固定 query/预期证据/根因和模块，输出 Recall@K、Precision@K、MRR、NDCG@K、Root Cause Top-K |
@@ -273,12 +274,24 @@
 - [x] 将存在已知漏洞的 `cryptography 49.0.0` 升级并锁定为 `50.0.0`；
 - [x] 增加跨 Python/Windows/Linux 的 `backend/uv.lock`，并导出兼容现有 pip
   启动链的 `backend/constraints.lock`；
-- [x] Win11 bootstrap/start/doctor、Linux 启动、本地模型安装、CI 和 Docker
+- [x] Win11 bootstrap/start/doctor、Linux 启动、CI 和 Docker
   统一服从锁定约束；
 - [x] 增加 `scripts\refresh_python_lock.bat` 的更新与只读检查模式；
 - [x] 修复新进入审计库的前端 PostCSS 和扩展 brace-expansion 告警；
 - [x] Python 3.14 安装、锁文件一致性、Ruff、compileall、`119 passed, 1 skipped`、
   前端构建、扩展编译、三类依赖审计、Win11 bootstrap/doctor/runtime smoke 均通过。
+
+本轮 Win11 交付与模型隔离（2026-08-26）：
+
+- [x] FastAPI 可选择同源托管编译后的 Vue，并为客户端路由提供受控 `index.html` 回退；
+- [x] 构建自包含 Windows x64 便携包，目标电脑不再安装或配置 pip/npm；
+- [x] 便携包固定排除 Torch、Sentence Transformers 和模型权重，并用构建门禁验证；
+- [x] 通过 `pythonXY._pth`、`-s` 与包清单隔离目标电脑全局/用户 Python 包；复用旧数据库时停用活动的进程内模型并安全回退；
+- [x] 便携启动、自检、SQLite readiness、首页、Vue 深层路由和 API liveness 冒烟；
+- [x] 删除失效的一体化模型安装、镜像检测、下载与进程内加载验证脚本；
+- [x] 将本机 `A.py` 的安全子集重构为前端可操作的受管权重下载任务；支持显式代理但不复制硬编码路径、全局 `verify=False` 或运行时安装；
+- [x] `A.py` 和根目录 RAR 加入 Git 忽略，内网地址与本机制品不会进入仓库；
+- [x] GitHub 手工构建 Artifact，`v*` 标签生成带 SHA-256 的 Release。
 
 ## 6. 后续候选
 

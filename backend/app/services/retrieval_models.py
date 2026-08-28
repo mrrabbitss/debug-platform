@@ -210,18 +210,31 @@ def _normalize(vector: Sequence[float]) -> list[float]:
     return [value / norm for value in values]
 
 
+def _local_model_runtime_error(kind: str, model_name: str, exc: Exception) -> RetrievalModelError:
+    detail = str(exc)
+    if getattr(exc, "winerror", None) == 1114 or "WinError 1114" in detail:
+        return RetrievalModelError(
+            f"Local {kind} native runtime failed to initialize (WinError 1114). "
+            "The standard and portable platform runtimes intentionally exclude Torch and "
+            "sentence-transformers. Keep native model execution in a separate model service "
+            "and connect it through an API profile; do not install it into the platform runtime."
+        )
+    return RetrievalModelError(f"Local {kind} model {model_name!r} failed: {detail}")
+
+
 @lru_cache(maxsize=3)
 def _load_sentence_transformer(model_name: str, device: str):
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
         raise RetrievalModelError(
-            "Local model support is not installed. Run scripts\\install_local_models.bat first."
+            "In-process local Embedding is not included in the standard or portable runtime. "
+            "Use the built-in Hashing Embedding or configure an approved Embedding API profile."
         ) from exc
     try:
         return SentenceTransformer(model_name, device=device)
     except Exception as exc:
-        raise RetrievalModelError(f"Unable to load local embedding model {model_name!r}: {exc}") from exc
+        raise _local_model_runtime_error("embedding", model_name, exc) from exc
 
 
 @lru_cache(maxsize=2)
@@ -230,7 +243,8 @@ def _load_cross_encoder(model_name: str, device: str, instruction: str):
         from sentence_transformers import CrossEncoder
     except ImportError as exc:
         raise RetrievalModelError(
-            "Local model support is not installed. Run scripts\\install_local_models.bat first."
+            "In-process local Reranker is not included in the standard or portable runtime. "
+            "Keep Reranker disabled or configure an approved Reranker API profile."
         ) from exc
     try:
         prompt_options = (
@@ -240,7 +254,7 @@ def _load_cross_encoder(model_name: str, device: str, instruction: str):
         )
         return CrossEncoder(model_name, device=device, **prompt_options)
     except Exception as exc:
-        raise RetrievalModelError(f"Unable to load local reranker model {model_name!r}: {exc}") from exc
+        raise _local_model_runtime_error("reranker", model_name, exc) from exc
 
 
 def embed_texts(
@@ -269,7 +283,7 @@ def embed_texts(
                 show_progress_bar=False,
             )
         except Exception as exc:
-            raise RetrievalModelError(f"Local embedding failed: {exc}") from exc
+            raise _local_model_runtime_error("embedding", model_name, exc) from exc
         raw_vectors = vectors.tolist() if hasattr(vectors, "tolist") else vectors
         return [_normalize(vector) for vector in raw_vectors]
     if profile.provider == "openai_compatible":
@@ -674,7 +688,7 @@ def rerank_documents(
             raw_scores = scores.tolist() if hasattr(scores, "tolist") else scores
             values = [float(value) for value in raw_scores]
         except Exception as exc:
-            raise RetrievalModelError(f"Local reranking failed: {exc}") from exc
+            raise _local_model_runtime_error("reranker", model_name, exc) from exc
         return sorted(enumerate(values), key=lambda item: item[1], reverse=True)[:top_n]
     if profile.provider == "qwen_rerank_api":
         started = perf_counter()

@@ -199,39 +199,32 @@ Profile 的 `max_tokens`。系统只把剩余容量的目标 85% 用作输入，
 “运行轨迹”中的 Tokens 显示总量及输入/输出明细。日志规划的格式纠正、失败回退和最终诊断合成
 都会保留供应商返回的 usage；供应商只给输入/输出而没有总量时，后端与前端都按两者之和回算。
 
-## 5. 本地 BGE Embedding
+## 5. Embedding 运行方式
 
-默认启动不会安装 PyTorch 或下载大型模型。先启动过一次项目以建立 `.venv`，关闭服务窗口。可先运行不会下载权重的网络检测：
+标准源码安装和 Win11 便携包均不包含 PyTorch、Sentence Transformers 或模型权重。默认
+`Hashing Embedding` 完全离线可用，不依赖模型下载，也不会触发原生 DLL 初始化问题。
 
-```bat
-scripts\check_hf_model_access.bat
-```
+仓库过去的一体化安装器会把本地模型运行依赖装进平台主 `.venv`。这使 FastAPI 进程同时
+承担 Web 服务和 Torch 初始化，在部分 Win11 设备上会出现
+`Model connection failed: WinError 1114`，因此相关下载、网络检测和安装脚本已经删除。
 
-检测会分别验证镜像 API、`curl.exe` 小文件下载和 Hugging Face CLI，并生成 `hf_model_access_report_*.txt`。`PASS_HF_CLI` 和 `PASS_CURL_FALLBACK` 都表示正式安装器存在可用下载路径。
+推荐顺序如下：
 
-然后运行：
+1. 普通离线部署使用内置 Hashing；
+2. 有批准的模型网关时，在“系统设置 → Embedding 模型”选择 API；
+3. 必须本地运行 BGE 时，在平台之外建立独立虚拟环境或容器，启动 OpenAI-Compatible
+   Embedding 服务，再按 API 方式接入平台；
+4. “系统设置 → 本地模型权重下载”可以准备 BGE/Qwen 文件，支持显式代理、将 revision 固定
+   到不可变 Commit、`.partial` 断点续传和任务恢复；同模型下载串行执行，新 generation 全量
+   校验后才原子切换，失败或取消保留上一版本。它不安装运行时，完成后应由独立模型服务加载；
+5. `backend[local-models]` 只保留旧式进程内适配器兼容性，不属于便携部署支持面，也不建议
+   安装到正在运行平台的主环境。
 
-```bat
-scripts\install_local_models.bat
-```
-
-该脚本会设置 `HF_ENDPOINT=https://hf-mirror.com`、关闭 `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`，固定兼容版 Hub 和模型 revision，再优先使用 `.venv\Scripts\hf.exe download --local-dir` 下载并验证：
-
-```text
-BAAI/bge-base-zh-v1.5
-→ models/embedding/bge-base-zh-v1.5
-
-Qwen/Qwen3-Reranker-0.6B
-→ models/reranker/Qwen3-Reranker-0.6B
-```
-
-如果 CLI 因公司代理、TLS 检查或镜像 HEAD 元数据响应报 `LocalEntryNotFoundError`，`Auto` 模式会自动改用 Win11 自带的 `curl.exe`。回退路径从镜像 API 读取固定 revision 的文件清单，以 `.partial` 文件断点续传，拒绝不安全路径，并校验大小和 LFS 权重 SHA-256。也可以使用 `-DownloadMode Curl` 强制走该路径。
-
-然后在“系统设置 → Embedding 模型”中测试并激活“本地 BGE Base 中文向量（项目 models 目录）”。激活后必须执行“重建向量索引”。项目会把仓库相对路径稳定地解析到项目根目录，不受从 BAT、终端或 IDE 启动的当前目录影响。
-
-系统只会给检索问题添加 `为这个句子生成表示以用于检索相关文章：`，知识正文不会添加该指令；向量默认归一化。查询指令和批量大小可以在前端修改。也可以填写其他 Sentence Transformers 兼容的 BGE 模型或本地绝对路径。
-
-BGE v1.5 的 Sentence Transformers、查询指令及归一化用法见官方模型卡：[BAAI/bge-base-zh-v1.5](https://huggingface.co/BAAI/bge-base-zh-v1.5)。
+根目录本机 `A.py` 已被 Git 忽略。其下载思路已经重构为受管后台任务：目标目录不可由浏览器
+任意指定，代理密文持久化，远端路径、文件数和大小受限，镜像 Commit、同模型锁、分代暂存和
+完整 SHA-256 门禁保证完成前不会切换正式版本。前端显示的是当前活动 generation 路径；版本
+更新后独立模型服务需要自行重新加载。它仍不提供运行环境、服务进程或健康检查，因此不能替代独立模型服务安装方案。便携部署详见
+[Win11 便携部署与本地模型隔离](windows-portable-deployment.md)。
 
 ## 6. Embedding API
 
@@ -245,18 +238,12 @@ https://your-approved-endpoint.example/v1
 
 阿里云百炼的 Embedding OpenAI-Compatible 调用和维度说明见：[Embedding API](https://help.aliyun.com/en/model-studio/embedding)。
 
-## 7. 本地 Qwen3 Reranker
+## 7. Reranker 运行方式
 
-运行本地模型安装脚本后，可以测试并激活“本地 Qwen3 Reranker 0.6B（项目 models 目录）”：
-
-```text
-Qwen/Qwen3-Reranker-0.6B
-→ models/reranker/Qwen3-Reranker-0.6B
-```
-
-该适配器使用 Sentence Transformers `CrossEncoder` 和自定义网络诊断排序指令。安装器会真实加载模型并通过项目适配器对两个示例文档执行排序，只有返回有效分数才会报告成功。CPU 可以运行，但速度和内存占用取决于模型大小；公司电脑资源有限时保持批量大小 `1`–`4`，或使用批准的 API。
-
-Qwen 官方模型卡列出了 0.6B、4B、8B Reranker，并提供 CrossEncoder 和自定义指令用法：[Qwen3-Reranker-0.6B](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)。
+便携包默认使用 `Disabled Reranker`，保持 BM25 与 Embedding 融合结果，不加载任何原生模型。
+需要 Qwen Reranker 时优先配置 API；必须本地运行时，应把 Qwen 服务放在独立进程/容器，
+由平台通过 API 调用。前端仍显示旧式本地 Profile 入口以兼容已有高级部署，但会明确提示便携
+运行时不含所需依赖，且后端遇到 WinError 1114 时会返回模型隔离指引。
 
 ## 8. Qwen Reranker API
 

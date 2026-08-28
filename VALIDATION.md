@@ -1,14 +1,14 @@
 # Validation Record
 
-Last validated: 2026-08-21 on Windows 11.
+Last validated: 2026-08-28 on Windows 11.
 
 ## Current local regression result
 
 - Unified `scripts\validate_all.bat Full`: all 18 stages passed. The run produced
   a machine-readable summary and per-step logs under the Git-ignored
   `artifacts\validation` directory.
-- Backend tests: 218 passed and 1 external-service test skipped locally.
-- Backend line coverage: 78.40%, above the enforced 75% quality gate.
+- Backend tests: 233 passed and 1 external-service test skipped locally.
+- Backend line coverage: 78.25%, above the enforced 75% quality gate.
 - Golden Dataset: all 10 evaluators passed for parser output, document curation,
   the 36-case synthetic scenario-distribution contract, Code Graph, Commit Graph,
   memory isolation, hybrid RAG and bounded Agentic Search. The matrix is explicitly
@@ -28,12 +28,12 @@ Last validated: 2026-08-21 on Windows 11.
   chat, trace and report evidence is rendered as a filename plus line number rather
   than an opaque internal evidence ID; confirmed facts are rendered last.
   Browser console errors and warnings: zero.
-- Repository Harness: all 13 contracts passed across 21 required files, 14
+- Repository Harness: all 18 contracts passed across 34 required files, 17
   tracked Markdown files, dependency-update targets and 29 allowlisted Workflow
-  operations. The local rerun checked 16 Markdown files in total because it also
-  included two explicitly ignored private reference documents without adding them
-  to Git.
-- Architecture checks: 105 Python files and 16 Vue files passed file-size,
+  operations. The contracts now include the portable runtime, .NET-only package
+  hashing, model-isolation, atomic managed-model publication and release-workflow
+  checks.
+- Architecture checks: 110 Python files and 16 Vue files passed file-size,
   dependency-boundary, required-module and complexity ratchets. The highest
   measured Python cyclomatic complexity was 50, at the enforced limit of 50.
 - Backend dependency consistency, lock synchronization, Ruff and Python
@@ -43,18 +43,45 @@ Last validated: 2026-08-21 on Windows 11.
 - Python, frontend and VS Code extension dependency audits: no known vulnerabilities.
 - Fresh isolated SQLite schema upgraded through Alembic revisions 0001-0016.
 - Isolated runtime smoke and `scripts\doctor_local.bat`: passed.
-- Startup, doctor, lock refresh and local-model scripts use the .NET SHA-256
-  implementation instead of depending on the optional `Get-FileHash` cmdlet. A
-  focused Windows PowerShell 5.1 doctor rerun confirmed that the dependency stamp is
-  captured and compared without a false changed-dependency warning.
+- Startup, doctor and lock refresh scripts use the .NET SHA-256 implementation
+  instead of depending on the optional `Get-FileHash` cmdlet. The obsolete local
+  model download/install chain is absent and is enforced as a repository contract.
+- Managed model downloads resolve the requested revision to an immutable upstream
+  commit, resume into a staging generation, verify every file, and atomically switch
+  the active-generation pointer only after the complete generation passes. Per-model
+  in-process and cross-process locks serialize writers; failure and cancellation
+  regression tests confirm that the previous active generation remains readable.
+  Eleven focused downloader tests also cover Range resume, path traversal, proxy
+  isolation, encrypted one-time proxy use and same-size file corruption detection.
+- A complete portable package was built with an isolated 64-bit CPython 3.14
+  runtime and the production frontend. Its self-check, SQLite migration/readiness,
+  Vue root and deep-route fallback, and API liveness all passed. The 9,547-file
+  integrity manifest matched the package exactly, contained zero `.pyc` files and
+  confirmed that Torch and sentence-transformers were not bundled or imported from
+  global/user Python locations.
 
 Final local run artifacts:
-`artifacts\validation\20260821-110616-full\summary.json` (18/18 stages passed in
-389.43 seconds). The run used Windows PowerShell 5.1 and included Alembic 0016,
+`artifacts\validation\20260828-101217-full\summary.json` (18/18 stages passed in
+418.39 seconds). The run used Windows PowerShell 5.1 and included Alembic 0016,
 token-aware context/spill isolation, provider-observed usage and causal-depth budget
 regressions, the 36-case Golden distribution gate, budget/context-panel build checks,
 exact-hit navigation and human-readable evidence presentation. No persistent
 system, project or model proxy setting was changed.
+
+A read-only `hf-mirror.com` manifest probe additionally confirmed that both managed
+defaults (`BAAI/bge-base-zh-v1.5` and `Qwen/Qwen3-Reranker-0.6B`) currently return
+immutable 40-character commit revisions and LFS size metadata. No model weights or
+company data were downloaded by this probe.
+
+The separately built portable archive is
+`artifacts\portable\debug-platform-windows-x64.zip` (112.18 MiB), SHA-256
+`6d808e1ca8b5221294a6e030dda7f0b4cd0e4ffd4b477dec74cd7dd1c1190ac2`.
+The packaged verifier and an independent archive pass validated all 9,547 manifest
+entries by size and SHA-256. Generated validation and portable artifacts are
+Git-ignored; release-tag CI rebuilds and publishes a clean artifact from the tagged
+commit.
+
+## Prior focused model validation
 
 After removing the development-mode HTTP-only allowlist restriction, the focused
 model-profile suite passed 16/16 and

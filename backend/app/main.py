@@ -15,6 +15,7 @@ from app.services.jobs import job_runner
 from app.services.audit import AuditMiddleware
 from app.services.model_profiles import seed_model_profiles
 from app.services.retrieval_models import ensure_builtin_embedding_index
+from app.services.static_frontend import mount_static_frontend
 
 
 @asynccontextmanager
@@ -55,7 +56,14 @@ app.add_middleware(
 app.add_middleware(AuditMiddleware)
 app.include_router(router, prefix=settings.api_prefix, dependencies=[Depends(verify_api_key)])
 
+if settings.static_frontend_root is not None:
+    mount_static_frontend(app, settings.static_frontend_root)
+else:
 
-@app.get("/")
-def root() -> dict:
-    return {"name": settings.app_name, "docs": "/docs", "api": settings.api_prefix}
+    @app.get("/")
+    def root() -> dict:
+        return {
+            "name": settings.app_name,
+            "docs": "/docs",
+            "api": settings.api_prefix,
+        }

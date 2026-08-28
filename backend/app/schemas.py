@@ -323,6 +323,25 @@ class ModelProfileOut(ORMModel):
     updated_at: datetime
 
 
+class ModelDownloadRequest(BaseModel):
+    model_id: Literal[
+        "BAAI/bge-base-zh-v1.5",
+        "Qwen/Qwen3-Reranker-0.6B",
+    ]
+    mirror_base: str = Field(
+        default="https://hf-mirror.com",
+        min_length=8,
+        max_length=2048,
+    )
+    revision: str = Field(
+        default="main",
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+    )
+    proxy_url: str | None = Field(default=None, max_length=2048)
+
+
 class AnalysisOut(ORMModel):
     id: str
     case_id: str

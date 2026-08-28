@@ -2,7 +2,15 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
-import type { Job, ModelMode, ModelProfile, ModelTask } from '../types'
+import type {
+  Job,
+  ModelDownloadCatalog,
+  ModelDownloadItem,
+  ModelDownloadJob,
+  ModelMode,
+  ModelProfile,
+  ModelTask
+} from '../types'
 
 type ThinkingMode = 'inherit' | 'enabled' | 'disabled'
 
@@ -15,6 +23,20 @@ const saving = ref(false)
 const testingId = ref('')
 const reindexing = ref(false)
 const apiKey = ref(localStorage.getItem('gw_ap_api_key') || '')
+const startingDownloadId = ref('')
+const watchedDownloadJobs = new Set<string>()
+const modelDownloads = ref<ModelDownloadCatalog>({
+  download_root: '',
+  mirrors: [],
+  models: [],
+  jobs: [],
+  runtime_installed: false
+})
+const downloadForm = reactive({
+  mirror_base: 'https://hf-mirror.com',
+  revision: 'main',
+  proxy_url: ''
+})
 const defaultEmbeddingPath = 'models/embedding/bge-base-zh-v1.5'
 const defaultRerankerPath = 'models/reranker/Qwen3-Reranker-0.6B'
 const defaultEmbeddingInstruction = '为这个句子生成表示以用于检索相关文章：'
@@ -61,7 +83,7 @@ const providerLabels: Record<string, string> = {
   mock: '规则引擎 / Mock',
   openai_compatible: 'OpenAI-Compatible API',
   hashing: '内置字符向量',
-  sentence_transformers: '本地 Sentence Transformers',
+  sentence_transformers: '高级：进程内 Sentence Transformers',
   disabled: '不使用 Reranker',
   qwen_rerank_api: 'Qwen Rerank API'
 }
@@ -71,12 +93,141 @@ function errorText(error: any) {
 }
 
 async function load() {
-  const [modelResponse, retrievalResponse] = await Promise.all([
+  const [modelResponse, retrievalResponse, downloadResponse] = await Promise.all([
     api.get('/system/models'),
-    api.get('/system/retrieval')
+    api.get('/system/retrieval'),
+    api.get<ModelDownloadCatalog>('/system/model-downloads')
   ])
   profiles.value = modelResponse.data
   retrieval.value = retrievalResponse.data
+  applyDownloadCatalog(downloadResponse.data)
+}
+
+function applyDownloadCatalog(payload: ModelDownloadCatalog) {
+  modelDownloads.value = payload
+  if (!payload.mirrors.includes(downloadForm.mirror_base)) {
+    downloadForm.mirror_base = payload.mirrors[0] || ''
+  }
+  resumeDownloadPolling()
+}
+
+async function refreshModelDownloads(resume = true) {
+  const { data } = await api.get<ModelDownloadCatalog>('/system/model-downloads')
+  modelDownloads.value = data
+  if (!data.mirrors.includes(downloadForm.mirror_base)) {
+    downloadForm.mirror_base = data.mirrors[0] || ''
+  }
+  if (resume) resumeDownloadPolling()
+}
+
+function activeDownload(modelId: string) {
+  return modelDownloads.value.jobs.find(job =>
+    job.model_id === modelId
+    && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(job.status)
+  )
+}
+
+function mergeDownloadJob(job: ModelDownloadJob) {
+  const index = modelDownloads.value.jobs.findIndex(item => item.id === job.id)
+  if (index >= 0) modelDownloads.value.jobs[index] = job
+  else modelDownloads.value.jobs.unshift(job)
+}
+
+function resumeDownloadPolling() {
+  modelDownloads.value.jobs
+    .filter(job => ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(job.status))
+    .forEach(job => { void watchDownloadJob(job) })
+}
+
+async function watchDownloadJob(initial: ModelDownloadJob) {
+  if (watchedDownloadJobs.has(initial.id)) return
+  watchedDownloadJobs.add(initial.id)
+  let current = initial
+  try {
+    while (!['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(current.status)) {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      const response = await api.get<Job>(`/jobs/${current.id}`)
+      current = {
+        ...response.data,
+        model_id: initial.model_id,
+        mirror_base: initial.mirror_base,
+        revision: initial.revision,
+        proxy_configured: initial.proxy_configured
+      }
+      mergeDownloadJob(current)
+    }
+    if (current.status === 'COMPLETED') ElMessage.success(`${initial.model_id} 权重下载完成`)
+    else if (current.status !== 'CANCELLED') {
+      ElMessage.error(current.error_message || current.message || '模型权重下载失败')
+    }
+    await refreshModelDownloads(false)
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  } finally {
+    watchedDownloadJobs.delete(initial.id)
+  }
+}
+
+async function startModelDownload(model: ModelDownloadItem) {
+  if (!downloadForm.mirror_base) return ElMessage.warning('请选择模型镜像')
+  try {
+    await ElMessageBox.confirm(
+      `确认下载 ${model.display_name}？只下载权重文件，不会安装 Torch 或启动模型。`,
+      '下载模型权重',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  startingDownloadId.value = model.model_id
+  try {
+    const { data } = await api.post<Job>('/system/model-downloads', {
+      model_id: model.model_id,
+      mirror_base: downloadForm.mirror_base,
+      revision: downloadForm.revision.trim() || 'main',
+      proxy_url: downloadForm.proxy_url.trim() || null
+    })
+    const job: ModelDownloadJob = {
+      ...data,
+      model_id: model.model_id,
+      mirror_base: downloadForm.mirror_base,
+      revision: downloadForm.revision.trim() || 'main',
+      proxy_configured: !!downloadForm.proxy_url.trim()
+    }
+    downloadForm.proxy_url = ''
+    mergeDownloadJob(job)
+    ElMessage.success('模型权重下载任务已创建')
+    void watchDownloadJob(job)
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  } finally {
+    startingDownloadId.value = ''
+  }
+}
+
+async function cancelModelDownload(job: ModelDownloadJob) {
+  try {
+    const { data } = await api.post<Job>(`/system/model-downloads/${job.id}/cancel`)
+    mergeDownloadJob({ ...job, ...data })
+    ElMessage.success('已请求取消模型下载')
+  } catch (error) {
+    ElMessage.error(errorText(error))
+  }
+}
+
+function formatBytes(value: number) {
+  if (!value) return '0 B'
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
+  return `${(value / (1024 ** index)).toFixed(index ? 2 : 0)} ${units[index]}`
+}
+
+function downloadStatus(status: ModelDownloadItem['status']) {
+  return {
+    NOT_DOWNLOADED: '未下载',
+    PARTIAL: '未完成',
+    READY: '已完整下载'
+  }[status]
 }
 
 function providerFor(task: ModelTask, mode: ModelMode) {
@@ -110,7 +261,7 @@ function resetForm(task: ModelTask) {
   editingId.value = null
   form.name = ''
   form.task_type = task
-  form.mode = task === 'chat' ? 'api' : 'local'
+  form.mode = task === 'chat' ? 'api' : 'builtin'
   form.model_name = ''
   form.base_url = ''
   form.api_key = ''
@@ -384,9 +535,85 @@ onMounted(load)
       </el-table>
     </el-card>
 
+    <el-card data-testid="model-download-card" style="margin-top:16px">
+      <template #header>本地模型权重下载</template>
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="该功能来自原 A.py 的文件清单、断点续传和进度逻辑；只下载权重到平台管理目录，不安装 Torch、Sentence Transformers，也不会在 FastAPI 进程中加载模型。"
+        style="margin-bottom:16px"
+      />
+      <el-form inline>
+        <el-form-item label="模型镜像">
+          <el-select v-model="downloadForm.mirror_base" data-testid="model-download-mirror" style="width:260px">
+            <el-option v-for="mirror in modelDownloads.mirrors" :key="mirror" :label="mirror" :value="mirror" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Revision">
+          <el-input v-model="downloadForm.revision" data-testid="model-download-revision" style="width:160px" placeholder="main 或固定 revision" />
+        </el-form-item>
+        <el-form-item label="下载代理">
+          <el-input
+            v-model="downloadForm.proxy_url"
+            data-testid="model-download-proxy"
+            type="password"
+            show-password
+            autocomplete="off"
+            style="width:320px"
+            placeholder="留空直连，例如 http://proxy.corp:8080"
+          />
+        </el-form-item>
+      </el-form>
+      <div class="muted" style="margin-bottom:12px">
+        下载根目录：<span class="mono">{{ modelDownloads.download_root }}</span>。Revision 会固定到镜像返回的 Commit；同模型任务串行执行，新 generation 完整校验后才切换，失败或取消继续使用上一版本。代理凭据只以密文保存在后台任务中，页面和任务结果不会回显；启用代理时跳过证书吊销检查，但仍验证证书链和主机名。
+      </div>
+      <el-table :data="modelDownloads.models" stripe>
+        <el-table-column label="状态" width="120">
+          <template #default="scope">
+            <el-tag :type="scope.row.status === 'READY' ? 'success' : scope.row.status === 'PARTIAL' ? 'warning' : 'info'">
+              {{ downloadStatus(scope.row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="display_name" label="模型" min-width="220" />
+        <el-table-column prop="model_id" label="仓库 ID" min-width="250" show-overflow-tooltip />
+        <el-table-column label="文件/大小" width="150">
+          <template #default="scope">{{ scope.row.file_count }} / {{ formatBytes(scope.row.size_bytes) }}</template>
+        </el-table-column>
+        <el-table-column prop="target_directory" label="当前版本目录" min-width="280" show-overflow-tooltip />
+        <el-table-column label="下载进度" min-width="240">
+          <template #default="scope">
+            <template v-if="activeDownload(scope.row.model_id)">
+              <el-progress :percentage="activeDownload(scope.row.model_id)?.progress || 0" :stroke-width="8" />
+              <div class="muted">{{ activeDownload(scope.row.model_id)?.message }}</div>
+            </template>
+            <span v-else class="muted">{{ scope.row.completed_at ? `完成于 ${scope.row.completed_at}` : '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="190" fixed="right">
+          <template #default="scope">
+            <el-button
+              type="primary"
+              link
+              :loading="startingDownloadId === scope.row.model_id"
+              :disabled="!!activeDownload(scope.row.model_id)"
+              @click="startModelDownload(scope.row as ModelDownloadItem)"
+            >{{ scope.row.status === 'READY' ? '重新校验/下载' : '开始下载' }}</el-button>
+            <el-button
+              v-if="activeDownload(scope.row.model_id)"
+              type="danger"
+              link
+              @click="cancelModelDownload(activeDownload(scope.row.model_id) as ModelDownloadJob)"
+            >取消</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <el-card style="margin-top:16px">
       <template #header>本地模型说明</template>
-      <p class="muted">本地 BGE Embedding 与 Qwen3 Reranker 使用 Sentence Transformers。运行 <span class="mono">scripts\install_local_models.bat</span> 后，模型会下载到项目的 <span class="mono">models\embedding</span> 与 <span class="mono">models\reranker</span>，并可直接选择带“项目 models 目录”的预置配置。</p>
+      <p class="muted">标准源码环境和 Win11 便携包仍不包含 Torch 或 Sentence Transformers。上方下载器只准备可供独立模型服务使用的 BGE/Qwen 权重；下载完成不等于平台已经安装推理能力。默认继续使用内置 Hashing Embedding并关闭 Reranker，需要这些权重时应由独立模型服务加载，再在模型网关中配置 API。标记为“高级”的本地配置只为既有、人工维护的源码环境保留。</p>
       <p class="muted">
         当前知识存储：{{ retrieval.knowledge_storage || '加载中' }}；
         方法派生关系 {{ retrieval.knowledge_graph?.derivations || 0 }}；
@@ -407,6 +634,7 @@ onMounted(load)
         <el-form-item label="用途"><el-select v-model="form.task_type" :disabled="!!editingId" @change="changeTask"><el-option v-for="(label, value) in taskLabels" :key="value" :label="label" :value="value" /></el-select></el-form-item>
         <el-form-item label="配置名称"><el-input v-model="form.name" placeholder="例如：公司 Qwen Plus" /></el-form-item>
         <el-form-item label="运行方式"><el-radio-group v-model="form.mode" @change="updateProvider"><el-radio-button v-for="mode in allowedModes(form.task_type)" :key="mode" :value="mode">{{ { builtin: '内置', local: '本地', api: 'API' }[mode] }}</el-radio-button></el-radio-group></el-form-item>
+        <el-alert v-if="form.mode === 'local'" type="warning" :closable="false" show-icon style="margin-bottom:16px" title="高级兼容模式：便携包不包含本地模型运行库；请优先使用独立模型服务的 API，避免把 Torch 安装进平台运行环境。" />
         <el-form-item label="适配器"><el-input :model-value="providerLabels[form.provider] || form.provider" disabled /></el-form-item>
         <el-form-item label="模型名/本地路径"><el-input v-model="form.model_name" :disabled="form.mode === 'builtin'" placeholder="模型名称或本地模型目录" /></el-form-item>
         <template v-if="form.mode === 'api'">

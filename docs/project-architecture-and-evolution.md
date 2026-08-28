@@ -1,7 +1,7 @@
 # GW/AP 智能调试平台：架构、技术栈与迭代说明
 
-> 文档状态：2026-08-21，随仓库版本维护。
-> 适用范围：当前 `debug-platform` 单体仓库，包括 Web 前端、后端 API、后台任务、VS Code 扩展、部署脚本和本地模型支持。
+> 文档状态：2026-08-26，随仓库版本维护。
+> 适用范围：当前 `debug-platform` 单体仓库，包括 Web 前端、后端 API、后台任务、VS Code 扩展、源码部署、便携部署和模型服务接入。
 
 ## 1. 项目定位
 
@@ -44,7 +44,7 @@ flowchart TB
     Eval --> DB
     Reindex -.可选镜像.-> Qdrant["Qdrant"]
 
-    Diagnose --> LocalModels["本地 BGE / Qwen3 Reranker"]
+    Diagnose -.高级兼容模式.-> LocalModels["隔离的本地模型服务 / 旧式进程内适配器"]
     Diagnose --> ModelAPI["OpenAI-Compatible / Qwen Rerank API"]
 
     API --> Report["HTML / PDF / DOCX 报告"]
@@ -75,13 +75,13 @@ flowchart TB
 | HTTP 与模型 API | OpenAI Python SDK、HTTPX | OpenAI-Compatible Chat/Embedding 与 Qwen Rerank API |
 | 文档生成与提取 | Jinja2、ReportLab、python-docx、pypdf、HTMLParser | HTML/PDF/Word 报告，以及案例材料的 HTML、DOCX、PDF 本地正文提取 |
 | 检索 | 自研 BM25/精确词项、scikit-learn HashingVectorizer | 无外部模型时的本地检索基线 |
-| 本地模型 | Sentence Transformers、Transformers | BGE Embedding、Qwen3 Reranker |
+| 本地模型兼容 | Sentence Transformers、Transformers | 仅高级源码模式可选；不进入标准/便携运行时 |
 | 向量服务 | Qdrant Client | 可选的向量镜像和查询加速 |
 | 文本处理 | charset-normalizer、python-dateutil、PyYAML | 编码、时间和知识内容处理 |
 | 密钥保护 | cryptography / Fernet | 模型 API Key 加密保存 |
 | PostgreSQL 驱动 | psycopg 3 | PostgreSQL 连接 |
 
-`backend/pyproject.toml` 保留可维护的兼容范围，`backend/uv.lock` 记录 Python 3.11+ 的跨平台精确解析，`backend/constraints.lock` 为现有 pip、Win11 启动脚本和 Docker 提供同一份固定版本约束。CI 会检查两份锁定结果没有漂移。大型本地模型依赖仍放在 `backend[local-models]` 可选依赖组中，基础安装不会下载 PyTorch 等大包，但安装模型运行时也会复用同一约束文件。
+`backend/pyproject.toml` 保留可维护的兼容范围，`backend/uv.lock` 记录 Python 3.11+ 的跨平台精确解析，`backend/constraints.lock` 为现有 pip、Win11 启动脚本和 Docker 提供同一份固定版本约束。CI 会检查两份锁定结果没有漂移。大型本地模型依赖只保留在 `backend[local-models]` 高级兼容组中；源码基础安装和便携包均不会安装 PyTorch 或 Sentence Transformers。权重下载是独立持久任务：系统设置页提交受支持模型、镜像、revision 和可选代理，后端加密代理、把 revision 固定为镜像 Commit，并在同模型线程/跨进程锁内执行受管 staging generation、Range 续传和完整大小/SHA-256 校验；成功后原子切换活动指针，失败或取消继续使用上一代。该任务不改变平台 Python 环境，下载结果只供独立模型服务或人工维护的高级环境使用。
 
 ### 3.2 前端
 
@@ -158,7 +158,8 @@ debugplatform/
 │  ├─ Dockerfile
 │  └─ package.json
 ├─ vscode-extension/          # VS Code 客户端
-├─ scripts/                   # 启动、体检、冒烟、备份、用户和模型脚本
+├─ deploy/windows-portable/   # 单进程便携启动器与随包说明
+├─ scripts/                   # 源码启动、体检、构建、冒烟、备份和用户脚本
 ├─ docs/                      # 专题文档
 ├─ workflow/                  # Agent allowlist 与配套 OpenAPI 合同
 ├─ models/                    # 本地模型，Git 忽略
@@ -524,51 +525,39 @@ generation 旁路构建、输入签名校验和 CAS 切换。确定性抽取结�
 
 API Key 和 Chat 模型代理 URL 在后端使用 Fernet 加密，只返回“是否已配置”和脱敏提示，不回显明文。模型端点与代理在保存、激活和实际请求前均检查协议、主机、内网、回环和云元数据地址。代理为空时 Profile 直连；启用代理时使用独立 HTTPX Client，保留证书链和主机名验证并清除 CRL 吊销检查标志。
 
-## 8. 本地模型目录与安装方式
+## 8. 模型运行边界
 
-目录约定：
+标准运行时只包含平台本身：
 
-```text
-models/
-├─ inference/                         # 预留给后续本地 Chat/推理模型
-├─ embedding/
-│  └─ bge-base-zh-v1.5/              # BAAI/bge-base-zh-v1.5
-└─ reranker/
-   └─ Qwen3-Reranker-0.6B/           # Qwen/Qwen3-Reranker-0.6B
-```
+- Embedding 默认使用内置 Hashing，或连接批准的 OpenAI-Compatible Embedding API；
+- Reranker 默认关闭，或连接批准的 Rerank API；
+- Chat/诊断连接已配置的 OpenAI-Compatible API；
+- PyTorch、Sentence Transformers、Transformers 和模型权重不进入便携包，也不会由源码启动脚本安装。
 
-`scripts/install_local_models.bat` 调用 PowerShell 安装器。安装器的关键顺序为：
+旧模型安装器曾同时向平台主 `.venv` 注入原生推理依赖并下载权重。这会把 FastAPI 生命周期与
+Torch/显卡驱动/VC++ DLL 初始化绑在一起，新 Win11 设备上可能表现为
+`Model connection failed: WinError 1114`。因此仓库已删除整套下载与安装脚本；需要本地
+BGE/Qwen 时，应在独立目录、虚拟环境或容器中启动模型服务，再让平台通过 API 连接。
 
-1. 创建 `inference`、`embedding`、`reranker`；
-2. 确认项目 `.venv`；
-3. 设置 `$env:HF_ENDPOINT = "https://hf-mirror.com"`，并关闭误继承的离线模式；
-4. 按 `backend/constraints.lock` 安装锁定版本的 `backend[local-models]`，使 `.venv\Scripts\hf.exe` 可用；
-5. 锁定 BGE 和 Qwen3 的模型 revision；
-6. 先使用官方 CLI 下载 `config.json` 做轻量预检，成功后使用 CLI 下载：
-
-```powershell
-$env:HF_ENDPOINT = "https://hf-mirror.com"
-
-.\.venv\Scripts\hf.exe download BAAI/bge-base-zh-v1.5 `
-  --local-dir .\models\embedding\bge-base-zh-v1.5
-
-.\.venv\Scripts\hf.exe download Qwen/Qwen3-Reranker-0.6B `
-  --local-dir .\models\reranker\Qwen3-Reranker-0.6B
-```
-
-7. 如果 CLI 因代理或镜像 HEAD 元数据响应失败，自动改用 `curl.exe`，通过镜像 API 获取固定 revision 的文件清单；
-8. curl 回退使用 `.partial` 断点续传，验证目标路径、文件大小和 LFS 权重 SHA-256；
-9. 校验 `config.json`、Tokenizer 和模型权重；
-10. 生成包含下载方式和 revision 的 `models/model-installation.json`；
-11. 通过项目自身的 Embedding、Reranker 适配器真实加载并执行最小推理。
-
-这里没有把 Qwen 模型直接放在 `models\Qwen3-Reranker-0.6B`，是因为项目需要长期维持“推理 / Reranker / Embedding”三类目录，避免后续模型增多时路径混乱。
-
-`hf download --local-dir` 会在目标目录创建 Hugging Face 元数据缓存；curl 路径会保留 `.partial` 文件。两种方式重复运行都能复用已完成内容。`scripts/check_hf_model_access.bat` 只下载 `config.json` 并生成脱敏报告，用于判断 CLI、镜像 API 和 curl 回退是否可用。`models/` 已加入 `.gitignore`，权重不会被提交到 GitHub。
+`backend[local-models]` 仅作为旧式进程内适配器的高级兼容入口保留，不属于标准安装和便携
+部署支持面。根目录本机 `A.py` 已被 Git 忽略；其安全下载子集已进入前端受管任务，但仍不能
+安装或隔离推理运行时，不能作为平台部署脚本。详细边界见
+[Win11 便携部署](windows-portable-deployment.md)。
 
 ## 9. 部署与运行模式
 
-### 9.1 Win11 本地模式
+### 9.1 Win11 便携模式
+
+CI 或开发电脑执行 `scripts\build_windows_portable.bat` 后，会生成可复制的 ZIP。目标 Win11
+电脑只需解压并双击 `start.bat`，不需要安装 Python、Node、pip、npm 或配置它们的代理。
+便携 Python、后端基础依赖、前端静态产物和迁移都在一个目录中，FastAPI 同源提供 API 与
+Vue SPA。首次运行在 `%LOCALAPPDATA%\GWAPDebugPlatform\` 自动创建 `.env` 和数据目录，
+升级只替换程序目录。
+
+构建过程强制检查便携运行时不存在 `torch` 和 `sentence_transformers`；发布前验证会从临时
+数据目录启动真实服务，并检查 readiness、Vue 首页、Vue 深层路由和 API。
+
+### 9.2 Win11 源码开发模式
 
 `scripts\start_local.bat` 负责：
 
@@ -586,11 +575,12 @@ $env:HF_ENDPOINT = "https://hf-mirror.com"
 - `runtime_smoke.bat`：用隔离 SQLite 数据库、18000/15173 端口启动完整前后端并冒烟；
 - `inspect_log_file.bat`：检查日志大小、行数、头部字节、编码、NUL 和 Parser 预测；
 - `backup_local.bat` / `restore_local.bat`：SQLite 本地备份和受确认保护的恢复；
-- `manage_users.bat`：用户和令牌管理；
-- `check_hf_model_access.bat`：模型镜像、代理、CLI 与 curl 回退检测；
-- `install_local_models.bat`：镜像下载和模型兼容性验证。
+- `manage_users.bat`：用户和令牌管理。
 
-### 9.2 Docker 模式
+源码模式面向开发者，仍需要 Python、Node/npm，并可能需要为软件源配置公司代理。普通使用者
+优先选择 9.1 的便携包。
+
+### 9.3 Docker 模式
 
 Docker Compose 包含：
 
@@ -601,7 +591,7 @@ Docker Compose 包含：
 
 数据库、向量和文件分别保存在 Docker Volume。宿主机端口只绑定 `127.0.0.1`，PostgreSQL 和 Qdrant 不直接暴露。
 
-### 9.3 健康与备份
+### 9.4 健康与备份
 
 健康接口分为：
 
@@ -666,7 +656,8 @@ Docker Compose 包含：
 - 外发端点和 SSRF 风险校验；
 - 模型外发审计；
 - 分析时保存无密钥配置快照；
-- 本地 BGE Base 和 Qwen3 Reranker 安装器。
+- 便携运行时与本地模型原生依赖隔离；
+- 旧式进程内 BGE/Qwen3 适配器仅保留为高级兼容入口，不提供一体化安装器。
 
 ### 代码与工程
 
@@ -742,6 +733,7 @@ Docker Compose 包含：
 | 2026-08-11 | 本次修改 | 私网端点与通用知识范围 | 一次性脚本持久启用受控私网模型地址；知识新增 GENERAL 通用适用范围并兼容旧 OTHER 检索 |
 | 2026-08-14 | 本次修改 | 原生诊断工具 Agent 与可观测性 | Thinking 三态、两至二十轮只读工具调用、故障树逐节点覆盖与结论门禁、全量持久化筛查证据检索、回退诊断、文档/方法可视化、日志级别文案和精确源行跳转 |
 | 2026-08-21 | 本次修改 | Agent Context 与可度量运行时 | token-aware Context Governor、临时 Spill Handle、供应商实际 usage/工具输出预算、真实依赖深度、36 场景 Golden 分布契约和前端上下文可视化 |
+| 2026-08-26 | 本次修改 | Win11 便携发布与模型隔离 | 单 ZIP 同源启动、外置数据/配置、解释器与文件完整性门禁、真实便携冒烟；删除会污染主 `.venv` 的模型安装链 |
 
 这段迭代体现了项目从“功能原型”逐步转向“可在多台 Win11 电脑复现、可诊断、可回滚、可审计”的工程化过程。
 
@@ -749,7 +741,7 @@ Docker Compose 包含：
 
 ### 12.1 离线可用和逐级增强
 
-没有 API Key 时仍可使用解析、规则、BM25、Hashing Embedding 和报告；有本地模型后可增强语义检索和排序；有批准的 API 后再启用 LLM。企业环境可以按数据合规等级逐步开放能力。
+没有 API Key 时仍可使用解析、规则、BM25、Hashing Embedding 和报告；有批准的 API 后可启用语义模型、排序和 LLM。确需本地模型时通过隔离服务接入，不让原生推理 DLL 污染平台进程。企业环境可以按数据合规等级逐步开放能力。
 
 ### 12.2 证据驱动
 
@@ -763,9 +755,9 @@ Docker Compose 包含：
 
 Parser、模型 Profile、知识分类、任务类型、报告格式和静态工具都有相对明确的边界。新厂商 Parser 或新模型适配器可以局部扩展。
 
-### 12.5 本地和容器两条运行路径
+### 12.5 便携、源码和容器三条运行路径
 
-普通工程师可以双击 BAT 使用；团队部署可以使用 PostgreSQL、Qdrant 和容器。CI 同时验证 Windows 和 Ubuntu，降低“只在开发者电脑可用”的风险。
+普通工程师可以解压便携包后双击使用；开发者保留源码 BAT；团队部署可以使用 PostgreSQL、Qdrant 和容器。CI 同时验证 Windows 和 Ubuntu，并单独构建和冒烟 Win11 便携制品，降低“只在开发者电脑可用”的风险。
 
 ### 12.6 安全意识较完整
 
@@ -814,9 +806,11 @@ Playwright 已在 Windows/Ubuntu CI 固化知识提炼和轨迹完整流程，�
 提炼 View 也拆出类型化 API Client、Composable 和领域组件。当前仍缺少更细粒度的组件测试，
 其他页面的浏览器关键路径可继续扩展。
 
-### 13.8 本地模型资源要求和供应链仍需治理
+### 13.8 本地模型服务仍需独立产品化
 
-CPU 可以加载模型，但 Qwen3 Reranker 首次启动慢、内存占用高。安装器已固定当前批准 revision，并在 curl 回退中校验 LFS 权重 SHA-256，但仍缺少公司级许可证清单、内部离线制品库、恶意模型扫描和资源容量准入。
+平台已停止把 Torch 和模型权重装入主运行时，但仓库尚未提供正式的独立本地模型服务制品。
+后续若恢复本地 BGE/Qwen，应建设独立进程或容器、固定版本与权重哈希、许可证清单、恶意
+模型扫描、CPU/GPU 容量准入、健康检查和超时/熔断；在此之前优先使用批准的模型 API。
 
 ### 13.9 生产身份和密钥基础设施不足
 
@@ -945,7 +939,7 @@ flowchart LR
 - 人工反馈审核和生成待二次审核知识草稿；
 - 迁移、外键和数据库完整性；
 - 健康、备份、删除级联和部署文件；
-- Windows 启动、Doctor、模型安装器和隔离冒烟；
+- Windows 源码启动、Doctor、便携包构建和隔离冒烟；
 - PostgreSQL 与 Qdrant 外部服务。
 
 GitHub Actions 当前验证：
@@ -960,6 +954,7 @@ GitHub Actions 当前验证：
 - PostgreSQL/Qdrant 集成测试；
 - 后端和前端 Docker 构建；
 - Windows 前后端完整启动冒烟。
+- Windows 便携 ZIP 自检、真实同源启动和制品上传。
 
 仓库还提供 `scripts\validate_all.bat Fast|Full|External` 作为 Win11 的统一执行入口，
 把每一步的退出码、耗时和日志写入 `artifacts\validation`。CI 同时执行

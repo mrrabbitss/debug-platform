@@ -22,6 +22,7 @@ REQUIRED_PATHS = (
     ".github/dependabot.yml",
     ".github/pull_request_template.md",
     ".github/workflows/ci.yml",
+    ".github/workflows/windows-portable.yml",
     "AGENTS.md",
     "CAPABILITIES.md",
     "HARNESS_ENGINEERING.md",
@@ -29,12 +30,24 @@ REQUIRED_PATHS = (
     "harness/quality_gates.json",
     "VALIDATION.md",
     "docs/README.md",
+    "docs/windows-portable-deployment.md",
+    "backend/app/services/model_downloads.py",
+    "backend/app/services/model_download_storage.py",
+    "backend/app/api/model_downloads.py",
+    "backend/app/api/route_registry.py",
+    "backend/tests/test_model_downloads.py",
+    "deploy/windows-portable/portable_launcher.py",
+    "deploy/windows-portable/start.bat",
+    "scripts/build_windows_portable.bat",
+    "scripts/build_windows_portable.ps1",
     "scripts/validate_all.bat",
     "scripts/validate_all.ps1",
     "scripts/validate_glm_chat_features.bat",
     "scripts/validate_glm_chat_features.py",
     "scripts/check_architecture.py",
     "scripts/run_backend_tests.py",
+    "scripts/verify_windows_portable.bat",
+    "scripts/verify_windows_portable.ps1",
     "workflow/README.md",
     "workflow/openapi.yaml",
     "workflow/skill.yaml",
@@ -49,6 +62,15 @@ EXPECTED_DEPENDABOT_TARGETS = {
     ("docker", "/frontend"),
 }
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)\n]+)\)")
+RETIRED_MODEL_INSTALLERS = (
+    "scripts/install_local_models.bat",
+    "scripts/install_local_models.ps1",
+    "scripts/hf_model_tools.ps1",
+    "scripts/check_hf_model_access.bat",
+    "scripts/check_hf_model_access.ps1",
+    "scripts/validate_local_models.py",
+    "scripts/verify_local_models.py",
+)
 
 
 class HarnessChecks:
@@ -182,6 +204,79 @@ def check_ci_contract(checks: HarnessChecks) -> None:
     )
 
 
+def check_portable_deployment_contract(checks: HarnessChecks) -> None:
+    build = (REPO_ROOT / "scripts" / "build_windows_portable.ps1").read_text(
+        encoding="utf-8"
+    )
+    launcher = (
+        REPO_ROOT / "deploy" / "windows-portable" / "portable_launcher.py"
+    ).read_text(encoding="utf-8")
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "windows-portable.yml"
+    ).read_text(encoding="utf-8")
+    downloader = (
+        REPO_ROOT / "backend" / "app" / "services" / "model_downloads.py"
+    ).read_text(encoding="utf-8")
+    download_store = (
+        REPO_ROOT / "backend" / "app" / "services" / "model_download_storage.py"
+    ).read_text(encoding="utf-8")
+    settings_view = (
+        REPO_ROOT / "frontend" / "src" / "views" / "SettingsView.vue"
+    ).read_text(encoding="utf-8")
+    retired_present = [
+        path for path in RETIRED_MODEL_INSTALLERS if (REPO_ROOT / path).exists()
+    ]
+    checks.check(
+        "portable-model-isolation",
+        "find_spec('torch') is None" in build
+        and "find_spec('sentence_transformers') is None" in build
+        and not retired_present,
+        "portable build excludes native model runtimes and retired installers stay removed"
+        if not retired_present
+        else f"retired installers present: {', '.join(retired_present)}",
+    )
+    checks.check(
+        "portable-runtime-contract",
+        "127.0.0.1" in launcher
+        and "STATIC_FRONTEND_ROOT" in launcher
+        and "DATA_ROOT" in launcher
+        and "--check" in launcher,
+        "portable launcher is loopback-only, path-explicit and self-checking",
+    )
+    checks.check(
+        "portable-hash-contract",
+        "file_hash.ps1" in build
+        and "Get-Sha256Hex" in build
+        and "Get-FileHash" not in build,
+        "portable build uses the repository .NET SHA-256 helper without optional PowerShell cmdlets",
+    )
+    checks.check(
+        "portable-ci-contract",
+        "workflow_dispatch:" in workflow
+        and "build_windows_portable.ps1" in workflow
+        and "actions/upload-artifact" in workflow,
+        "portable workflow builds, verifies and uploads the Win11 artifact",
+    )
+    checks.check(
+        "managed-model-download-contract",
+        "MODEL_DOWNLOAD_JOB_KIND" in downloader
+        and ".partial" in downloader
+        and "model_download_lock" in downloader
+        and "publish_staging_generation" in downloader
+        and "remote_manifest.resolved_revision" in downloader
+        and "remote_sha256_verified" in downloader
+        and "proxy_url_ciphertext" in downloader
+        and "runtime_installed" in downloader
+        and "active_generation" in download_store
+        and "force_hash=True" in download_store
+        and "MODEL_DOWNLOAD_GENERATIONS_DIRECTORY" in download_store
+        and "MODEL_DOWNLOAD_STAGING_DIRECTORY" in download_store
+        and "os.replace" in download_store
+        and "model-download-proxy" in settings_view,
+        "managed weights use pinned revisions, per-model locks, resumable staging, full integrity checks and atomic generation pointers",
+    )
+
+
 def check_dependabot(checks: HarnessChecks) -> None:
     config = load_yaml(".github/dependabot.yml")
     updates = config.get("updates", []) if isinstance(config, dict) else []
@@ -297,6 +392,7 @@ def main() -> int:
     check_markdown_links(checks)
     check_document_index(checks)
     check_ci_contract(checks)
+    check_portable_deployment_contract(checks)
     check_dependabot(checks)
     check_workflow_contract(checks)
     from check_architecture import check_architecture

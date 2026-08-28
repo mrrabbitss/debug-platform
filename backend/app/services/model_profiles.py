@@ -348,32 +348,6 @@ def seed_model_profiles(db: Session) -> None:
             is_active=False,
         ),
         ModelProfile(
-            id="MODEL-embedding-local-bge",
-            name="本地 BGE 中文向量",
-            task_type="embedding",
-            mode="local",
-            provider="sentence_transformers",
-            model_name="BAAI/bge-small-zh-v1.5",
-            config_json=json_dumps({"device": "cpu", "batch_size": 16, "normalize": True}),
-            is_active=False,
-        ),
-        ModelProfile(
-            id="MODEL-embedding-local-bge-base-project",
-            name="本地 BGE Base 中文向量（项目 models 目录）",
-            task_type="embedding",
-            mode="local",
-            provider="sentence_transformers",
-            model_name="models/embedding/bge-base-zh-v1.5",
-            config_json=json_dumps({
-                "device": "cpu",
-                "batch_size": 16,
-                "dimension": 768,
-                "normalize": True,
-                "query_instruction": "为这个句子生成表示以用于检索相关文章：",
-            }),
-            is_active=False,
-        ),
-        ModelProfile(
             id="MODEL-reranker-disabled",
             name="不使用 Reranker",
             task_type="reranker",
@@ -381,39 +355,6 @@ def seed_model_profiles(db: Session) -> None:
             provider="disabled",
             model_name="disabled",
             config_json=json_dumps({"builtin": True}),
-            is_active=False,
-        ),
-        ModelProfile(
-            id="MODEL-reranker-local-qwen",
-            name="本地 Qwen3 Reranker 0.6B",
-            task_type="reranker",
-            mode="local",
-            provider="sentence_transformers",
-            model_name="Qwen/Qwen3-Reranker-0.6B",
-            config_json=json_dumps({
-                "device": "cpu",
-                "batch_size": 4,
-                "candidate_count": 30,
-                "instruction": "Given a network troubleshooting query, retrieve passages that help diagnose and solve it.",
-            }),
-            is_active=False,
-        ),
-        ModelProfile(
-            id="MODEL-reranker-local-qwen-project",
-            name="本地 Qwen3 Reranker 0.6B（项目 models 目录）",
-            task_type="reranker",
-            mode="local",
-            provider="sentence_transformers",
-            model_name="models/reranker/Qwen3-Reranker-0.6B",
-            config_json=json_dumps({
-                "device": "cpu",
-                "batch_size": 4,
-                "candidate_count": 30,
-                "instruction": (
-                    "Given a network troubleshooting query, retrieve passages "
-                    "that help diagnose and solve it."
-                ),
-            }),
             is_active=False,
         ),
     ]
@@ -437,6 +378,17 @@ def seed_model_profiles(db: Session) -> None:
         set_profile_api_key(env_profile, settings.llm_api_key)
         profiles.append(env_profile)
     _add_profiles(db, profiles)
+
+    if settings.model_disable_in_process_local:
+        db.execute(
+            update(ModelProfile)
+            .where(
+                ModelProfile.provider == "sentence_transformers",
+                ModelProfile.is_active.is_(True),
+            )
+            .values(is_active=False)
+        )
+        db.commit()
 
     for task_type, fallback_id in {
         "chat": "MODEL-chat-rule-engine",

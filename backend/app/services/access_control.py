@@ -29,7 +29,12 @@ ADMIN_ONLY_PREFIXES = (
     "/system/users",
     "/evaluation",
 )
-ENGINEER_READ_PREFIXES = ("/system/models", "/system/retrieval", "/system/user-directory")
+ENGINEER_READ_PREFIXES = (
+    "/system/models",
+    "/system/model-downloads",
+    "/system/retrieval",
+    "/system/user-directory",
+)
 CASE_SCOPED_RESOURCES = {"cases", "artifacts", "analyses", "reports", "repositories", "jobs"}
 
 
@@ -180,6 +185,8 @@ def authorize_request(db: Session, request: Request, principal: dict[str, str]) 
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only administrators may modify knowledge")
     if "/system/models" in path and method != "GET":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only administrators may modify model profiles")
+    if "/system/model-downloads" in path and method != "GET":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only administrators may download model weights")
     if "/system/model/test" in path or "/knowledge/reindex" in path:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator role required")
     if role == "VIEWER" and method != "GET":

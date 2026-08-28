@@ -115,6 +115,19 @@ def test_rbac_dependency_enforces_token_role_and_case_scope(tmp_path: Path, monk
         assert directory.status_code == 200
         assert {item["username"] for item in directory.json()} == {"admin", "engineer", "viewer"}
         assert client.get("/api/v1/system/models", headers=engineer_headers).status_code == 200
+        assert client.get(
+            "/api/v1/system/model-downloads",
+            headers=engineer_headers,
+        ).status_code == 200
+        assert client.post(
+            "/api/v1/system/model-downloads",
+            headers=engineer_headers,
+            json={
+                "model_id": "Qwen/Qwen3-Reranker-0.6B",
+                "mirror_base": "https://hf-mirror.com",
+                "revision": "main",
+            },
+        ).status_code == 403
 
         viewer_headers = {"X-API-Key": viewer_token}
         assert client.get(
@@ -132,6 +145,10 @@ def test_rbac_dependency_enforces_token_role_and_case_scope(tmp_path: Path, monk
         ).status_code == 403
         assert client.get("/api/v1/system/users", headers=viewer_headers).status_code == 403
         assert client.get("/api/v1/system/models", headers=viewer_headers).status_code == 403
+        assert client.get(
+            "/api/v1/system/model-downloads",
+            headers=viewer_headers,
+        ).status_code == 403
         assert client.get("/api/v1/system/retrieval", headers=viewer_headers).status_code == 403
         assert client.get(
             "/api/v1/system/user-directory",
@@ -140,6 +157,10 @@ def test_rbac_dependency_enforces_token_role_and_case_scope(tmp_path: Path, monk
 
         admin_headers = {"X-API-Key": admin_token}
         assert client.get("/api/v1/system/users", headers=admin_headers).status_code == 200
+        assert client.get(
+            "/api/v1/system/model-downloads",
+            headers=admin_headers,
+        ).status_code == 200
         assert client.get(
             "/api/v1/cases/CASE-missing/access",
             headers=admin_headers,
