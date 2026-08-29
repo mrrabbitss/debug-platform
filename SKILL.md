@@ -1,20 +1,43 @@
 ---
 name: gw-ap-debug
-description: Diagnose GW/AP collectDebuginfo and network-device logs with local parsing, mandatory method scans, fault-tree coverage, and evidence validation. Use for GW/AP log upload, triage, root-cause analysis, or evidence-grounded reports. Prefer the current OpenCode, Claude Code, or Codex CLI model; do not use for generic application debugging or unsupported device domains.
+description: Diagnose GW/AP collectDebuginfo and network-device logs with local parsing, mandatory method scans, fault-tree coverage, and evidence validation. Use for GW/AP log upload, triage, root-cause analysis, or evidence-grounded reports. Prefer Claude Code CLI on Windows 11; also supports Codex CLI and OpenCode CLI. Do not use for generic application debugging or unsupported device domains.
 license: MIT
 metadata:
-  version: "0.3.6"
+  version: "0.4.0"
   source_commit: "181dae7b26863accd02e8206895d3cfb670739ac"
-  compatibility: "Python >=3.11,<3.15; OpenCode, Claude Code, or Codex CLI"
+  primary_host: "Claude Code CLI on Windows 11"
+  compatibility: "Windows 11 primary; Linux/macOS supported; Python >=3.11,<3.15; Claude Code, Codex CLI, or OpenCode CLI"
 ---
 
 # GW/AP Debug
 
+## Interaction and launcher
+
+Claude Code CLI on Windows 11 is the primary interaction path. A direct
+`/gw-ap-debug <log paths> <symptom>` invocation supplies its trailing text as
+the current request. If readable input paths and explicit permission for the
+current host model to receive the active methods plus bounded redacted evidence
+are already present, proceed without asking the user to restate them. Otherwise
+ask one concise question for only the missing input or approval. Match the
+user's language and give brief progress updates at preparation, evidence search,
+and final validation boundaries.
+
+Resolve `<SKILL_DIR>` to the directory containing this loaded `SKILL.md`. Use
+the platform launcher for local commands:
+
+- Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1"`
+- Linux/macOS: `bash "<SKILL_DIR>/scripts/gw_ap_debug.sh"`
+
+Pass the documented subcommand and arguments after the launcher. These wrappers
+select a compatible Python automatically. Direct Python execution is a fallback
+only when a wrapper cannot run. For Claude-specific discovery and interaction,
+read [claude-code.md](references/claude-code.md).
+
 ## Default behavior
 
-Use the model already selected in the current OpenCode, Claude Code, or Codex CLI session for reasoning. Never launch a nested CLI and never ask for that CLI's model API key.
+Use the model already selected in the current Claude Code, Codex CLI, or OpenCode CLI session for reasoning. Never launch a nested CLI and never ask for that CLI's model API key.
 
-Resolve `<SKILL_DIR>` to the directory containing this loaded `SKILL.md`; never assume the CLI working directory is the Skill directory. Use `python "<SKILL_DIR>/scripts/debug_platform_skill.py"` as the deterministic local evidence engine. It owns archive safety, parsing, mandatory method scans, exact log locations, fault-tree IDs, evidence allowlists, host round/tool/evidence bounds, and final validation. Do not replace these checks with prompt-only reasoning.
+Never assume the CLI working directory is the Skill directory. The launcher delegates to `scripts/debug_platform_skill.py`, the deterministic local evidence engine. It owns archive safety, parsing, mandatory method scans, exact log locations, fault-tree IDs, evidence allowlists, host round/tool/evidence bounds, and final validation. Do not replace these checks with prompt-only reasoning.
 
 The default execution mode is `host-agent`. The optional `backend-model` mode is compatibility-only and uses a separately configured OpenAI-compatible endpoint.
 
@@ -37,19 +60,19 @@ Use this path unless the user explicitly asks for deterministic-only or backend-
 2. Check package/runtime readiness:
 
    ```text
-   python "<SKILL_DIR>/scripts/debug_platform_skill.py" doctor --check host-agent
+   <LAUNCHER> doctor --check host-agent
    ```
 
 3. If readiness says the external environment is missing, bootstrap it. The frontend is never required:
 
    ```text
-   python "<SKILL_DIR>/scripts/debug_platform_skill.py" bootstrap
+   <LAUNCHER> bootstrap
    ```
 
 4. Run the local preparation pipeline with the appropriate provenance flags. Keep the command on one line so it works in PowerShell, cmd, and POSIX shells:
 
    ```text
-   python "<SKILL_DIR>/scripts/debug_platform_skill.py" run --mode host-agent --approve-host-model-egress --title "issue" --ap-log "/path/to/ap-log" --gw-log "/path/to/gw-log"
+   <LAUNCHER> run --mode host-agent --approve-host-model-egress --title "issue" --ap-log "/path/to/ap-log" --gw-log "/path/to/gw-log"
    ```
 
    For an existing analyzed case, use `result --case-id CASE-... --mode host-agent --approve-host-model-egress --output-dir "/path/to/new-empty-run"` instead. An export directory must be new or empty.
@@ -69,7 +92,7 @@ Read [host-agent-mode.md](references/host-agent-mode.md) for the exact tool loop
 For a fully local deterministic baseline with zero model reasoning:
 
 ```text
-python "<SKILL_DIR>/scripts/debug_platform_skill.py" run --mode deterministic --title "issue" --log "/path/to/log"
+<LAUNCHER> run --mode deterministic --title "issue" --log "/path/to/log"
 ```
 
 For the optional backend OpenAI-compatible model, first read [backend-model-mode.md](references/backend-model-mode.md). This path requires `configure-model`, a secret supplied through an environment variable, and explicit `--approve-model-egress`.
@@ -106,4 +129,4 @@ This is a diagnostic-only parallel MVP, not a continuation of the platform main 
 
 The bundled diagnostic methods are intentionally included in this full-capability release. Preserve the distribution decision and audience recorded in [security-and-distribution.md](references/security-and-distribution.md) when repackaging it.
 
-For the complete clone, one-command user registration, bootstrap, CLI discovery, update, and troubleshooting flow, read [DEPLOYMENT.md](DEPLOYMENT.md). The supported registration entry points are `scripts/setup_user_skill.ps1` on Windows and `scripts/setup_user_skill.sh` on Linux/macOS. For installation-path details shared by OpenCode, Claude Code, and Codex, read [installation.md](references/installation.md).
+For the complete clone, one-command user registration, bootstrap, CLI discovery, update, and troubleshooting flow, read [DEPLOYMENT.md](DEPLOYMENT.md). The supported registration entry points are `scripts/setup_user_skill.ps1` on Windows and `scripts/setup_user_skill.sh` on Linux/macOS. For installation-path details shared by Claude Code, Codex, and OpenCode, read [installation.md](references/installation.md).

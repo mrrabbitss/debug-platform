@@ -4,15 +4,16 @@
 > an expected answer, or a substitute for the current run's authenticated
 > context and tool trace.
 
-Date: 2026-08-29 (Asia/Shanghai)
+Date: 2026-08-30 (Asia/Shanghai)
 
 Source baseline: Debug Platform `main` / `origin/main` commit
 `181dae7b26863accd02e8206895d3cfb670739ac`.
 
 ## Snapshot fidelity
 
-- Candidate version: `0.3.6` (installer, release-validation, and CI packaging update over the
-  v0.3.4 runtime behavior).
+- Candidate version: `0.4.0` (Claude Code first interaction, automatic Python
+  selection, portable launchers, and UI metadata over the v0.3.4 runtime
+  behavior).
 - The published `skillonly` Git commit and tree IDs are the authoritative
   release fingerprint; the release file count is intentionally not used as a
   mutable identity check.
@@ -34,8 +35,15 @@ Source baseline: Debug Platform `main` / `origin/main` commit
 - `python -B scripts/validate_release.py`: passed.
 - Windows user-registration script: plan and isolated three-client junction
   registration passed without overwriting pre-existing paths.
+- Windows launcher: automatic Python selection and explicit-interpreter
+  `doctor --check package` passed under Windows PowerShell 5.1.
 - POSIX registration script: Bash syntax check and plan passed locally; the
   Ubuntu CI job provides the authoritative symlink execution environment.
+- POSIX launcher: Bash syntax and explicit-interpreter package doctor passed.
+- Synthetic AP host-agent preparation through the Windows launcher passed. The
+  exported manifest records `skill_version=0.4.0`; continuation instructions
+  contain both platform launchers and no bare `python debug_platform_skill.py`
+  command.
 - `host-search-hypothesis-log --help`: passed and exposes no fault-tree
   binding option.
 - Fresh dependency-only bootstrap on Python 3.14: passed with the locked
@@ -169,8 +177,11 @@ removed by the project plugin.
 
 - OpenCode project Skills use `.opencode/skills`; the native load was verified
   by retained remote runs.
-- Claude Code: executable not installed on this machine; format/path support is
-  based on the documented Agent Skills location and the shared Skill layout.
+- Claude Code: executable is not installed on this validation machine. The
+  primary `/gw-ap-debug` command, personal `~/.claude/skills` junction, live
+  discovery guidance, and argument flow are based on the current official
+  Claude Code Skills contract; native Claude model execution remains pending on
+  a machine with Claude Code installed.
 - Codex CLI: `codex-cli 0.150.0-alpha.8` launches on this machine. On
   2026-08-28 an isolated project-scope native run discovered v0.3.5 from
   `.agents/skills/gw-ap-debug`, used the Skill, and executed `doctor --check

@@ -5,12 +5,12 @@ usage() {
   cat <<'EOF'
 Usage: setup_user_skill.sh [options]
 
-Register this checkout as a user-level Skill for Codex, Claude Code, and OpenCode.
+Register this checkout as a user-level Skill for Claude Code, Codex, and OpenCode.
 
 Options:
   --clients LIST       all or comma-separated codex,claude,opencode (default: all)
   --home-root PATH     user home used for discovery paths (default: $HOME)
-  --python COMMAND     Python command (default: python3)
+  --python COMMAND     Python command (default: auto-detect 3.11-3.14)
   --update             fast-forward the checkout from origin/skillonly
   --bootstrap          create or refresh the external runtime environment
   --validate           run tests, provenance, release, and host-agent checks
@@ -21,7 +21,7 @@ EOF
 
 clients="all"
 home_root="${HOME}"
-python_cmd="${PYTHON:-python3}"
+python_cmd="${PYTHON:-}"
 do_update=false
 do_bootstrap=false
 do_validate=false
@@ -67,18 +67,38 @@ resolve_link_target() {
   fi
 }
 
+if [[ -n "$python_cmd" ]]; then
+  python_candidates=("$python_cmd")
+else
+  python_candidates=(python3.14 python3.13 python3.12 python3.11 python3 python)
+fi
+python_cmd=""
+for candidate in "${python_candidates[@]}"; do
+  command -v "$candidate" >/dev/null 2>&1 || continue
+  if "$candidate" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (3, 15) else 3)' >/dev/null 2>&1; then
+    python_cmd="$candidate"
+    break
+  fi
+done
+[[ -n "$python_cmd" ]] || { printf 'Python 3.11-3.14 was not found.\n' >&2; exit 1; }
+step "Python $($python_cmd -c 'import sys; print(".".join(map(str, sys.version_info[:3])))'): $python_cmd"
+
 if [[ "$clients" == "all" ]]; then
-  requested=(codex claude opencode)
+  requested=(claude codex opencode)
 else
   IFS=',' read -r -a requested <<<"$clients"
 fi
 
-declare -A seen=()
+seen_clients=""
+active_clients=()
 for client in "${requested[@]}"; do
-  client="${client,,}"
+  client="$(printf '%s' "$client" | tr '[:upper:]' '[:lower:]')"
   [[ -n "$client" ]] || continue
-  [[ -z "${seen[$client]:-}" ]] || continue
-  seen[$client]=1
+  case " $seen_clients " in
+    *" $client "*) continue ;;
+  esac
+  seen_clients="$seen_clients $client"
+  active_clients+=("$client")
   case "$client" in
     codex) relative=".agents/skills/gw-ap-debug" ;;
     claude) relative=".claude/skills/gw-ap-debug" ;;
@@ -105,6 +125,14 @@ for client in "${requested[@]}"; do
   fi
 done
 
+for client in "${active_clients[@]}"; do
+  if command -v "$client" >/dev/null 2>&1; then
+    step "$client CLI detected: $($client --version 2>/dev/null | head -n 1)"
+  else
+    step "WARNING: Skill registered, but CLI command '$client' is not available."
+  fi
+done
+
 $do_update && run_checked git -C "$skill_root" pull --ff-only origin skillonly
 $do_bootstrap && run_checked "$python_cmd" -B "$skill_root/scripts/debug_platform_skill.py" bootstrap
 if $do_validate; then
@@ -115,3 +143,12 @@ if $do_validate; then
 fi
 
 step "Ready. Canonical checkout: $skill_root"
+case " ${active_clients[*]} " in
+  *" claude "*) step "Claude Code: start 'claude', run '/skills', then invoke '/gw-ap-debug <log paths> <symptom>'." ;;
+esac
+case " ${active_clients[*]} " in
+  *" codex "*) step "Codex CLI: start 'codex' and ask it to use \$gw-ap-debug for the supplied GW/AP logs." ;;
+esac
+case " ${active_clients[*]} " in
+  *" opencode "*) step "OpenCode CLI: start 'opencode' and ask it to use gw-ap-debug for the supplied GW/AP logs." ;;
+esac

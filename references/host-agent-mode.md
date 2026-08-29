@@ -1,6 +1,8 @@
 # Host-agent mode
 
-Host-agent mode uses the model already selected by the current OpenCode, Claude Code, or Codex CLI session. The Python client never invokes a nested CLI and never reads a host model credential.
+Host-agent mode uses the model already selected by the current Claude Code,
+Codex CLI, or OpenCode CLI session. The Python client never invokes a nested
+CLI and never reads a host model credential.
 
 ## Trust split
 

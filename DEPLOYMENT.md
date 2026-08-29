@@ -1,15 +1,18 @@
 # GW/AP Debug Skill-only MVP 部署指南
 
-本文适用于 `gw-ap-debug` v0.3.6。该分支是独立的 Skill-only MVP，
+本文适用于 `gw-ap-debug` v0.4.0。该分支是独立的 Skill-only MVP，
 不是 Debug Platform `main` 分支的后续版本。它不需要 Vue 前端、Docker、
-PostgreSQL 或 Qdrant；诊断推理默认使用当前 OpenCode、Claude Code 或 Codex
-CLI 会话已经选择的模型。
+PostgreSQL 或 Qdrant。首选运行环境是 Windows 11 上的 Claude Code CLI；
+Codex CLI 和 OpenCode CLI 作为兼容入口。诊断推理始终使用当前宿主 CLI
+会话已经选择的模型。
 
 ## 1. 运行要求
 
 - Windows 11、Linux 或 macOS；
+- Git；Windows 使用系统自带 Windows PowerShell 5.1 或更新版本；
 - Python 3.11、3.12、3.13 或 3.14；
-- OpenCode、Claude Code 或 Codex 中至少安装一个；
+- 首选已安装并登录 [Claude Code CLI](https://code.claude.com/docs/en/setup)，
+  也可以只安装 Codex CLI 或 OpenCode CLI；
 - 首次 `bootstrap` 时可访问 Python 依赖源；
 - 至少一份 GW/AP 日志、无后缀 `collectDebuginfo`、日志目录或安全归档。
 
@@ -20,6 +23,7 @@ Skill 不需要也不会索取当前 CLI 模型的 API Key。模型提供商、�
 
 推荐只保留一份 Git 检出，再用仓库自带脚本把它注册到三个 CLI 的用户级 Skill
 目录。以后更新、校验和回滚都针对这一份副本，不会出现三个复制版本不一致。
+安装器会自动查找 Python 3.14、3.13、3.12 或 3.11，并优先注册 Claude Code。
 
 ### 2.1 Windows 11（PowerShell）
 
@@ -37,7 +41,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$skillDir\scripts\setup_use
 
 它不会覆盖已存在的普通目录，也不会改写指向其他位置的链接。先预览而不修改时，
 加上 `-PlanOnly`。只安装某一个 CLI 时使用 `-Clients Codex`、
-`-Clients Claude` 或 `-Clients OpenCode`。
+`-Clients Claude` 或 `-Clients OpenCode`。未安装的辅助 CLI 只会产生提示，不会
+导致 Skill 安装失败。
 
 ### 2.2 Linux / macOS
 
@@ -50,11 +55,33 @@ bash "$skill_dir/scripts/setup_user_skill.sh" --clients all --bootstrap --valida
 先预览时加 `--plan`；只注册部分 CLI 时，例如使用
 `--clients codex,claude`。
 
+### 2.3 Claude Code 首次使用
+
+安装完成后，在任意工作目录启动 `claude`，输入 `/skills` 确认
+`gw-ap-debug` 已出现，然后一条消息启动诊断：
+
+```text
+/gw-ap-debug D:\logs\gw D:\logs\ap 诊断 AP 频繁离线；使用当前 Claude 模型完成诊断，并允许读取内置方法和本地限界脱敏证据
+```
+
+路径、问题描述和宿主模型授权已经完整时，Skill 会直接开始，不再逐项询问。
+它会在准备、证据检索、最终校验三个阶段给出简短进度，并在校验通过后返回最终
+报告。如果安装前 Claude Code 已经处于运行状态且 `/skills` 没有刷新，重启一次
+Claude Code。
+
 ## 3. 手动从 `skillonly` 分支安装
 
 仓库地址：`https://github.com/mrrabbitss/debug-platform.git`
 
-### 3.1 Codex 与 OpenCode 共用安装
+### 3.1 Claude Code 安装
+
+进入项目根目录后执行：
+
+```powershell
+git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug-platform.git .claude/skills/gw-ap-debug
+```
+
+### 3.2 Codex 与 OpenCode 共用安装
 
 两者都能发现 `.agents/skills`。进入需要使用该 Skill 的项目根目录后执行：
 
@@ -69,14 +96,6 @@ git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug
 git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug-platform.git .opencode/skills/gw-ap-debug
 ```
 
-### 3.2 Claude Code 安装
-
-进入项目根目录后执行：
-
-```powershell
-git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug-platform.git .claude/skills/gw-ap-debug
-```
-
 ### 3.3 用户级安装
 
 需要让多个项目共用时，可以安装到用户目录：
@@ -87,28 +106,31 @@ git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug
 | Claude Code | `~/.claude/skills/gw-ap-debug` |
 | OpenCode | `~/.config/opencode/skills/gw-ap-debug` |
 
-例如在 PowerShell 中为 Codex 安装：
+例如在 PowerShell 中为 Claude Code 安装：
 
 ```powershell
-git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug-platform.git "$HOME/.agents/skills/gw-ap-debug"
+git clone --branch skillonly --single-branch https://github.com/mrrabbitss/debug-platform.git "$HOME/.claude/skills/gw-ap-debug"
 ```
 
 目标目录已存在时不要覆盖或嵌套克隆；应进入已有目录执行本文的更新流程。
 
 ## 4. 初始化运行环境
 
-将 `<SKILL_DIR>` 替换为包含 `SKILL.md` 的绝对目录。先检查软件包和 Python：
+将 `<SKILL_DIR>` 替换为包含 `SKILL.md` 的绝对目录。Windows 11 使用自带的
+PowerShell 包装器，它会自动找到兼容 Python：
 
 ```powershell
-python "<SKILL_DIR>/scripts/debug_platform_skill.py" doctor --check package
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" doctor --check package
 ```
 
 首次安装或锁文件发生变化时初始化独立后端环境：
 
 ```powershell
-python "<SKILL_DIR>/scripts/debug_platform_skill.py" bootstrap
-python "<SKILL_DIR>/scripts/debug_platform_skill.py" doctor --check host-agent
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" bootstrap
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" doctor --check host-agent
 ```
+
+Linux/macOS 对应入口为 `bash "<SKILL_DIR>/scripts/gw_ap_debug.sh"`。
 
 虚拟环境、SQLite 数据库、上传日志、运行日志、验证密钥和诊断输出不会写入
 Skill 安装目录。默认状态目录为：
@@ -127,13 +149,14 @@ $env:GW_AP_DEBUG_STATE_DIR = "D:\gw-ap-debug-state"
 
 ## 5. 使用当前 CLI 内置模型诊断
 
-在 CLI 中明确要求使用 `gw-ap-debug` Skill，并授权当前模型读取内置诊断方法和
+在 Claude Code 中优先直接使用 `/gw-ap-debug`。在其他 CLI 中明确要求使用
+`gw-ap-debug` Skill，并授权当前模型读取内置诊断方法和
 经过本地限界、脱敏后的证据。原始日志不会发送给宿主模型。
 
 也可以由 CLI 按 Skill 指令执行以下准备命令：
 
 ```powershell
-python "<SKILL_DIR>/scripts/debug_platform_skill.py" run --mode host-agent --approve-host-model-egress --title "问题标题" --gw-log "D:\logs\gw" --ap-log "D:\logs\ap"
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" run --mode host-agent --approve-host-model-egress --title "问题标题" --gw-log "D:\logs\gw" --ap-log "D:\logs\ap"
 ```
 
 至少提供 `--gw-log`、`--ap-log` 或 `--log` 之一。输入可以是单个日志、
@@ -153,7 +176,7 @@ python "<SKILL_DIR>/scripts/debug_platform_skill.py" run --mode host-agent --app
 只验证上传、解析、规则诊断和报告链路时，可以完全不调用模型：
 
 ```powershell
-python "<SKILL_DIR>/scripts/debug_platform_skill.py" run --mode deterministic --title "本地冒烟" --log "D:\logs\collectDebuginfo.txt"
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" run --mode deterministic --title "本地冒烟" --log "D:\logs\collectDebuginfo.txt"
 ```
 
 确定性模式适合安装验收，但不等同于宿主模型完成的故障树综合诊断。
@@ -166,7 +189,7 @@ python "<SKILL_DIR>/scripts/debug_platform_skill.py" run --mode deterministic --
 python -B -m unittest discover -s tests -v
 python -B scripts/check_provenance.py
 python -B scripts/validate_release.py
-python scripts/debug_platform_skill.py doctor --check host-agent
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\gw_ap_debug.ps1 doctor --check host-agent
 ```
 
 预期结果：
@@ -194,8 +217,8 @@ bash "<SKILL_DIR>/scripts/setup_user_skill.sh" --clients all --update --bootstra
 
 ```powershell
 git -C "<SKILL_DIR>" pull --ff-only origin skillonly
-python "<SKILL_DIR>/scripts/debug_platform_skill.py" bootstrap
-python "<SKILL_DIR>/scripts/debug_platform_skill.py" doctor --check host-agent
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" bootstrap
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" doctor --check host-agent
 ```
 
 运行状态位于 Skill 外部，正常更新不会删除已有案例。更新前仍建议备份自定义状态
@@ -207,13 +230,14 @@ python "<SKILL_DIR>/scripts/debug_platform_skill.py" doctor --check host-agent
 ### CLI 没有发现 Skill
 
 - 确认路径末端是 `gw-ap-debug/SKILL.md`，而不是多嵌套了一层仓库目录；
-- 重启 CLI 或重新打开项目；
+- Claude Code 中先运行 `/skills`；顶层 Skill 目录是会话启动后首次创建时重启一次；
 - OpenCode 禁用外部 Skill 时使用 `.opencode/skills`；
 - Claude Code 使用 `.claude/skills`，Codex 使用 `.agents/skills`。
 
 ### `doctor` 报 Python 版本不支持
 
-安装 Python 3.11 至 3.14，并确保执行命令的 `python` 指向该版本。
+安装 64 位 Python 3.11 至 3.14。Windows 包装器会依次检查 Python Launcher
+中的 3.14、3.13、3.12、3.11，再检查 PATH；通常不需要手动调整 `python`。
 
 ### 更新后提示环境指纹不匹配
 
@@ -236,5 +260,6 @@ CLI 已配置的可用模型后重新执行；不要把模型 API Key 传给 Ski
 Commit 图谱、完整知识治理、全局轨迹回放、PostgreSQL/Qdrant 或 Docker 部署。
 
 更细的安装路径、状态目录和凭据隔离说明见
-[`references/installation.md`](references/installation.md)，执行约束见
+[`references/installation.md`](references/installation.md)，Claude Code 的
+交互约定见 [`references/claude-code.md`](references/claude-code.md)，执行约束见
 [`SKILL.md`](SKILL.md)。

@@ -45,7 +45,7 @@ import zipfile
 DEFAULT_BASE_URL = "http://127.0.0.1:8000/api/v1"
 DEFAULT_BACKEND_HOST = "127.0.0.1"
 DEFAULT_BACKEND_PORT = 8000
-SKILL_VERSION = "0.3.4"
+SKILL_VERSION = "0.4.0"
 MIN_PYTHON = (3, 11)
 MAX_PYTHON_EXCLUSIVE = (3, 15)
 DEFAULT_MAX_DIRECTORY_FILES = 20_000
@@ -2023,8 +2023,8 @@ def write_host_agent_bundle(
         "reasoning_model": {
             "mode": "host_cli_configured_model",
             "instruction": (
-                "Use the model already selected in the current OpenCode, Claude Code, "
-                "or Codex CLI session. Do not call a separate model API."
+                "Use the model already selected in the current Claude Code, Codex CLI, "
+                "or OpenCode CLI session. Do not call a separate model API."
             ),
         },
         "deterministic_baseline": result,
@@ -2099,6 +2099,8 @@ def write_host_agent_bundle(
     }
     atomic_write_json(bundle_dir / "host-result-template.json", template)
     script = Path(__file__).resolve()
+    windows_launcher = script.with_name("gw_ap_debug.ps1")
+    posix_launcher = script.with_name("gw_ap_debug.sh")
     instructions = f"""# Host-agent continuation
 
 The current CLI session model is the only reasoning model for this phase. Do not invoke a separate model API.
@@ -2110,14 +2112,18 @@ The current CLI session model is the only reasoning model for this phase. Do not
 5. Copy `host-result-template.json` to `host-diagnosis.json`, fill only the diagnosis fields, retain the exact schema and context hash, and cite only evidence IDs returned by the bundle or host tools. Keep narrative text diagnosis-only: do not copy baseline execution mode, synthesis status, agent status, or stop reason because `host-finalize` supplies the authoritative values. Put opaque evidence/method/fault-tree IDs only in their structured ID fields; never embed them in human-facing narrative.
 6. Finalize. A failed validation means the draft is not accepted; correct it without weakening the checks. After success, read `host-validation.json`, `manifest.json`, and `host-diagnosis.md`; report attempted/concluded/total and status counts exactly as finalized, where `INSUFFICIENT_EVIDENCE` is still a concluded node.
 
-```text
-python "{script}" host-context --bundle "{bundle_dir.resolve()}"
-python "{script}" host-read-methods --bundle "{bundle_dir.resolve()}" --round 1 --all
-python "{script}" host-search-evidence --bundle "{bundle_dir.resolve()}" --round 1 --query "keyword" --fault-tree-item-id FTITEM-...
-python "{script}" host-search-log --bundle "{bundle_dir.resolve()}" --round 2 --query "literal" --fault-tree-item-id FTITEM-...
-python "{script}" host-search-hypothesis-log --bundle "{bundle_dir.resolve()}" --round 3 --query "exact-field-name" --limit 20
-python "{script}" host-get-evidence --bundle "{bundle_dir.resolve()}" --round 2 --evidence-id EVIDENCE-ID --fault-tree-item-id FTITEM-...
-python "{script}" host-finalize --bundle "{bundle_dir.resolve()}" --input "{(bundle_dir / 'host-diagnosis.json').resolve()}"
+On Windows 11, use the complete PowerShell commands below. On Linux/macOS,
+replace the prefix through the script path with
+`bash "{posix_launcher}"` and keep the remaining arguments unchanged.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "{windows_launcher}" host-context --bundle "{bundle_dir.resolve()}"
+powershell -NoProfile -ExecutionPolicy Bypass -File "{windows_launcher}" host-read-methods --bundle "{bundle_dir.resolve()}" --round 1 --all
+powershell -NoProfile -ExecutionPolicy Bypass -File "{windows_launcher}" host-search-evidence --bundle "{bundle_dir.resolve()}" --round 1 --query "keyword" --fault-tree-item-id FTITEM-...
+powershell -NoProfile -ExecutionPolicy Bypass -File "{windows_launcher}" host-search-log --bundle "{bundle_dir.resolve()}" --round 2 --query "literal" --fault-tree-item-id FTITEM-...
+powershell -NoProfile -ExecutionPolicy Bypass -File "{windows_launcher}" host-search-hypothesis-log --bundle "{bundle_dir.resolve()}" --round 3 --query "exact-field-name" --limit 20
+powershell -NoProfile -ExecutionPolicy Bypass -File "{windows_launcher}" host-get-evidence --bundle "{bundle_dir.resolve()}" --round 2 --evidence-id EVIDENCE-ID --fault-tree-item-id FTITEM-...
+powershell -NoProfile -ExecutionPolicy Bypass -File "{windows_launcher}" host-finalize --bundle "{bundle_dir.resolve()}" --input "{(bundle_dir / 'host-diagnosis.json').resolve()}"
 ```
 """
     (bundle_dir / "host-agent-instructions.md").write_text(instructions, encoding="utf-8")

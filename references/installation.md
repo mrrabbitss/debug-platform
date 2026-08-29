@@ -2,6 +2,24 @@
 
 The Skill follows the Agent Skills directory format. Keep the complete directory together so relative `scripts/`, `references/`, and `runtime/` paths continue to work.
 
+## Primary Windows 11 host
+
+Claude Code CLI is the primary host. Install once at user scope so the Skill is
+available in every local project:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_user_skill.ps1 -Clients All -RunBootstrap -RunValidation
+```
+
+The installer registers Claude first, then the Codex and OpenCode compatibility
+paths. It automatically selects Python 3.14, 3.13, 3.12, or 3.11 and reports
+which CLI executables are currently discoverable. A missing auxiliary CLI is a
+warning, not an installation failure.
+
+After installation, start Claude Code, run `/skills`, and invoke
+`/gw-ap-debug <log paths> <symptom>`. See [claude-code.md](claude-code.md) for
+the concise interaction contract.
+
 ## Project scope
 
 - Codex: `<repo>/.agents/skills/gw-ap-debug/SKILL.md`
@@ -61,4 +79,8 @@ python "<SKILL_DIR>/scripts/debug_platform_skill.py" sync-methods --fault-tree /
 
 Existing, different method files are preserved unless `--force` is explicit.
 
-In commands, replace `<SKILL_DIR>` with the absolute directory containing `SKILL.md`; the CLI may be running from an unrelated project directory. Run `doctor --check package`, then `bootstrap`, then `doctor --check host-agent` after installation.
+In commands, replace `<SKILL_DIR>` with the absolute directory containing
+`SKILL.md`; the CLI may be running from an unrelated project directory. On
+Windows prefer `scripts\gw_ap_debug.ps1`; on Linux/macOS prefer
+`scripts/gw_ap_debug.sh`. Run `doctor --check package`, then `bootstrap`, then
+`doctor --check host-agent` after installation.

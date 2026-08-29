@@ -1,6 +1,8 @@
 # Optional backend-model mode
 
-Use this mode only when the user explicitly wants the embedded backend to call an approved OpenAI-compatible endpoint. It is not needed for OpenCode, Claude Code, or Codex host-model reasoning.
+Use this mode only when the user explicitly wants the embedded backend to call
+an approved OpenAI-compatible endpoint. It is not needed for Claude Code,
+Codex CLI, or OpenCode CLI host-model reasoning.
 
 ## Configure safely
 

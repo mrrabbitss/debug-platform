@@ -1,7 +1,7 @@
 {
   "schema": "gw-ap-debug-skill-manifest/v1",
   "name": "gw-ap-debug",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "default_execution_mode": "host-agent",
   "source": {
     "repository": "debugplatform",
@@ -22,6 +22,14 @@
   },
   "entrypoint": "scripts/debug_platform_skill.py",
   "python": ">=3.11,<3.15",
+  "host_cli": {
+    "primary": "Claude Code CLI on Windows 11",
+    "secondary": [
+      "Codex CLI",
+      "OpenCode CLI"
+    ],
+    "reasoning_model": "inherit from the active host CLI session"
+  },
   "distribution_status": "PUBLIC_RELEASE_WITH_BUNDLED_METHODS_BY_OWNER_DIRECTION",
   "tests": "python -B -m unittest discover -s tests -v",
   "release_validation": [
@@ -31,6 +39,8 @@
   "deployment": {
     "guide": "DEPLOYMENT.md",
     "windows_setup": "scripts/setup_user_skill.ps1",
-    "posix_setup": "scripts/setup_user_skill.sh"
+    "posix_setup": "scripts/setup_user_skill.sh",
+    "windows_launcher": "scripts/gw_ap_debug.ps1",
+    "posix_launcher": "scripts/gw_ap_debug.sh"
   }
 }

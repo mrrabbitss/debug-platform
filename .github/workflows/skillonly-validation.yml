@@ -31,6 +31,16 @@ jobs:
         run: python -B scripts/check_provenance.py
       - name: Release envelope
         run: python -B scripts/validate_release.py
+      - name: Cross-platform launcher
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GW_AP_DEBUG_PYTHON: python
+        run: bash scripts/gw_ap_debug.sh doctor --check package
+      - name: Windows launcher
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\scripts\gw_ap_debug.ps1 -Python python doctor --check package
       - name: Windows installer registration
         if: runner.os == 'Windows'
         shell: powershell

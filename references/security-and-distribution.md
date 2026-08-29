@@ -32,9 +32,9 @@ The bundled `fault-tree.md` and `log-analysis.md` are exact local method copies 
 
 For v0.3.5, the repository owner explicitly directed publication of the complete
 MVP with the bundled methods to the public `skillonly` branch on 2026-08-28.
-The v0.3.6 packaging update retains the same runtime and both method documents
-under that recorded repository-audience decision. A downstream publisher must
-make its own authorization decision.
+The v0.3.6 and v0.4.0 packaging/interaction updates retain the same runtime and
+both method documents under that recorded repository-audience decision. A
+downstream publisher must make its own authorization decision.
 
 For another audience or a later replacement, an authorized owner must choose one:
 

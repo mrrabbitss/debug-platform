@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-Registers this checkout as a user-level Skill for Codex, Claude Code, and OpenCode.
+Registers this checkout as a user-level Skill for Claude Code, Codex, and OpenCode.
 
 .DESCRIPTION
 The checkout remains the single canonical copy. The script creates directory
@@ -14,7 +14,7 @@ param(
     [ValidateSet("All", "Codex", "Claude", "OpenCode")]
     [string[]]$Clients = @("All"),
     [string]$HomeRoot = $HOME,
-    [string]$Python = "python",
+    [string]$Python = "",
     [switch]$Update,
     [switch]$RunBootstrap,
     [switch]$RunValidation,
@@ -23,6 +23,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $SkillRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+. (Join-Path $PSScriptRoot "python_runtime.ps1")
 
 function Write-Step([string]$Message) {
     Write-Host "[gw-ap-debug] $Message"
@@ -55,9 +56,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $SkillRoot "SKILL.md") -PathType Lea
     throw "SKILL.md is missing from canonical checkout: $SkillRoot"
 }
 
+$pythonRuntime = Resolve-GwApPython -Requested $Python
+Write-Step "Python $($pythonRuntime.Version): $($pythonRuntime.Display)"
+
 $selected = [Collections.Generic.List[string]]::new()
 if ($Clients -contains "All") {
-    @("Codex", "Claude", "OpenCode") | ForEach-Object { $selected.Add($_) }
+    @("Claude", "Codex", "OpenCode") | ForEach-Object { $selected.Add($_) }
 }
 else {
     $Clients | ForEach-Object {
@@ -103,6 +107,19 @@ foreach ($client in $selected) {
     Write-Step "Registered ${client}: $target"
 }
 
+$clientCommands = @{ Claude = "claude"; Codex = "codex"; OpenCode = "opencode" }
+foreach ($client in $selected) {
+    $command = $clientCommands[$client]
+    $resolved = Get-Command $command -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($resolved) {
+        $version = (& $command --version 2>$null | Select-Object -First 1)
+        Write-Step "$client CLI detected: $version"
+    }
+    else {
+        Write-Warning "$client Skill is registered, but its CLI command '$command' is not currently available."
+    }
+}
+
 if ($Update) {
     if (-not (Test-Path -LiteralPath (Join-Path $SkillRoot ".git"))) {
         throw "Update requires a Git checkout: $SkillRoot"
@@ -111,14 +128,23 @@ if ($Update) {
 }
 
 if ($RunBootstrap) {
-    Invoke-Checked $Python @("-B", (Join-Path $SkillRoot "scripts\debug_platform_skill.py"), "bootstrap")
+    Invoke-Checked $pythonRuntime.Command (@($pythonRuntime.PrefixArguments) + @("-B", (Join-Path $SkillRoot "scripts\debug_platform_skill.py"), "bootstrap"))
 }
 
 if ($RunValidation) {
-    Invoke-Checked $Python @("-B", "-m", "unittest", "discover", "-s", "tests", "-q")
-    Invoke-Checked $Python @("-B", (Join-Path $SkillRoot "scripts\check_provenance.py"))
-    Invoke-Checked $Python @("-B", (Join-Path $SkillRoot "scripts\validate_release.py"))
-    Invoke-Checked $Python @("-B", (Join-Path $SkillRoot "scripts\debug_platform_skill.py"), "doctor", "--check", "host-agent")
+    Invoke-Checked $pythonRuntime.Command (@($pythonRuntime.PrefixArguments) + @("-B", "-m", "unittest", "discover", "-s", "tests", "-q"))
+    Invoke-Checked $pythonRuntime.Command (@($pythonRuntime.PrefixArguments) + @("-B", (Join-Path $SkillRoot "scripts\check_provenance.py")))
+    Invoke-Checked $pythonRuntime.Command (@($pythonRuntime.PrefixArguments) + @("-B", (Join-Path $SkillRoot "scripts\validate_release.py")))
+    Invoke-Checked $pythonRuntime.Command (@($pythonRuntime.PrefixArguments) + @("-B", (Join-Path $SkillRoot "scripts\debug_platform_skill.py"), "doctor", "--check", "host-agent"))
 }
 
 Write-Step "Ready. Canonical checkout: $SkillRoot"
+if ($selected.Contains("Claude")) {
+    Write-Step "Claude Code: start 'claude', run '/skills' to confirm discovery, then invoke '/gw-ap-debug <log paths> <symptom>'."
+}
+if ($selected.Contains("Codex")) {
+    Write-Step "Codex CLI: start 'codex' and ask it to use `$gw-ap-debug for the supplied GW/AP logs."
+}
+if ($selected.Contains("OpenCode")) {
+    Write-Step "OpenCode CLI: start 'opencode' and ask it to use gw-ap-debug for the supplied GW/AP logs."
+}

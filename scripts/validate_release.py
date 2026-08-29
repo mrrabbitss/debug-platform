@@ -81,7 +81,22 @@ def main() -> int:
     )
     require(bool(re.fullmatch(r"\d+\.\d+\.\d+", version)), "Manifest version is semantic", "Manifest version is not x.y.z")
     require(metadata.get("metadata.version") == version, "Skill and manifest versions match", "SKILL.md and manifest versions differ")
+    require(
+        metadata.get("metadata.primary_host") == "Claude Code CLI on Windows 11",
+        "Claude Code on Windows 11 is the recorded primary host",
+        "Primary host metadata must be Claude Code CLI on Windows 11",
+    )
+    require(
+        "Windows 11 primary" in metadata.get("metadata.compatibility", "") and "Python >=3.11,<3.15" in metadata.get("metadata.compatibility", ""),
+        "Portable compatibility is explicit",
+        "Compatibility metadata must record Windows priority and Python range",
+    )
     require(manifest.get("name") == "gw-ap-debug", "Manifest name is canonical", "Manifest name must be gw-ap-debug")
+    require(
+        manifest.get("host_cli", {}).get("primary") == "Claude Code CLI on Windows 11",
+        "Manifest host priority matches the Skill",
+        "Manifest primary host differs from the Skill metadata",
+    )
     require(manifest.get("python") == ">=3.11,<3.15", "Python compatibility is explicit", "Python compatibility drifted")
     require(
         manifest.get("distribution_status") == "PUBLIC_RELEASE_WITH_BUNDLED_METHODS_BY_OWNER_DIRECTION",
@@ -94,10 +109,15 @@ def main() -> int:
         "VALIDATION.md",
         ".gitattributes",
         ".github/workflows/skillonly-validation.yml",
+        "agents/openai.yaml",
         "scripts/debug_platform_skill.py",
         "scripts/check_provenance.py",
+        "scripts/python_runtime.ps1",
+        "scripts/gw_ap_debug.ps1",
+        "scripts/gw_ap_debug.sh",
         "scripts/setup_user_skill.ps1",
         "scripts/setup_user_skill.sh",
+        "references/claude-code.md",
         "references/installation.md",
         "references/host-agent-mode.md",
         "references/capability-scope.md",
@@ -109,6 +129,23 @@ def main() -> int:
     attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8") if (ROOT / ".gitattributes").is_file() else ""
     require("* -text" in attrs, "Runtime byte-preservation rule exists", ".gitattributes must preserve runtime bytes")
     require("[DEPLOYMENT.md](DEPLOYMENT.md)" in skill_text, "SKILL.md routes to deployment guide", "SKILL.md must link DEPLOYMENT.md")
+    require("[claude-code.md](references/claude-code.md)" in skill_text, "SKILL.md routes to Claude Code guidance", "SKILL.md must link Claude Code guidance")
+
+    openai_yaml = (ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8") if (ROOT / "agents" / "openai.yaml").is_file() else ""
+    require("$gw-ap-debug" in openai_yaml, "Codex UI prompt names the Skill", "agents/openai.yaml must name $gw-ap-debug")
+    require("allow_implicit_invocation: true" in openai_yaml, "Implicit invocation remains enabled", "Codex implicit invocation policy drifted")
+
+    entrypoint_text = (ROOT / "scripts" / "debug_platform_skill.py").read_text(encoding="utf-8")
+    require(
+        f'SKILL_VERSION = "{version}"' in entrypoint_text,
+        "Runtime bundle metadata uses the release version",
+        "debug_platform_skill.py SKILL_VERSION differs from the manifest",
+    )
+    require(
+        "gw_ap_debug.ps1" in entrypoint_text and "gw_ap_debug.sh" in entrypoint_text,
+        "Generated host instructions route through portable launchers",
+        "Host continuation generation must reference both platform launchers",
+    )
 
     docs = [skill_path, ROOT / "DEPLOYMENT.md"] + sorted((ROOT / "references").glob("*.md"))
     missing_links: list[str] = []
