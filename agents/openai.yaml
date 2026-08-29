@@ -1,7 +1,7 @@
 interface:
   display_name: "GW/AP Debug"
   short_description: "Diagnose GW/AP logs with validated local evidence"
-  default_prompt: "Use $gw-ap-debug to diagnose the supplied GW/AP logs with the current CLI model and return a validated evidence-grounded report."
+  default_prompt: "Use $gw-ap-debug to diagnose the supplied GW/AP logs with the current CLI model. If another diagnostic Skill is supplied, parse and compose its Markdown knowledge first, then return a validated evidence-grounded report."
 
 policy:
   allow_implicit_invocation: true

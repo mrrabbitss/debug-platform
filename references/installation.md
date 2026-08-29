@@ -79,6 +79,15 @@ python "<SKILL_DIR>/scripts/debug_platform_skill.py" sync-methods --fault-tree /
 
 Existing, different method files are preserved unless `--force` is explicit.
 
+Complete diagnostic Skills can be parsed into external method packs and
+composed on top of this base. Their registry and cached Markdown live under
+`<state>/method-packs`; no imported code is executed. Use
+`import-skill-methods --skill <path> --dry-run` to preview, rerun without
+`--dry-run` to install, and use `list-method-packs` or `remove-method-pack` to
+inspect or revert. `run` and `diagnose` also accept repeatable
+`--diagnostic-skill <path>` options. See
+[composable-knowledge.md](composable-knowledge.md).
+
 In commands, replace `<SKILL_DIR>` with the absolute directory containing
 `SKILL.md`; the CLI may be running from an unrelated project directory. On
 Windows prefer `scripts\gw_ap_debug.ps1`; on Linux/macOS prefer

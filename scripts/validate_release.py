@@ -120,6 +120,7 @@ def main() -> int:
         "references/claude-code.md",
         "references/installation.md",
         "references/host-agent-mode.md",
+        "references/composable-knowledge.md",
         "references/capability-scope.md",
         "references/security-and-distribution.md",
     ]
@@ -136,6 +137,7 @@ def main() -> int:
     require("allow_implicit_invocation: true" in openai_yaml, "Implicit invocation remains enabled", "Codex implicit invocation policy drifted")
 
     entrypoint_text = (ROOT / "scripts" / "debug_platform_skill.py").read_text(encoding="utf-8")
+    windows_launcher_text = (ROOT / "scripts" / "gw_ap_debug.ps1").read_text(encoding="utf-8")
     require(
         f'SKILL_VERSION = "{version}"' in entrypoint_text,
         "Runtime bundle metadata uses the release version",
@@ -145,6 +147,23 @@ def main() -> int:
         "gw_ap_debug.ps1" in entrypoint_text and "gw_ap_debug.sh" in entrypoint_text,
         "Generated host instructions route through portable launchers",
         "Host continuation generation must reference both platform launchers",
+    )
+    require(
+        "import-skill-methods" in entrypoint_text
+        and "--diagnostic-skill" in entrypoint_text
+        and "MARKDOWN_ONLY_NO_IMPORTED_CODE_EXECUTION" in entrypoint_text,
+        "Composable diagnostic Skill importer is present",
+        "Composable diagnostic Skill importer or its no-execution policy is missing",
+    )
+    require(
+        "[composable-knowledge.md](references/composable-knowledge.md)" in skill_text,
+        "SKILL.md routes to composable diagnostic knowledge guidance",
+        "SKILL.md must link composable diagnostic knowledge guidance",
+    )
+    require(
+        "$CliPassthrough" in windows_launcher_text and "$SkillArguments" not in windows_launcher_text,
+        "Windows launcher passes --skill without PowerShell parameter-prefix collision",
+        "Windows launcher passthrough name collides with the public --skill option",
     )
 
     docs = [skill_path, ROOT / "DEPLOYMENT.md"] + sorted((ROOT / "references").glob("*.md"))

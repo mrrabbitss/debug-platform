@@ -1,7 +1,7 @@
 {
   "schema": "gw-ap-debug-skill-manifest/v1",
   "name": "gw-ap-debug",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "default_execution_mode": "host-agent",
   "source": {
     "repository": "debugplatform",
@@ -41,6 +41,7 @@
     "windows_setup": "scripts/setup_user_skill.ps1",
     "posix_setup": "scripts/setup_user_skill.sh",
     "windows_launcher": "scripts/gw_ap_debug.ps1",
-    "posix_launcher": "scripts/gw_ap_debug.sh"
+    "posix_launcher": "scripts/gw_ap_debug.sh",
+    "composable_knowledge": "references/composable-knowledge.md"
   }
 }

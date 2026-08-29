@@ -1,6 +1,6 @@
 # GW/AP Debug Skill-only MVP 部署指南
 
-本文适用于 `gw-ap-debug` v0.4.0。该分支是独立的 Skill-only MVP，
+本文适用于 `gw-ap-debug` v0.5.0。该分支是独立的 Skill-only MVP，
 不是 Debug Platform `main` 分支的后续版本。它不需要 Vue 前端、Docker、
 PostgreSQL 或 Qdrant。首选运行环境是 Windows 11 上的 Claude Code CLI；
 Codex CLI 和 OpenCode CLI 作为兼容入口。诊断推理始终使用当前宿主 CLI
@@ -147,6 +147,26 @@ $env:GW_AP_DEBUG_STATE_DIR = "D:\gw-ap-debug-state"
 
 不要把状态目录放进 Git 仓库或 Skill 安装目录。
 
+### 4.1 诊断前加入另一个完整 Skill 的知识
+
+如已有一个日志分析/综合诊断 Skill，可先预览它会加入哪些 Markdown：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" import-skill-methods --skill "D:\skills\complete-network-diagnosis" --dry-run
+```
+
+确认后去掉 `--dry-run` 完成导入。导入内容会在外部状态目录中变成有来源路径和
+SHA-256 的方法包，并与当前基础故障树、日志分析方法合并；不会执行被导入 Skill
+中的脚本或命令。查看和撤销：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" list-method-packs
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" remove-method-pack --name "complete-network-diagnosis"
+```
+
+Skill 格式、自动分类标题、显式 metadata 映射和限制详见
+[`references/composable-knowledge.md`](references/composable-knowledge.md)。
+
 ## 5. 使用当前 CLI 内置模型诊断
 
 在 Claude Code 中优先直接使用 `/gw-ap-debug`。在其他 CLI 中明确要求使用
@@ -156,11 +176,13 @@ $env:GW_AP_DEBUG_STATE_DIR = "D:\gw-ap-debug-state"
 也可以由 CLI 按 Skill 指令执行以下准备命令：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" run --mode host-agent --approve-host-model-egress --title "问题标题" --gw-log "D:\logs\gw" --ap-log "D:\logs\ap"
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" run --mode host-agent --approve-host-model-egress --title "问题标题" --diagnostic-skill "D:\skills\complete-network-diagnosis" --gw-log "D:\logs\gw" --ap-log "D:\logs\ap"
 ```
 
 至少提供 `--gw-log`、`--ap-log` 或 `--log` 之一。输入可以是单个日志、
-无后缀 `collectDebuginfo`、目录或受支持的归档。
+无后缀 `collectDebuginfo`、目录或受支持的归档。没有外部诊断 Skill 时省略
+`--diagnostic-skill`；多个 Skill 可重复填写该参数。该参数会先解析/合并知识，再
+开始分诊和综合诊断。
 
 `run` 只完成本地准备，不是最终诊断。CLI 必须继续读取输出目录中的
 `host-agent-instructions.md`，完成只读工具循环，并且仅在以下两个条件同时成立
@@ -194,7 +216,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\gw_ap_debug.ps1 doct
 
 预期结果：
 
-- 44 个单元测试全部通过；
+- 49 个单元测试全部通过；
 - provenance 输出 `"ok": true`；
 - release validation 输出 `"ok": true`；
 - host-agent doctor 没有缺失依赖或版本错误。
@@ -255,7 +277,8 @@ CLI 已配置的可用模型后重新执行；不要把模型 API Key 传给 Ski
 
 ## 10. 能力边界
 
-该 MVP 保留日志安全接入、GW/AP 来源、解析、方法必查、故障树覆盖、限界检索、
+该 MVP 保留日志安全接入、GW/AP 来源、解析、内置方法与外部诊断 Skill 知识组合、
+方法必查、故障树覆盖、限界检索、
 证据校验和报告生成能力。它不包含主平台的 Vue 管理界面、RBAC、多租户、代码和
 Commit 图谱、完整知识治理、全局轨迹回放、PostgreSQL/Qdrant 或 Docker 部署。
 

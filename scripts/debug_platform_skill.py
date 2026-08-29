@@ -36,7 +36,7 @@ import time
 import tomllib
 from typing import Any, Iterable, Iterator
 import unicodedata
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 import uuid
@@ -45,7 +45,7 @@ import zipfile
 DEFAULT_BASE_URL = "http://127.0.0.1:8000/api/v1"
 DEFAULT_BACKEND_HOST = "127.0.0.1"
 DEFAULT_BACKEND_PORT = 8000
-SKILL_VERSION = "0.4.0"
+SKILL_VERSION = "0.5.0"
 MIN_PYTHON = (3, 11)
 MAX_PYTHON_EXCLUSIVE = (3, 15)
 DEFAULT_MAX_DIRECTORY_FILES = 20_000
@@ -68,6 +68,13 @@ HOST_HYPOTHESIS_GENERIC_FIELD_SUFFIXES = frozenset({
     "state", "status",
 })
 METHOD_FILENAMES = ("故障树.md", "日志分析.md")
+METHOD_PACK_SCHEMA = "gw-ap-debug-method-pack/v1"
+METHOD_PACK_REGISTRY_SCHEMA = "gw-ap-debug-method-pack-registry/v1"
+DEFAULT_MAX_SKILL_MARKDOWN_FILES = 32
+DEFAULT_MAX_SKILL_MARKDOWN_BYTES = 2 * 1024 * 1024
+DEFAULT_MAX_SKILL_MARKDOWN_FILE_BYTES = 512 * 1024
+MARKDOWN_LINK_PATTERN = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+MARKDOWN_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 TERMINAL_JOB_STATES = {
     "COMPLETED",
     "FAILED",
@@ -268,6 +275,517 @@ def synchronize_methods(
             "sha256": source_hash,
         })
     return methods_dir, results
+
+
+def method_pack_root(state_dir: Path) -> Path:
+    return resolve_state_dir(state_dir) / "method-packs"
+
+
+def method_pack_registry_path(state_dir: Path) -> Path:
+    return method_pack_root(state_dir) / "registry.json"
+
+
+def _skill_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """Parse the small flat/nested metadata subset needed for portable Skills."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.startswith("---\n"):
+        return {}, normalized
+    closing = normalized.find("\n---\n", 4)
+    if closing < 0:
+        raise SkillError("Imported Skill has an unterminated YAML frontmatter block")
+    metadata: dict[str, str] = {}
+    parent: str | None = None
+    for raw_line in normalized[4:closing].splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        match = re.match(r"^(\s*)([A-Za-z_][\w-]*):\s*(.*?)\s*$", raw_line)
+        if not match:
+            continue
+        indent, key, value = match.groups()
+        value = value.strip().strip('"\'')
+        if not indent:
+            parent = key if not value else None
+            if value:
+                metadata[key] = value
+        elif parent:
+            metadata[f"{parent}.{key}"] = value
+    return metadata, normalized[closing + 5:].lstrip("\n")
+
+
+def _path_within(root: Path, candidate: Path, *, label: str) -> Path:
+    resolved = candidate.expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise SkillError(f"{label} escapes the imported Skill directory: {candidate}") from exc
+    if not resolved.is_file():
+        raise SkillError(f"{label} is not a readable file: {resolved}")
+    if resolved.suffix.casefold() not in {".md", ".markdown"}:
+        raise SkillError(f"{label} must be a Markdown file: {resolved}")
+    return resolved
+
+
+def _resolve_imported_skill(value: str | Path) -> tuple[Path, Path]:
+    requested = Path(value).expanduser().resolve()
+    skill_file = requested / "SKILL.md" if requested.is_dir() else requested
+    if skill_file.name.casefold() != "skill.md" or not skill_file.is_file():
+        raise SkillError(f"Imported diagnostic Skill must contain SKILL.md: {requested}")
+    return skill_file.parent.resolve(), skill_file.resolve()
+
+
+def _metadata_paths(value: str | None) -> list[str]:
+    if not value:
+        return []
+    rendered = value.strip()
+    if rendered.startswith("["):
+        try:
+            decoded = json.loads(rendered)
+        except json.JSONDecodeError as exc:
+            raise SkillError(f"Invalid diagnostic Skill metadata path list: {value}") from exc
+        if not isinstance(decoded, list) or not all(isinstance(item, str) for item in decoded):
+            raise SkillError("Diagnostic Skill metadata path list must contain only strings")
+        return [item.strip() for item in decoded if item.strip()]
+    return [item.strip() for item in rendered.split(";") if item.strip()]
+
+
+def _linked_markdown_paths(document: Path, skill_root: Path, text: str) -> list[Path]:
+    result: list[Path] = []
+    for raw_target in MARKDOWN_LINK_PATTERN.findall(text):
+        rendered = raw_target.strip()
+        if rendered.startswith("<") and ">" in rendered:
+            target = rendered[1:rendered.index(">")]
+        else:
+            target = re.split(r"\s+[\"']", rendered, maxsplit=1)[0]
+        target = target.split("#", 1)[0].split("?", 1)[0]
+        if not target or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target):
+            continue
+        candidate = document.parent / unquote(target)
+        if candidate.suffix.casefold() not in {".md", ".markdown"}:
+            continue
+        resolved = _path_within(
+            skill_root,
+            candidate,
+            label="Linked diagnostic Skill document",
+        )
+        if resolved not in result:
+            result.append(resolved)
+    return result
+
+
+def _load_skill_markdown_documents(
+    skill_root: Path,
+    skill_file: Path,
+    *,
+    max_files: int,
+    max_total_bytes: int,
+    max_file_bytes: int,
+) -> dict[Path, str]:
+    if max_files < 1 or max_total_bytes < 1 or max_file_bytes < 1:
+        raise SkillError("Imported Skill Markdown limits must be positive")
+    queue = [skill_file]
+    documents: dict[Path, str] = {}
+    total_bytes = 0
+    while queue:
+        document = queue.pop(0)
+        if document in documents:
+            continue
+        if len(documents) >= max_files:
+            raise SkillError(f"Imported Skill exceeds the Markdown file limit ({max_files})")
+        size = document.stat().st_size
+        if size > max_file_bytes:
+            raise SkillError(f"Imported Skill Markdown file exceeds {max_file_bytes} bytes: {document}")
+        total_bytes += size
+        if total_bytes > max_total_bytes:
+            raise SkillError(f"Imported Skill exceeds the Markdown byte limit ({max_total_bytes})")
+        content = _decode_diagnostic_method(document)
+        documents[document] = content
+        for linked in _linked_markdown_paths(document, skill_root, content):
+            if linked not in documents and linked not in queue:
+                queue.append(linked)
+    return documents
+
+
+def _markdown_sections(text: str) -> list[tuple[str, str]]:
+    """Return rendered sections plus inherited heading context for role detection."""
+    lines = text.splitlines()
+    sections: list[tuple[str, str]] = []
+    heading_stack: list[str] = []
+    current: list[str] = []
+    current_context = ""
+
+    def flush() -> None:
+        if current and any(line.strip() for line in current):
+            sections.append((current_context, "\n".join(current).strip()))
+
+    for line in lines:
+        heading = MARKDOWN_HEADING_PATTERN.match(line)
+        if heading:
+            flush()
+            level = len(heading.group(1))
+            title = heading.group(2).strip()
+            heading_stack[level - 1:] = []
+            while len(heading_stack) < level - 1:
+                heading_stack.append("")
+            heading_stack.append(title)
+            current_context = " / ".join(item for item in heading_stack if item)
+            current = [line]
+        else:
+            current.append(line)
+    flush()
+    return sections
+
+
+def _diagnostic_role_score(role: str, relative_path: str, context: str, body: str) -> int:
+    locator = f"{relative_path} {context}".casefold()
+    sample = f"{locator}\n{body[:8000].casefold()}"
+    if role == "fault_tree":
+        terms = (
+            ("故障树", 9), ("综合诊断", 8), ("根因分析", 6), ("根因", 4),
+            ("排障", 4), ("排查", 3), ("诊断", 3), ("fault tree", 9),
+            ("root cause", 6), ("diagnosis", 4), ("hypothesis", 4),
+        )
+    else:
+        terms = (
+            ("日志分析", 9), ("日志模式", 6), ("日志", 3), ("关键字", 3),
+            ("关键词", 3), ("正则", 3), ("log analysis", 9), ("log pattern", 7),
+            ("log signature", 7), ("pattern", 3), ("signature", 3),
+            ("timeline", 3), ("event correlation", 5),
+        )
+    score = sum(weight for term, weight in terms if term in sample)
+    if role == "log_analysis" and re.search(r"(?:^|[/_.-])logs?(?:[/_.-]|$)", locator):
+        score += 3
+    if role == "fault_tree" and re.search(r"(?:fault|diagnos|root[-_ ]?cause)", locator):
+        score += 3
+    return score
+
+
+def _explicit_role_documents(
+    skill_root: Path,
+    values: Iterable[str],
+    documents: dict[Path, str],
+    *,
+    label: str,
+) -> list[Path]:
+    selected: list[Path] = []
+    for value in values:
+        candidate = Path(value)
+        path = _path_within(
+            skill_root,
+            candidate if candidate.is_absolute() else skill_root / candidate,
+            label=label,
+        )
+        if path not in documents:
+            documents[path] = _decode_diagnostic_method(path)
+        if path not in selected:
+            selected.append(path)
+    return selected
+
+
+def parse_diagnostic_skill(
+    skill_path: str | Path,
+    *,
+    fault_tree_paths: Iterable[str] = (),
+    log_analysis_paths: Iterable[str] = (),
+    max_files: int = DEFAULT_MAX_SKILL_MARKDOWN_FILES,
+    max_total_bytes: int = DEFAULT_MAX_SKILL_MARKDOWN_BYTES,
+    max_file_bytes: int = DEFAULT_MAX_SKILL_MARKDOWN_FILE_BYTES,
+) -> dict[str, Any]:
+    """Parse Markdown knowledge from another Skill without executing any of its code."""
+    skill_root, skill_file = _resolve_imported_skill(skill_path)
+    skill_text = _decode_diagnostic_method(skill_file)
+    metadata, skill_body = _skill_frontmatter(skill_text)
+    name = metadata.get("name", "").strip()
+    description = metadata.get("description", "").strip()
+    if not name or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name):
+        raise SkillError("Imported diagnostic Skill frontmatter requires a portable name")
+    documents = _load_skill_markdown_documents(
+        skill_root,
+        skill_file,
+        max_files=max_files,
+        max_total_bytes=max_total_bytes,
+        max_file_bytes=max_file_bytes,
+    )
+    documents[skill_file] = skill_body
+
+    metadata_fault = metadata.get("metadata.gw_ap_debug_fault_tree") or metadata.get(
+        "metadata.gw-ap-debug-fault-tree"
+    )
+    metadata_log = metadata.get("metadata.gw_ap_debug_log_analysis") or metadata.get(
+        "metadata.gw-ap-debug-log-analysis"
+    )
+    explicit_fault = [*fault_tree_paths, *_metadata_paths(metadata_fault)]
+    explicit_log = [*log_analysis_paths, *_metadata_paths(metadata_log)]
+    selected_explicit = {
+        "fault_tree": _explicit_role_documents(
+            skill_root, explicit_fault, documents, label="Fault-tree knowledge document"
+        ),
+        "log_analysis": _explicit_role_documents(
+            skill_root, explicit_log, documents, label="Log-analysis knowledge document"
+        ),
+    }
+    if len(documents) > max_files:
+        raise SkillError(f"Imported Skill exceeds the Markdown file limit ({max_files})")
+    explicit_sizes = [path.stat().st_size for path in documents]
+    if any(size > max_file_bytes for size in explicit_sizes):
+        raise SkillError(f"Imported Skill contains a Markdown file larger than {max_file_bytes} bytes")
+    if sum(explicit_sizes) > max_total_bytes:
+        raise SkillError(f"Imported Skill exceeds the Markdown byte limit ({max_total_bytes})")
+
+    roles: dict[str, dict[str, Any]] = {}
+    for role, output_name in (("fault_tree", "故障树.md"), ("log_analysis", "日志分析.md")):
+        chunks: list[str] = []
+        sources: list[dict[str, Any]] = []
+        explicit_paths = selected_explicit[role]
+        if explicit_paths:
+            for path in explicit_paths:
+                _metadata, body = _skill_frontmatter(documents[path])
+                rendered = body.strip()
+                if rendered:
+                    chunks.append(rendered)
+                    sources.append({
+                        "path": path.relative_to(skill_root).as_posix(),
+                        "selection": "explicit",
+                        "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+                    })
+        else:
+            for path in sorted(documents, key=lambda item: item.relative_to(skill_root).as_posix()):
+                relative = path.relative_to(skill_root).as_posix()
+                _metadata, body = _skill_frontmatter(documents[path])
+                selected_sections: list[str] = []
+                for context, section in _markdown_sections(body):
+                    if _diagnostic_role_score(role, relative, context, section) >= 4:
+                        selected_sections.append(section)
+                if selected_sections:
+                    rendered = "\n\n".join(dict.fromkeys(selected_sections)).strip()
+                    chunks.append(rendered)
+                    sources.append({
+                        "path": relative,
+                        "selection": "automatic",
+                        "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+                    })
+        if chunks:
+            content = "\n\n---\n\n".join(dict.fromkeys(chunks)).strip() + "\n"
+            roles[output_name] = {
+                "content": content,
+                "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                "sources": sources,
+            }
+    if not roles:
+        raise SkillError(
+            "No log-analysis or comprehensive-diagnosis knowledge was detected. "
+            "Add gw_ap_debug_fault_tree/gw_ap_debug_log_analysis metadata or pass explicit role paths."
+        )
+    identity = {
+        "name": name,
+        "description": description,
+        "roles": {
+            filename: {
+                "content_sha256": item["content_sha256"],
+                "sources": item["sources"],
+            }
+            for filename, item in sorted(roles.items())
+        },
+    }
+    content_sha256 = canonical_json_sha256(identity)
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-._").lower() or "skill"
+    return {
+        "schema": METHOD_PACK_SCHEMA,
+        "id": f"{slug[:48]}-{content_sha256[:12]}",
+        "name": name,
+        "description": description,
+        "source_root": str(skill_root),
+        "content_sha256": content_sha256,
+        "roles": roles,
+        "parsed_markdown_files": len(documents),
+        "execution_policy": "MARKDOWN_ONLY_NO_IMPORTED_CODE_EXECUTION",
+    }
+
+
+def _new_method_pack_registry() -> dict[str, Any]:
+    return {
+        "schema": METHOD_PACK_REGISTRY_SCHEMA,
+        "base": {},
+        "packs": [],
+        "active": {},
+    }
+
+
+def load_method_pack_registry(state_dir: Path) -> dict[str, Any]:
+    path = method_pack_registry_path(state_dir)
+    if not path.is_file():
+        return _new_method_pack_registry()
+    registry = read_json_file(path)
+    if not isinstance(registry, dict) or registry.get("schema") != METHOD_PACK_REGISTRY_SCHEMA:
+        raise SkillError(f"Unsupported diagnostic method-pack registry: {path}")
+    if not isinstance(registry.get("packs"), list):
+        raise SkillError(f"Invalid diagnostic method-pack registry: {path}")
+    return registry
+
+
+def _initialize_method_pack_base(root: Path, state_dir: Path, registry: dict[str, Any]) -> None:
+    pack_root = method_pack_root(state_dir)
+    base_dir = pack_root / "base"
+    methods_dir, _results = synchronize_methods(root, state_dir)
+    base = registry.setdefault("base", {})
+    for filename in METHOD_FILENAMES:
+        base_path = base_dir / filename
+        if not base_path.is_file():
+            source = methods_dir / filename
+            base_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(base_path, _decode_diagnostic_method(source))
+        content = _decode_diagnostic_method(base_path)
+        base[filename] = {
+            "path": f"base/{filename}",
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }
+
+
+def _method_pack_role_path(state_dir: Path, pack: dict[str, Any], filename: str) -> Path:
+    relative = Path(str(pack.get("path") or "")) / filename
+    return _path_within(method_pack_root(state_dir), method_pack_root(state_dir) / relative, label="Method-pack role")
+
+
+def rebuild_composed_methods(
+    root: Path,
+    state_dir: Path,
+    registry: dict[str, Any],
+    *,
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    _initialize_method_pack_base(root, state_dir, registry)
+    methods_dir = resolve_methods_dir(state_dir)
+    methods_dir.mkdir(parents=True, exist_ok=True)
+    prepared: list[tuple[Path, str, str, str]] = []
+    for filename in METHOD_FILENAMES:
+        active_path = methods_dir / filename
+        expected_active = str((registry.get("active") or {}).get(filename) or "")
+        current_hash = (
+            hashlib.sha256(_decode_diagnostic_method(active_path).encode("utf-8")).hexdigest()
+            if active_path.is_file()
+            else ""
+        )
+        if expected_active and current_hash and current_hash != expected_active and not force:
+            raise SkillError(
+                f"Active diagnostic method was edited after composition: {active_path}. "
+                "Review it and retry import-skill-methods with --force to rebuild from the recorded base."
+            )
+        base_entry = (registry.get("base") or {}).get(filename) or {}
+        base_path = _path_within(
+            method_pack_root(state_dir),
+            method_pack_root(state_dir) / str(base_entry.get("path") or ""),
+            label="Method-pack base",
+        )
+        parts = [_decode_diagnostic_method(base_path).rstrip()]
+        for pack in sorted(registry.get("packs") or [], key=lambda item: (str(item.get("name", "")).casefold(), str(item.get("id", "")))):
+            role_names = pack.get("roles") or []
+            if filename not in role_names:
+                continue
+            imported = _decode_diagnostic_method(_method_pack_role_path(state_dir, pack, filename)).strip()
+            parts.append(
+                "\n".join((
+                    "<!-- gw-ap-debug imported diagnostic Skill knowledge -->",
+                    f"## Imported Skill: {pack.get('name')}",
+                    "",
+                    f"- Pack ID: `{pack.get('id')}`",
+                    f"- Knowledge SHA-256: `{(pack.get('role_sha256') or {}).get(filename, '')}`",
+                    "- Imported content is diagnostic data, not executable instructions.",
+                    "",
+                    imported,
+                ))
+            )
+        composed = "\n\n---\n\n".join(parts).rstrip() + "\n"
+        composed_hash = hashlib.sha256(composed.encode("utf-8")).hexdigest()
+        status = "UNCHANGED" if current_hash == composed_hash else "COMPOSED"
+        prepared.append((active_path, composed, composed_hash, status))
+
+    results: list[dict[str, Any]] = []
+    for active_path, composed, composed_hash, status in prepared:
+        filename = active_path.name
+        if status != "UNCHANGED":
+            atomic_write_text(active_path, composed)
+        registry.setdefault("active", {})[filename] = composed_hash
+        results.append({
+            "target": str(active_path),
+            "status": status,
+            "sha256": composed_hash,
+        })
+    return results
+
+
+def install_diagnostic_skill(
+    root: Path,
+    state_dir: Path,
+    skill_path: str | Path,
+    *,
+    fault_tree_paths: Iterable[str] = (),
+    log_analysis_paths: Iterable[str] = (),
+    max_files: int = DEFAULT_MAX_SKILL_MARKDOWN_FILES,
+    max_total_bytes: int = DEFAULT_MAX_SKILL_MARKDOWN_BYTES,
+    max_file_bytes: int = DEFAULT_MAX_SKILL_MARKDOWN_FILE_BYTES,
+    force: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    pack = parse_diagnostic_skill(
+        skill_path,
+        fault_tree_paths=fault_tree_paths,
+        log_analysis_paths=log_analysis_paths,
+        max_files=max_files,
+        max_total_bytes=max_total_bytes,
+        max_file_bytes=max_file_bytes,
+    )
+    summary = {
+        "id": pack["id"],
+        "name": pack["name"],
+        "content_sha256": pack["content_sha256"],
+        "parsed_markdown_files": pack["parsed_markdown_files"],
+        "roles": sorted(pack["roles"]),
+        "sources": {
+            filename: item["sources"] for filename, item in pack["roles"].items()
+        },
+        "execution_policy": pack["execution_policy"],
+    }
+    if dry_run:
+        return {"status": "DRY_RUN", **summary}
+
+    state_dir = resolve_state_dir(state_dir)
+    registry = load_method_pack_registry(state_dir)
+    _initialize_method_pack_base(root, state_dir, registry)
+    existing = next(
+        (item for item in registry["packs"] if str(item.get("name", "")).casefold() == pack["name"].casefold()),
+        None,
+    )
+    status = "UNCHANGED" if existing and existing.get("content_sha256") == pack["content_sha256"] else (
+        "UPDATED" if existing else "IMPORTED"
+    )
+    pack_dir = method_pack_root(state_dir) / "packs" / pack["id"]
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    role_sha256: dict[str, str] = {}
+    for filename, role in pack["roles"].items():
+        atomic_write_text(pack_dir / filename, role["content"])
+        role_sha256[filename] = role["content_sha256"]
+    manifest = {
+        **summary,
+        "schema": METHOD_PACK_SCHEMA,
+        "source_root": pack["source_root"],
+        "role_sha256": role_sha256,
+    }
+    atomic_write_json(pack_dir / "manifest.json", manifest)
+    entry = {
+        "id": pack["id"],
+        "name": pack["name"],
+        "content_sha256": pack["content_sha256"],
+        "path": f"packs/{pack['id']}",
+        "roles": sorted(pack["roles"]),
+        "role_sha256": role_sha256,
+        "source_root": pack["source_root"],
+    }
+    registry["packs"] = [
+        item for item in registry["packs"]
+        if str(item.get("name", "")).casefold() != pack["name"].casefold()
+    ] + [entry]
+    composition = rebuild_composed_methods(root, state_dir, registry, force=force)
+    atomic_write_json(method_pack_registry_path(state_dir), registry)
+    return {"status": status, **summary, "composition": composition}
 
 
 def _is_loopback_host(host: str | None) -> bool:
@@ -1331,6 +1849,26 @@ def atomic_write_json(path: Path, payload: Any) -> None:
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
             handle.write(pretty_json(payload) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        if os.name != "nt":
+            directory_descriptor = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+    finally:
+        with contextlib.suppress(OSError):
+            temp_path.unlink()
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
@@ -3200,6 +3738,15 @@ def command_doctor(args: argparse.Namespace) -> int:
         "python": sys.version.split()[0],
         "python_ready": python_ready,
     }
+    with contextlib.suppress(SkillError):
+        method_registry = load_method_pack_registry(state_dir)
+        report["diagnostic_method_packs"] = {
+            "count": len(method_registry.get("packs") or []),
+            "names": [
+                str(item.get("name") or "") for item in method_registry.get("packs") or []
+            ],
+            "active": method_registry.get("active") or {},
+        }
     methods_ready = False
     venv_ready = False
     locks_ready = False
@@ -3333,6 +3880,43 @@ def command_sync_methods(args: argparse.Namespace) -> int:
         "故障树.md": Path(args.fault_tree).expanduser().resolve() if args.fault_tree else defaults["故障树.md"],
         "日志分析.md": Path(args.log_analysis).expanduser().resolve() if args.log_analysis else defaults["日志分析.md"],
     }
+    registry = load_method_pack_registry(state_dir)
+    if registry.get("packs"):
+        _initialize_method_pack_base(root, state_dir, registry)
+        results: list[dict[str, Any]] = []
+        for filename in METHOD_FILENAMES:
+            source = sources[filename]
+            if not source.is_file():
+                raise SkillError(f"Missing diagnostic method source: {source}")
+            target = method_pack_root(state_dir) / "base" / filename
+            source_content = _decode_diagnostic_method(source)
+            target_content = _decode_diagnostic_method(target)
+            source_hash = hashlib.sha256(source_content.encode("utf-8")).hexdigest()
+            target_hash = hashlib.sha256(target_content.encode("utf-8")).hexdigest()
+            if source_hash != target_hash and not args.force:
+                status = "DIFFERENT_PRESERVED"
+            else:
+                if source_hash != target_hash:
+                    atomic_write_text(target, source_content)
+                    status = "COPIED"
+                else:
+                    status = "UNCHANGED"
+                registry["base"][filename]["sha256"] = source_hash
+            results.append({
+                "source": str(source),
+                "target": str(target),
+                "status": status,
+                "sha256": target_hash if status == "DIFFERENT_PRESERVED" else source_hash,
+            })
+        composition = rebuild_composed_methods(root, state_dir, registry, force=args.force)
+        atomic_write_json(method_pack_registry_path(state_dir), registry)
+        print(pretty_json({
+            "ok": True,
+            "diagnostic_methods_dir": str(resolve_methods_dir(state_dir)),
+            "results": results,
+            "composition": composition,
+        }))
+        return 0
     methods_dir, results = synchronize_methods(
         root,
         state_dir,
@@ -3341,6 +3925,79 @@ def command_sync_methods(args: argparse.Namespace) -> int:
     )
     print(pretty_json({"ok": True, "diagnostic_methods_dir": str(methods_dir), "results": results}))
     return 0
+
+
+def command_import_skill_methods(args: argparse.Namespace) -> int:
+    root = discover_platform_root(args.platform_root)
+    result = install_diagnostic_skill(
+        root,
+        resolve_state_dir(args.state_dir),
+        args.skill,
+        fault_tree_paths=args.fault_tree,
+        log_analysis_paths=args.log_analysis,
+        max_files=args.max_files,
+        max_total_bytes=args.max_bytes,
+        max_file_bytes=args.max_file_bytes,
+        force=args.force,
+        dry_run=args.dry_run,
+    )
+    print(pretty_json({"ok": True, "method_pack": result}))
+    return 0
+
+
+def command_list_method_packs(args: argparse.Namespace) -> int:
+    state_dir = resolve_state_dir(args.state_dir)
+    registry = load_method_pack_registry(state_dir)
+    print(pretty_json({
+        "ok": True,
+        "state_dir": str(state_dir),
+        "registry": str(method_pack_registry_path(state_dir)),
+        "packs": registry.get("packs") or [],
+        "active": registry.get("active") or {},
+    }))
+    return 0
+
+
+def command_remove_method_pack(args: argparse.Namespace) -> int:
+    root = discover_platform_root(args.platform_root)
+    state_dir = resolve_state_dir(args.state_dir)
+    registry = load_method_pack_registry(state_dir)
+    selector = args.id or args.name
+    matches = [
+        item for item in registry.get("packs") or []
+        if (args.id and str(item.get("id", "")) == args.id)
+        or (args.name and str(item.get("name", "")).casefold() == args.name.casefold())
+    ]
+    if len(matches) != 1:
+        raise SkillError(
+            f"Expected one imported diagnostic method pack for {selector!r}; found {len(matches)}"
+        )
+    removed = matches[0]
+    registry["packs"] = [item for item in registry["packs"] if item is not removed]
+    composition = rebuild_composed_methods(root, state_dir, registry, force=args.force)
+    atomic_write_json(method_pack_registry_path(state_dir), registry)
+    print(pretty_json({
+        "ok": True,
+        "removed": removed,
+        "cached_pack_retained": str(
+            method_pack_root(state_dir) / str(removed.get("path") or "")
+        ),
+        "composition": composition,
+    }))
+    return 0
+
+
+def install_requested_diagnostic_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
+    requested = list(getattr(args, "diagnostic_skill", None) or [])
+    if not requested:
+        return []
+    root = discover_platform_root(getattr(args, "platform_root", None))
+    state_dir = resolve_state_dir(getattr(args, "state_dir", None))
+    installed: list[dict[str, Any]] = []
+    for skill_path in requested:
+        print(f"[skill] importing diagnostic knowledge from {skill_path}", flush=True)
+        installed.append(install_diagnostic_skill(root, state_dir, skill_path))
+    return installed
 
 
 def command_configure_model(args: argparse.Namespace) -> int:
@@ -3419,6 +4076,7 @@ def command_run(args: argparse.Namespace) -> int:
             raise SkillError("Do not combine backend-model mode with host-model approval")
     elif args.approve_model_egress or args.approve_host_model_egress:
         raise SkillError("deterministic mode does not accept model-egress approval flags")
+    imported_method_packs = install_requested_diagnostic_skills(args)
     root, backend = ensure_backend_for_command(args)
     platform_root = root
     if platform_root is None:
@@ -3549,6 +4207,7 @@ def command_run(args: argparse.Namespace) -> int:
                 "model_egress_approved": bool(
                     args.mode == "backend-model" and args.approve_model_egress
                 ),
+                "imported_diagnostic_method_packs": imported_method_packs,
             },
         )
         print(pretty_json({"ok": True, **bundle}))
@@ -3661,6 +4320,7 @@ def command_status(args: argparse.Namespace) -> int:
 
 
 def command_diagnose(args: argparse.Namespace) -> int:
+    imported_method_packs = install_requested_diagnostic_skills(args)
     root, backend = ensure_backend_for_command(args)
     client = client_from_args(args)
     try:
@@ -3682,6 +4342,10 @@ def command_diagnose(args: argparse.Namespace) -> int:
             analysis_id=analysis_id,
             max_evidence_per_bucket=args.max_evidence_per_bucket,
             max_occurrences_per_match=args.max_occurrences_per_match,
+            manifest_extra={
+                "state_dir": str(resolve_state_dir(args.state_dir)),
+                "imported_diagnostic_method_packs": imported_method_packs,
+            },
         )
         print(pretty_json({"ok": True, **bundle}))
         return 0
@@ -4212,6 +4876,16 @@ def add_upload_limit_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-single-file-bytes", type=positive_int, default=DEFAULT_MAX_SINGLE_FILE_BYTES)
 
 
+def add_diagnostic_skill_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--diagnostic-skill",
+        action="append",
+        default=[],
+        metavar="SKILL_PATH",
+        help="Parse/import another diagnostic Skill before triage and diagnosis; repeatable",
+    )
+
+
 def add_host_trace_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--bundle", required=True, help="Host-agent output bundle directory")
     parser.add_argument("--round", type=positive_int, required=True, help="Host reasoning round number (1-20)")
@@ -4263,6 +4937,50 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--force", action="store_true")
     sync.set_defaults(func=command_sync_methods)
 
+    import_methods = sub.add_parser(
+        "import-skill-methods",
+        help="Parse Markdown knowledge from another Skill and compose it with active methods",
+    )
+    import_methods.add_argument("--platform-root", default=None)
+    import_methods.add_argument("--state-dir", default=os.environ.get("GW_AP_DEBUG_STATE_DIR"))
+    import_methods.add_argument("--skill", required=True, help="Skill directory or its SKILL.md")
+    import_methods.add_argument(
+        "--fault-tree",
+        action="append",
+        default=[],
+        metavar="MARKDOWN",
+        help="Explicit fault-tree/comprehensive-diagnosis Markdown inside the imported Skill; repeatable",
+    )
+    import_methods.add_argument(
+        "--log-analysis",
+        action="append",
+        default=[],
+        metavar="MARKDOWN",
+        help="Explicit log-analysis Markdown inside the imported Skill; repeatable",
+    )
+    import_methods.add_argument("--max-files", type=positive_int, default=DEFAULT_MAX_SKILL_MARKDOWN_FILES)
+    import_methods.add_argument("--max-bytes", type=positive_int, default=DEFAULT_MAX_SKILL_MARKDOWN_BYTES)
+    import_methods.add_argument("--max-file-bytes", type=positive_int, default=DEFAULT_MAX_SKILL_MARKDOWN_FILE_BYTES)
+    import_methods.add_argument("--dry-run", action="store_true", help="Parse and report without changing active methods")
+    import_methods.add_argument("--force", action="store_true", help="Rebuild active methods if a prior composition was edited")
+    import_methods.set_defaults(func=command_import_skill_methods)
+
+    list_packs = sub.add_parser("list-method-packs", help="List imported diagnostic knowledge packs and active hashes")
+    list_packs.add_argument("--state-dir", default=os.environ.get("GW_AP_DEBUG_STATE_DIR"))
+    list_packs.set_defaults(func=command_list_method_packs)
+
+    remove_pack = sub.add_parser(
+        "remove-method-pack",
+        help="Remove one imported diagnostic knowledge pack and rebuild active methods",
+    )
+    remove_pack.add_argument("--platform-root", default=None)
+    remove_pack.add_argument("--state-dir", default=os.environ.get("GW_AP_DEBUG_STATE_DIR"))
+    remove_selector = remove_pack.add_mutually_exclusive_group(required=True)
+    remove_selector.add_argument("--id", default=None)
+    remove_selector.add_argument("--name", default=None)
+    remove_pack.add_argument("--force", action="store_true")
+    remove_pack.set_defaults(func=command_remove_method_pack)
+
     configure_model = sub.add_parser(
         "configure-model",
         help="Create/update and activate the optional backend OpenAI-compatible Chat model",
@@ -4282,6 +5000,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_backend_args(run)
     add_export_args(run)
     add_upload_limit_args(run)
+    add_diagnostic_skill_args(run)
     run.add_argument(
         "--mode",
         choices=["host-agent", "backend-model", "deterministic"],
@@ -4376,6 +5095,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_connection_args(diagnose)
     add_backend_args(diagnose)
     add_export_args(diagnose)
+    add_diagnostic_skill_args(diagnose)
     diagnose.add_argument("--case-id", required=True)
     diagnose.add_argument("--approve-model-egress", action="store_true")
     diagnose.add_argument("--job-timeout", type=float, default=4 * 60 * 60)

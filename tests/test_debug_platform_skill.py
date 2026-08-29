@@ -449,6 +449,154 @@ class SafetyAndReadinessTests(unittest.TestCase):
             self.assertEqual(forced[0]["status"], "COPIED")
             self.assertEqual(target.read_text(encoding="utf-8"), "tree-v1")
 
+    def test_diagnostic_skill_metadata_maps_complete_role_documents(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            source = base / "complete-diagnostic"
+            references = source / "references"
+            scripts = source / "scripts"
+            references.mkdir(parents=True)
+            scripts.mkdir()
+            (source / "SKILL.md").write_text(
+                """---
+name: complete-network-diagnosis
+description: Complete log analysis and comprehensive diagnosis knowledge.
+metadata:
+  gw_ap_debug_fault_tree: references/diagnosis.md
+  gw_ap_debug_log_analysis: references/logs.md
+---
+# Complete diagnosis
+
+[Diagnosis](references/diagnosis.md "fault tree") and [logs](references/logs.md).
+[Background](references/background.md "local reference").
+""",
+                encoding="utf-8",
+            )
+            (references / "diagnosis.md").write_text(
+                "# 综合诊断\n\n| 判断点 | 证据 | 结论 |\n|---|---|---|\n| Link | `LINK_CANARY` | isolate transport |\n",
+                encoding="utf-8",
+            )
+            (references / "logs.md").write_text(
+                "# 日志分析\n\n| 日志关键字 | 含义 |\n|---|---|\n| `LOG_CANARY` | peer reset |\n",
+                encoding="utf-8",
+            )
+            (references / "background.md").write_text(
+                "# Background\n\nDevice inventory only.\n", encoding="utf-8"
+            )
+            (scripts / "must-not-run.py").write_text(
+                "raise RuntimeError('imported code executed')\n", encoding="utf-8"
+            )
+            parsed = skill.parse_diagnostic_skill(source)
+            self.assertEqual(parsed["execution_policy"], "MARKDOWN_ONLY_NO_IMPORTED_CODE_EXECUTION")
+            self.assertIn("LINK_CANARY", parsed["roles"]["故障树.md"]["content"])
+            self.assertIn("LOG_CANARY", parsed["roles"]["日志分析.md"]["content"])
+            self.assertEqual(parsed["parsed_markdown_files"], 4)
+
+    def test_diagnostic_skill_auto_classifies_role_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            source = Path(raw) / "automatic"
+            source.mkdir()
+            (source / "SKILL.md").write_text(
+                """---
+name: automatic-diagnosis
+description: Portable knowledge.
+---
+# Network troubleshooting
+
+## 日志分析
+
+Search `AUTO_LOG_CANARY` and correlate timestamps.
+
+## 综合诊断与根因分析
+
+| 判断点 | 日志证据 | 结论 |
+|---|---|---|
+| Peer state | `AUTO_TREE_CANARY` | decide link or protocol |
+""",
+                encoding="utf-8",
+            )
+            parsed = skill.parse_diagnostic_skill(source)
+            self.assertIn("AUTO_LOG_CANARY", parsed["roles"]["日志分析.md"]["content"])
+            self.assertIn("AUTO_TREE_CANARY", parsed["roles"]["故障树.md"]["content"])
+
+    def test_diagnostic_skill_rejects_markdown_link_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            source = base / "escaped"
+            source.mkdir()
+            (base / "outside.md").write_text("# 日志分析\nsecret", encoding="utf-8")
+            (source / "SKILL.md").write_text(
+                """---
+name: escaped-diagnosis
+description: Must remain contained.
+---
+# 日志分析
+
+[outside](../outside.md)
+""",
+                encoding="utf-8",
+            )
+            with self.assertRaises(skill.SkillError):
+                skill.parse_diagnostic_skill(source)
+
+    def test_diagnostic_skill_import_is_idempotent_and_composes_with_base(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            source = base / "pack"
+            source.mkdir()
+            (source / "SKILL.md").write_text(
+                """---
+name: idempotent-diagnosis
+description: Log and fault-tree method pack.
+---
+# 日志分析与综合诊断
+
+| 判断点 | 日志关键字 | 结论 |
+|---|---|---|
+| Canary | `PACK_CANARY` | imported knowledge works |
+""",
+                encoding="utf-8",
+            )
+            state = base / "state"
+            runtime = SCRIPT.parents[1] / "runtime"
+            first = skill.install_diagnostic_skill(runtime, state, source)
+            second = skill.install_diagnostic_skill(runtime, state, source)
+            self.assertEqual(first["status"], "IMPORTED")
+            self.assertEqual(second["status"], "UNCHANGED")
+            for filename in skill.METHOD_FILENAMES:
+                active = (skill.resolve_methods_dir(state) / filename).read_text(encoding="utf-8")
+                self.assertEqual(active.count("PACK_CANARY"), 1)
+                self.assertIn("Imported Skill: idempotent-diagnosis", active)
+            registry = skill.load_method_pack_registry(state)
+            self.assertEqual(len(registry["packs"]), 1)
+            self.assertEqual(registry["packs"][0]["name"], "idempotent-diagnosis")
+            output = StringIO()
+            with contextlib.redirect_stdout(output):
+                code = skill.command_remove_method_pack(argparse.Namespace(
+                    platform_root=str(runtime),
+                    state_dir=str(state),
+                    id=None,
+                    name="idempotent-diagnosis",
+                    force=False,
+                ))
+            self.assertEqual(code, 0)
+            self.assertTrue(json.loads(output.getvalue())["ok"])
+            for filename in skill.METHOD_FILENAMES:
+                active = (skill.resolve_methods_dir(state) / filename).read_text(encoding="utf-8")
+                self.assertNotIn("PACK_CANARY", active)
+
+    def test_diagnostic_skill_cli_supports_preview_and_pre_diagnosis_import(self) -> None:
+        parser = skill.build_parser()
+        preview = parser.parse_args([
+            "import-skill-methods", "--skill", "C:/diagnostic-skill", "--dry-run"
+        ])
+        self.assertTrue(preview.dry_run)
+        run = parser.parse_args([
+            "run", "--mode", "deterministic", "--title", "case", "--log", "sample.log",
+            "--diagnostic-skill", "C:/diagnostic-skill",
+        ])
+        self.assertEqual(run.diagnostic_skill, ["C:/diagnostic-skill"])
+
     def test_export_rejects_reused_nonempty_output_directory_before_api_calls(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             output = Path(raw) / "existing"

@@ -7,7 +7,9 @@ This parallel MVP vendors the main-branch backend snapshot from commit `181dae7b
 - safe archive and text handling, including extensionless collectDebuginfo;
 - Huawei and generic event parsing;
 - GW/AP artifact provenance and joint scope;
-- diagnostic method and Pattern compilation;
+- diagnostic method and Pattern compilation, including bounded Markdown-only
+  parsing of external diagnostic Skills and deterministic composition with the
+  current base methods;
 - mandatory full local Pattern scanning and three evidence buckets;
 - exact match occurrences with file and line locations;
 - deterministic RAG/rule baseline and fallback;

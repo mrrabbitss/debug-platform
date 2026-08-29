@@ -11,9 +11,9 @@ Source baseline: Debug Platform `main` / `origin/main` commit
 
 ## Snapshot fidelity
 
-- Candidate version: `0.4.0` (Claude Code first interaction, automatic Python
-  selection, portable launchers, and UI metadata over the v0.3.4 runtime
-  behavior).
+- Candidate version: `0.5.0` (bounded Markdown-only diagnostic Skill import,
+  deterministic method-pack composition, pre-diagnosis integration, and
+  Windows launcher passthrough correction over the v0.4.0 package).
 - The published `skillonly` Git commit and tree IDs are the authoritative
   release fingerprint; the release file count is intentionally not used as a
   mutable identity check.
@@ -29,7 +29,7 @@ Source baseline: Debug Platform `main` / `origin/main` commit
 
 ## Automated validation
 
-- `python -B -m unittest discover -s tests -v`: 44 passed.
+- `python -B -m unittest discover -s tests -v`: 49 passed.
 - Skill Creator `quick_validate.py`: passed.
 - `python -B scripts/check_provenance.py`: passed.
 - `python -B scripts/validate_release.py`: passed.
@@ -41,7 +41,7 @@ Source baseline: Debug Platform `main` / `origin/main` commit
   Ubuntu CI job provides the authoritative symlink execution environment.
 - POSIX launcher: Bash syntax and explicit-interpreter package doctor passed.
 - Synthetic AP host-agent preparation through the Windows launcher passed. The
-  exported manifest records `skill_version=0.4.0`; continuation instructions
+  exported manifest records the candidate `skill_version`; continuation instructions
   contain both platform launchers and no bare `python debug_platform_skill.py`
   command.
 - `host-search-hypothesis-log --help`: passed and exposes no fault-tree
@@ -58,6 +58,59 @@ budgets before backend access, same-node evidence binding, hypothesis-only
 scope isolation, result normalization, finalization idempotency, post-finalize
 mutation rejection, opaque-ID narrative guards, and provenance-based AP/GW
 case inference.
+
+## v0.5.0 composable diagnostic Skill validation
+
+An isolated complete diagnostic Skill supplied explicit fault-tree and
+log-analysis Markdown through frontmatter metadata. The fixture also linked an
+inert execution canary outside the selected role documents.
+
+- dry-run selected four contained Markdown files and both diagnostic roles;
+- first import returned `IMPORTED`; the identical second import returned
+  `UNCHANGED` and did not duplicate content;
+- pack ID: `complete-wifi-diagnosis-821eef5c120e`;
+- composed fault-tree SHA-256:
+  `73d85d347a18c110ef58c93d409b242d8a1baaa607836e3f81c0d105d249d43b`;
+- composed log-analysis SHA-256:
+  `ad537310418b0d7b6aff76c709c4b0d9eeae00741d87a6b3dbf576ecd817c695`;
+- each applicable external signature occurred exactly once in each composed
+  role, while `IMPORTER_MUST_NOT_EXECUTE_CODE` occurred zero times;
+- the unchanged runtime compiler produced four external Pattern forms and two
+  additional fault-tree decisions, for 165 Patterns and 29 total tree items;
+- traversal outside the imported Skill root, file/count/byte bounds,
+  idempotence, removal/rebuild, CLI parsing, and automatic role classification
+  are covered by the 49-test suite.
+
+The Windows launcher initially exposed a real integration defect: PowerShell
+abbreviated public `--skill` to the wrapper's internal `$SkillArguments`
+parameter. Renaming the passthrough parameter to `$CliPassthrough` fixed the
+collision. The actual Windows launcher then passed preview, import, repeated
+import, list, doctor, bootstrap, and `run --diagnostic-skill` commands.
+
+### Native Codex CLI acceptance
+
+`codex-cli 0.150.0-alpha.12.2` natively discovered the exact candidate through
+an isolated project `.agents/skills/gw-ap-debug` junction and read v0.5.0. Its
+model session executed the Windows launcher to preview/import/list the method
+pack, verify the active hashes/canaries, bootstrap a fresh Python 3.14 state,
+and run a deterministic diagnosis with `--diagnostic-skill`.
+
+- parse, Triage, and analysis jobs: all `COMPLETED`;
+- imported method matches: four (template and fault-tree signatures for both
+  synthetic external events), each with exact log locations;
+- exported manifest: `skill_version=0.5.0`,
+  `analysis_status=COMPLETED`, `execution_mode=deterministic`, and one recorded
+  Markdown-only imported method pack;
+- output bundle:
+  `C:\Users\23173\AppData\Local\Temp\gw-ap-debug-v050-codex-20260830-01\codex-state\runs\20260829T173501Z-CASE-537eadf681f5473f`;
+- the CLI's WebSocket requests timed out and automatically fell back to HTTPS;
+  the test still exited 0.
+
+This intentionally validates native Skill discovery plus the complete local
+import/parse/Triage/deterministic-diagnosis path. It does not claim host-agent
+finalization: synthesis was correctly `SKIPPED`, fault-tree state remained
+0 attempted / 0 concluded / 29 total, and the stop reason was
+`MOCK_PROVIDER_DETERMINISTIC_BASELINE`.
 
 ## Current v0.3.4 host-agent validation
 
@@ -182,14 +235,15 @@ removed by the project plugin.
   discovery guidance, and argument flow are based on the current official
   Claude Code Skills contract; native Claude model execution remains pending on
   a machine with Claude Code installed.
-- Codex CLI: `codex-cli 0.150.0-alpha.8` launches on this machine. On
+- Codex CLI: `codex-cli 0.150.0-alpha.12.2` launches on this machine. On
   2026-08-28 an isolated project-scope native run discovered v0.3.5 from
   `.agents/skills/gw-ap-debug`, used the Skill, and executed `doctor --check
   package` with exit code 0, `package_ready=true`, and
   `host_agent_ready=true`. The connection initially timed out over WebSocket
   and completed after the CLI's automatic HTTPS fallback. The current Codex
-  desktop model separately completed the full authenticated host loop; a full
-  native Codex CLI diagnostic end-to-end run has not yet been recorded.
+  desktop model separately completed the full authenticated host loop. The
+  v0.5.0 acceptance above adds a native `codex exec` discovery and deterministic
+  end-to-end diagnosis; native host-agent finalization remains unrecorded.
 
 ## Capability conclusion
 

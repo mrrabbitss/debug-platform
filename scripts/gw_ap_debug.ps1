@@ -13,7 +13,7 @@ Runs the GW/AP Debug Skill CLI with an automatically selected compatible Python.
 param(
     [string]$Python = "",
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
-    [string[]]$SkillArguments = @()
+    [string[]]$CliPassthrough = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,9 +24,9 @@ $entrypoint = Join-Path $PSScriptRoot "debug_platform_skill.py"
 if (-not (Test-Path -LiteralPath $entrypoint -PathType Leaf)) {
     throw "Skill entrypoint is missing: $entrypoint"
 }
-if ($SkillArguments.Count -eq 0) {
-    $SkillArguments = @("--help")
+if ($CliPassthrough.Count -eq 0) {
+    $CliPassthrough = @("--help")
 }
 
-& $runtime.Command @($runtime.PrefixArguments) -B $entrypoint @SkillArguments
+& $runtime.Command @($runtime.PrefixArguments) -B $entrypoint @CliPassthrough
 exit $LASTEXITCODE
