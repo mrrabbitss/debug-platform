@@ -4,10 +4,11 @@
 Registers this checkout as a user-level Skill for Claude Code, Codex, and OpenCode.
 
 .DESCRIPTION
-The checkout remains the single canonical copy. The script creates directory
-junctions in the selected CLI discovery locations, so updates and provenance
-checks apply consistently to every CLI. Existing unrelated paths are never
-overwritten.
+The checkout remains the single canonical copy. If it already occupies a CLI
+discovery path, that client uses the real directory directly; the script
+creates directory junctions for the other selected clients. Updates and
+provenance checks therefore apply consistently to every CLI. Existing unrelated
+paths are never overwritten.
 #>
 [CmdletBinding()]
 param(
@@ -78,6 +79,10 @@ $relativeTargets = @{
 foreach ($client in $selected) {
     $target = [IO.Path]::GetFullPath((Join-Path $HomeRoot $relativeTargets[$client]))
     if (Test-Path -LiteralPath $target) {
+        if ([StringComparer]::OrdinalIgnoreCase.Equals($target.TrimEnd('\'), $SkillRoot.TrimEnd('\'))) {
+            Write-Step "$client uses the canonical checkout directly: $target"
+            continue
+        }
         $item = Get-Item -LiteralPath $target -Force
         $linkTarget = $item.Target
         if ($linkTarget -is [array]) { $linkTarget = $linkTarget[0] }

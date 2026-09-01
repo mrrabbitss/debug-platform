@@ -15,7 +15,7 @@ A `SUPPORTED` or high-confidence hypothesis is not automatically a confirmed roo
 
 ## Common bundle files
 
-- `manifest.json`: schema/version, case, artifacts, jobs, execution mode, and validation state;
+- `manifest.json`: schema/version, case, artifacts, jobs, execution mode, validation state, and diagnostic method selection metadata (`diagnostic_method_scope`, case-pinned `method_generation_id` / `method_generation_scope`, optional `persistent_method_generation_id`, `diagnostic_methods_dir`, `diagnostic_method_budget`, and `persistent_active_unchanged`);
 - `case.json`: redacted case snapshot;
 - `analysis.json`: redacted deterministic or backend analysis;
 - `analysis_record.json`: platform AnalysisRun metadata;

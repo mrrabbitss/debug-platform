@@ -4,8 +4,9 @@ The Skill follows the Agent Skills directory format. Keep the complete directory
 
 ## Primary Windows 11 host
 
-Claude Code CLI is the primary host. Install once at user scope so the Skill is
-available in every local project:
+Claude Code CLI is the primary host. Codex CLI is the preferred fallback and
+OpenCode CLI is an additional compatible host. Install once at user scope so
+the Skill is available in every local project:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_user_skill.ps1 -Clients All -RunBootstrap -RunValidation
@@ -38,8 +39,10 @@ OpenCode also discovers `~/.agents/skills` and `~/.claude/skills`.
 
 For a user-level installation shared across projects and CLIs, keep one Git
 checkout as the canonical copy and register it with the supplied setup script.
-The script creates only missing junctions or symlinks and refuses to overwrite
-an existing unrelated directory:
+On Windows 11, clone it directly to `~/.claude/skills/gw-ap-debug`; the script
+uses that real directory for Claude and creates only the missing Codex/OpenCode
+junctions. It recognizes an already-canonical target and refuses to overwrite
+any unrelated directory:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_user_skill.ps1 -Clients All -RunBootstrap -RunValidation
@@ -71,21 +74,35 @@ The backend virtual environment stores a fingerprint of `pyproject.toml`, `const
 
 Host-agent validation keys and rollback anchors live under `<state>/host-validation-keys`. They contain no model API credential or diagnostic content, but an unfinished host bundle depends on them and fails closed if they are lost. A successfully finalized report remains portable.
 
-The active fault tree and log-analysis method copies live under `<state>/methods`, not in the installed Skill. They are initialized from the bundled defaults on first bootstrap/start. Use `GW_AP_DEBUG_METHODS_DIR` to select another writable directory, or install reviewed replacements without editing the Skill:
+Diagnostic methods live outside the installed Skill. Bundled or reviewed base
+methods are initialized in writable state and then composed into immutable
+directories under `<state>/method-packs/generations`. The persistent selection
+is an atomically replaced `<state>/method-packs/active.json` pointer; the
+backend validates that pointer, its generation manifest, and both method hashes
+before loading. Install reviewed base replacements without editing the Skill:
 
 ```text
 python "<SKILL_DIR>/scripts/debug_platform_skill.py" sync-methods --fault-tree /path/to/fault-tree.md --log-analysis /path/to/log-analysis.md
 ```
 
-Existing, different method files are preserved unless `--force` is explicit.
+Existing, different base methods are preserved unless `--force` is explicit.
+`GW_AP_DEBUG_METHODS_DIR` may select a different writable base-method directory,
+but the bundled backend still receives `<state>/method-packs` as its generation
+and case-binding control root.
 
 Complete diagnostic Skills can be parsed into external method packs and
-composed on top of this base. Their registry and cached Markdown live under
-`<state>/method-packs`; no imported code is executed. Use
-`import-skill-methods --skill <path> --dry-run` to preview, rerun without
-`--dry-run` to install, and use `list-method-packs` or `remove-method-pack` to
-inspect or revert. `run` and `diagnose` also accept repeatable
-`--diagnostic-skill <path>` options. See
+composed on top of this base; no imported code is executed. `run` and
+`diagnose` accept repeatable `--diagnostic-skill <path>` options and default to
+`--diagnostic-skill-scope run`. This creates an immutable generation plus a
+temporary per-case binding without changing the persistent registry or active
+pointer. Use `import-skill-methods --skill <path> --dry-run` to preview. Rerun
+without `--dry-run`, or use `--diagnostic-skill-scope persistent`, only to
+install the knowledge for later runs; `list-method-packs` and
+`remove-method-pack` operate on persistent packs. Every host-agent run
+preflights the active composed methods, even when no external Skill is supplied.
+The default rejects a UTF-8-byte upper-bound estimate above 120,000;
+deliberately raise `--max-host-method-tokens` only for a selected model with a
+verified larger context window. See
 [composable-knowledge.md](composable-knowledge.md).
 
 In commands, replace `<SKILL_DIR>` with the absolute directory containing

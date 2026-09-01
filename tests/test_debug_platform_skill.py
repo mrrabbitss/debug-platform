@@ -5,9 +5,11 @@ import contextlib
 from io import StringIO
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -18,6 +20,51 @@ assert SPEC and SPEC.loader
 skill = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = skill
 SPEC.loader.exec_module(skill)
+
+
+def load_runtime_diagnostic_methods():
+    """Load the vendored resolver without installing the backend dependency set."""
+    module_path = (
+        SCRIPT.parents[1]
+        / "runtime"
+        / "backend"
+        / "app"
+        / "services"
+        / "diagnostic_methods.py"
+    )
+    module_name = "runtime_diagnostic_methods_under_test"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+
+    sqlalchemy = types.ModuleType("sqlalchemy")
+    sqlalchemy.select = lambda *_args, **_kwargs: None
+    sqlalchemy_orm = types.ModuleType("sqlalchemy.orm")
+    sqlalchemy_orm.Session = object
+    app = types.ModuleType("app")
+    app.__path__ = []
+    services = types.ModuleType("app.services")
+    services.__path__ = []
+    models = types.ModuleType("app.models")
+    models.Case = type("Case", (), {})
+    models.KnowledgeDocument = type("KnowledgeDocument", (), {})
+    diagnostic_scope = types.ModuleType("app.services.diagnostic_scope")
+    diagnostic_scope.knowledge_matches_joint_diagnostic_scope = lambda _value: True
+    text_files = types.ModuleType("app.services.text_files")
+    text_files.read_text_file = lambda path: path.read_text(encoding="utf-8")
+    stubs = {
+        "sqlalchemy": sqlalchemy,
+        "sqlalchemy.orm": sqlalchemy_orm,
+        "app": app,
+        "app.models": models,
+        "app.services": services,
+        "app.services.diagnostic_scope": diagnostic_scope,
+        "app.services.text_files": text_files,
+        module_name: module,
+    }
+    with mock.patch.dict(sys.modules, stubs):
+        spec.loader.exec_module(module)
+    return module
 
 
 class FakeTriageClient:
@@ -449,6 +496,1048 @@ class SafetyAndReadinessTests(unittest.TestCase):
             self.assertEqual(forced[0]["status"], "COPIED")
             self.assertEqual(target.read_text(encoding="utf-8"), "tree-v1")
 
+    def test_forced_sync_never_mutates_an_active_immutable_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            state = base / "state"
+            runtime = SCRIPT.parents[1] / "runtime"
+            skill.ensure_method_control_root(runtime, state)
+            active = skill.active_method_generation_dir(state)
+            self.assertIsNotNone(active)
+            assert active is not None
+            active_before = {
+                filename: (active / filename).read_bytes()
+                for filename in skill.METHOD_FILENAMES
+            }
+            manifest_before = (active / "manifest.json").read_bytes()
+            pointer_before = skill.method_active_pointer_path(state).read_bytes()
+
+            sources = {
+                "故障树.md": base / "tree-v2.md",
+                "日志分析.md": base / "logs-v2.md",
+            }
+            sources["故障树.md"].write_text("tree-v2", encoding="utf-8")
+            sources["日志分析.md"].write_text("logs-v2", encoding="utf-8")
+            target, results = skill.synchronize_methods(
+                runtime, state, sources=sources, force=True,
+            )
+
+            self.assertEqual(target, (state / "methods").resolve())
+            self.assertTrue(all(item["status"] == "COPIED" for item in results))
+            self.assertEqual((target / "故障树.md").read_text(encoding="utf-8"), "tree-v2")
+            self.assertEqual(skill.method_active_pointer_path(state).read_bytes(), pointer_before)
+            self.assertEqual((active / "manifest.json").read_bytes(), manifest_before)
+            for filename, expected in active_before.items():
+                self.assertEqual((active / filename).read_bytes(), expected)
+
+    def test_method_generation_pointer_is_canonical_and_content_addressed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            contents = {
+                "故障树.md": "# Tree\nTREE_CANARY\n",
+                "日志分析.md": "# Logs\nLOG_CANARY\n",
+            }
+            first, manifest, _registry = skill.publish_method_generation(
+                state,
+                contents,
+                scope="persistent",
+                packs=[],
+                registry=skill._new_method_pack_registry(),
+                activate=True,
+            )
+            second, repeated, _registry = skill.publish_method_generation(
+                state,
+                contents,
+                scope="persistent",
+                packs=[],
+                registry=skill._new_method_pack_registry(),
+                activate=True,
+            )
+            self.assertEqual(first, second)
+            self.assertEqual(manifest, repeated)
+            self.assertEqual(skill.active_method_generation_dir(state), first)
+            with self.assertRaisesRegex(skill.SkillError, "Only a persistent generation"):
+                skill.publish_method_generation(
+                    state,
+                    contents,
+                    scope="run",
+                    packs=[],
+                    activate=True,
+                )
+
+            invalid_state = Path(raw) / "invalid-state"
+            pack = {"id": "pack-a", "name": "alpha", "content_sha256": "a" * 64}
+            with self.assertRaisesRegex(skill.SkillError, "run-scoped.*registry"):
+                skill.publish_method_generation(
+                    invalid_state,
+                    contents,
+                    scope="run",
+                    packs=[],
+                    registry=skill._new_method_pack_registry(),
+                )
+            with self.assertRaisesRegex(skill.SkillError, "persistent.*requires"):
+                skill.publish_method_generation(
+                    invalid_state, contents, scope="persistent", packs=[],
+                )
+            with self.assertRaisesRegex(skill.SkillError, "packs do not match"):
+                skill.publish_method_generation(
+                    invalid_state,
+                    contents,
+                    scope="persistent",
+                    packs=[pack],
+                    registry=skill._new_method_pack_registry(),
+                )
+            self.assertFalse(skill.method_generation_root(invalid_state).exists())
+
+            packs = [
+                {"id": "pack-b", "name": "Beta", "content_sha256": "b" * 64},
+                {"id": "pack-a", "name": "alpha", "content_sha256": "a" * 64},
+            ]
+            run_first, _manifest, _registry = skill.publish_method_generation(
+                state, contents, scope="run", packs=packs, activate=False,
+            )
+            run_reordered, _manifest, _registry = skill.publish_method_generation(
+                state, contents, scope="run", packs=list(reversed(packs)), activate=False,
+            )
+            self.assertEqual(run_first, run_reordered)
+
+            pointer_path = skill.method_active_pointer_path(state)
+            pointer = skill.read_json_file(pointer_path)
+            pointer["path"] = f"generations/../generations/{manifest['id']}"
+            skill.atomic_write_json(pointer_path, pointer)
+            with self.assertRaisesRegex(skill.SkillError, "pointer path is invalid"):
+                skill.active_method_generation_dir(state)
+
+    def test_generation_validation_detects_role_tampering(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            generation, _manifest, _registry = skill.publish_method_generation(
+                state,
+                {"故障树.md": "tree", "日志分析.md": "logs"},
+                scope="persistent",
+                packs=[],
+                registry=skill._new_method_pack_registry(),
+                activate=True,
+            )
+            (generation / "日志分析.md").write_text("tampered\n", encoding="utf-8")
+            with self.assertRaisesRegex(skill.SkillError, "role hash mismatch"):
+                skill.active_method_generation_dir(state)
+
+            persistent_generation, persistent_manifest, _registry = (
+                skill.publish_method_generation(
+                    state,
+                    {"故障树.md": "other tree", "日志分析.md": "other logs"},
+                    scope="persistent",
+                    packs=[],
+                    registry=skill._new_method_pack_registry(),
+                    activate=False,
+                )
+            )
+            persistent_manifest["registry"]["active"] = {}
+            skill.atomic_write_json(
+                persistent_generation / "manifest.json", persistent_manifest,
+            )
+            with self.assertRaisesRegex(skill.SkillError, "registry is invalid"):
+                skill._method_generation_manifest(state, persistent_generation)
+
+            run_generation, manifest, _registry = skill.publish_method_generation(
+                state,
+                {"故障树.md": "run tree", "日志分析.md": "run logs"},
+                scope="run",
+                packs=[{
+                    "id": "pack-a",
+                    "name": "alpha",
+                    "content_sha256": "a" * 64,
+                }],
+                activate=False,
+            )
+            manifest["registry"] = {"unexpected": True}
+            skill.atomic_write_json(run_generation / "manifest.json", manifest)
+            with self.assertRaisesRegex(skill.SkillError, "must not contain a registry"):
+                skill._method_generation_manifest(state, run_generation)
+            manifest["registry"] = None
+            manifest["packs"][0]["content_sha256"] = "b" * 64
+            skill.atomic_write_json(run_generation / "manifest.json", manifest)
+            with self.assertRaisesRegex(skill.SkillError, "content identity"):
+                skill._method_generation_manifest(state, run_generation)
+
+    def test_method_budget_uses_utf8_byte_upper_bound_proxy(self) -> None:
+        self.assertEqual(skill.estimate_method_tokens("abc"), 3)
+        self.assertEqual(skill.estimate_method_tokens("中"), 3)
+        budget = skill.method_content_budget({"故障树.md": "中", "日志分析.md": "abc"})
+        self.assertEqual(budget["estimated_tokens"], 6)
+        self.assertEqual(budget["estimator"], "utf8_bytes_upper_bound_proxy")
+
+    def test_run_scoped_skill_preserves_persistent_active_generation_and_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            state = base / "state"
+            runtime = SCRIPT.parents[1] / "runtime"
+            skill.ensure_method_control_root(runtime, state)
+
+            persistent_source = base / "persistent-skill"
+            persistent_source.mkdir()
+            (persistent_source / "SKILL.md").write_text(
+                """---
+name: run-scope-canary
+description: Persistent version of diagnosis knowledge.
+---
+# 日志分析与综合诊断
+
+Use `PERSISTENT_PACK_CANARY` while this pack is active.
+""",
+                encoding="utf-8",
+            )
+            skill.install_diagnostic_skill(runtime, state, persistent_source)
+            persistent = skill.active_method_generation_dir(state)
+            assert persistent is not None
+            pointer_before = skill.method_active_pointer_path(state).read_bytes()
+
+            source = base / "run-skill"
+            references = source / "references"
+            references.mkdir(parents=True)
+            (source / "SKILL.md").write_text(
+                """---
+name: run-scope-canary
+description: Run-only diagnosis knowledge.
+metadata:
+  gw_ap_debug_fault_tree: references/tree.md
+  gw_ap_debug_log_analysis: references/logs.md
+---
+# Run scoped method
+""",
+                encoding="utf-8",
+            )
+            (references / "tree.md").write_text(
+                "# 综合诊断\n\n`RUN_TREE_CANARY`\n", encoding="utf-8",
+            )
+            (references / "logs.md").write_text(
+                "# 日志分析\n\n`RUN_LOG_CANARY`\n", encoding="utf-8",
+            )
+            selection = skill.prepare_run_scoped_diagnostic_skills(
+                runtime, state, [source], max_host_method_tokens=1_000_000,
+            )
+            run_generation = Path(selection["generation_dir"])
+
+            self.assertEqual(selection["scope"], "run")
+            self.assertFalse(selection["persisted"])
+            self.assertTrue(selection["persistent_active_unchanged"])
+            self.assertNotEqual(run_generation, persistent)
+            self.assertEqual(skill.method_active_pointer_path(state).read_bytes(), pointer_before)
+            self.assertEqual(skill.active_method_generation_dir(state), persistent)
+            self.assertNotIn(
+                "RUN_TREE_CANARY",
+                (persistent / "故障树.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "PERSISTENT_PACK_CANARY",
+                (persistent / "故障树.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "RUN_TREE_CANARY",
+                (run_generation / "故障树.md").read_text(encoding="utf-8"),
+            )
+            self.assertNotIn(
+                "PERSISTENT_PACK_CANARY",
+                (run_generation / "故障树.md").read_text(encoding="utf-8"),
+            )
+            manifest = skill.read_json_file(run_generation / "manifest.json")
+            self.assertEqual(manifest["scope"], "run")
+            self.assertEqual(selection["budget"], manifest["budget"])
+            with self.assertRaisesRegex(skill.SkillError, "context budget"):
+                skill.prepare_run_scoped_diagnostic_skills(
+                    runtime, state, [source], max_host_method_tokens=1,
+                )
+
+    def test_persistent_methods_are_preflighted_even_without_external_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            runtime = SCRIPT.parents[1] / "runtime"
+            args = argparse.Namespace(
+                diagnostic_skill=[],
+                diagnostic_skill_fault_tree=[],
+                diagnostic_skill_log_analysis=[],
+                diagnostic_skill_scope="run",
+                platform_root=str(runtime),
+                state_dir=str(state),
+                mode="host-agent",
+                max_host_method_tokens=1_000_000,
+            )
+            selection = skill.prepare_requested_diagnostic_skills(args)
+            active = skill.active_method_generation_dir(state)
+            self.assertEqual(selection["scope"], "persistent")
+            self.assertNotEqual(Path(selection["generation_dir"]), active)
+            self.assertEqual(selection["generation_scope"], "run")
+            self.assertTrue(selection["binding_required"])
+            self.assertEqual(
+                selection["persistent_generation_id"],
+                skill.read_json_file(active / "manifest.json")["id"],
+            )
+            self.assertTrue(selection["persistent_active_unchanged"])
+            self.assertGreater(selection["budget"]["estimated_tokens"], 0)
+
+            backend_methods = load_runtime_diagnostic_methods()
+            binding = skill.bind_case_method_generation(
+                state,
+                "CASE-PERSISTENT-SNAPSHOT",
+                Path(selection["generation_dir"]),
+                ttl_seconds=120,
+            )
+            resolved = backend_methods.resolve_case_method_root(
+                skill.method_pack_root(state),
+                types.SimpleNamespace(id="CASE-PERSISTENT-SNAPSHOT"),
+            )
+            self.assertEqual(resolved, Path(selection["generation_dir"]))
+            skill.release_case_method_generation(state, binding)
+
+            args.max_host_method_tokens = 1
+            with self.assertRaisesRegex(skill.SkillError, "Active persistent.*budget"):
+                skill.prepare_requested_diagnostic_skills(args)
+
+    def test_multi_skill_persistent_request_parses_all_before_one_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            state = base / "state"
+            runtime = SCRIPT.parents[1] / "runtime"
+            skill.ensure_method_control_root(runtime, state)
+            pointer_before = skill.method_active_pointer_path(state).read_bytes()
+            good = base / "good"
+            bad = base / "bad"
+            good.mkdir()
+            bad.mkdir()
+            (good / "SKILL.md").write_text(
+                """---
+name: good-pack
+description: Valid diagnostic knowledge.
+---
+# 日志分析
+Search `GOOD_PACK_CANARY`.
+""",
+                encoding="utf-8",
+            )
+            (bad / "SKILL.md").write_text(
+                "# missing portable frontmatter\n", encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                diagnostic_skill=[str(good), str(bad)],
+                diagnostic_skill_fault_tree=[],
+                diagnostic_skill_log_analysis=[],
+                diagnostic_skill_scope="persistent",
+                platform_root=str(runtime),
+                state_dir=str(state),
+                mode="deterministic",
+                max_host_method_tokens=skill.DEFAULT_MAX_HOST_METHOD_TOKENS,
+            )
+            with self.assertRaises(skill.SkillError):
+                skill.prepare_requested_diagnostic_skills(args)
+            self.assertEqual(skill.method_active_pointer_path(state).read_bytes(), pointer_before)
+            self.assertEqual(skill.load_method_pack_registry(state)["packs"], [])
+
+    def test_persistent_host_budget_gate_is_atomic_with_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            state = base / "state"
+            runtime = SCRIPT.parents[1] / "runtime"
+            skill.ensure_method_control_root(runtime, state)
+            pointer_before = skill.method_active_pointer_path(state).read_bytes()
+            source = base / "oversized"
+            source.mkdir()
+            (source / "SKILL.md").write_text(
+                """---
+name: persistent-budget-canary
+description: Persistent knowledge that must be rejected before activation.
+---
+# 日志分析
+
+Search `PERSISTENT_BUDGET_CANARY` before diagnosis.
+""",
+                encoding="utf-8",
+            )
+            pack = skill.parse_diagnostic_skill(source)
+
+            with self.assertRaisesRegex(skill.SkillError, "persistent.*context budget"):
+                skill.install_parsed_diagnostic_skills(
+                    runtime,
+                    state,
+                    [pack],
+                    create_run_snapshot=True,
+                    max_host_method_tokens=1,
+                )
+
+            self.assertEqual(skill.method_active_pointer_path(state).read_bytes(), pointer_before)
+            self.assertEqual(skill.load_method_pack_registry(state)["packs"], [])
+            self.assertFalse((skill.method_pack_root(state) / "packs" / pack["id"]).exists())
+
+    def test_case_bound_job_timeout_cannot_outlive_method_lease(self) -> None:
+        limit = skill.MAX_CASE_METHOD_JOB_TIMEOUT_SECONDS
+        self.assertEqual(skill.case_method_job_timeout(str(limit)), float(limit))
+        self.assertEqual(
+            skill.case_method_binding_lease_seconds(60, 300),
+            float(skill.MAX_CASE_METHOD_BINDING_TTL_SECONDS),
+        )
+        self.assertEqual(
+            skill.case_method_binding_lease_seconds(
+                limit, skill.DEFAULT_HTTP_TIMEOUT_SECONDS,
+            ),
+            float(skill.MAX_CASE_METHOD_BINDING_TTL_SECONDS),
+        )
+        with self.assertRaisesRegex(skill.SkillError, "wait window"):
+            skill.case_method_binding_lease_seconds(
+                limit, skill.DEFAULT_HTTP_TIMEOUT_SECONDS + 1,
+            )
+        for invalid in ("0", "nan", "inf", str(limit + 1)):
+            with self.subTest(value=invalid):
+                with self.assertRaises(argparse.ArgumentTypeError):
+                    skill.case_method_job_timeout(invalid)
+
+        parser = skill.build_parser()
+        with contextlib.redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args([
+                "run",
+                "--title", "lease bound",
+                "--log", "fixture.log",
+                "--job-timeout", str(limit + 1),
+            ])
+        with contextlib.redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args([
+                "diagnose",
+                "--case-id", "CASE-LEASE",
+                "--job-timeout", str(limit + 1),
+            ])
+
+    def test_run_scoped_skill_accepts_explicit_role_paths_for_one_skill_only(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            state = base / "state"
+            runtime = SCRIPT.parents[1] / "runtime"
+            source = base / "explicit-skill"
+            references = source / "references"
+            references.mkdir(parents=True)
+            (source / "SKILL.md").write_text(
+                """---
+name: explicit-role-diagnosis
+description: Knowledge selected through explicit command-line role paths.
+---
+# Generic knowledge
+
+No automatically classified diagnostic sections are required.
+""",
+                encoding="utf-8",
+            )
+            (references / "tree.md").write_text(
+                "# Checks\n\n`EXPLICIT_TREE_CANARY`\n", encoding="utf-8",
+            )
+            (references / "logs.md").write_text(
+                "# Events\n\n`EXPLICIT_LOG_CANARY`\n", encoding="utf-8",
+            )
+
+            selection = skill.prepare_run_scoped_diagnostic_skills(
+                runtime,
+                state,
+                [source],
+                fault_tree_paths=["references/tree.md"],
+                log_analysis_paths=["references/logs.md"],
+                max_host_method_tokens=1_000_000,
+            )
+            generation = Path(selection["generation_dir"])
+            self.assertIn(
+                "EXPLICIT_TREE_CANARY",
+                (generation / "故障树.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "EXPLICIT_LOG_CANARY",
+                (generation / "日志分析.md").read_text(encoding="utf-8"),
+            )
+            sources = selection["method_packs"][0]["sources"]
+            self.assertEqual(sources["故障树.md"][0]["selection"], "explicit")
+            self.assertEqual(sources["日志分析.md"][0]["selection"], "explicit")
+
+            with self.assertRaisesRegex(skill.SkillError, "exactly one --diagnostic-skill"):
+                skill.prepare_run_scoped_diagnostic_skills(
+                    runtime,
+                    state,
+                    [source, source],
+                    fault_tree_paths=["references/tree.md"],
+                )
+
+    def test_case_binding_is_owner_scoped_finite_and_backend_compatible(self) -> None:
+        backend_methods = load_runtime_diagnostic_methods()
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            persistent, _manifest, _registry = skill.publish_method_generation(
+                state,
+                {"故障树.md": "persistent tree", "日志分析.md": "persistent logs"},
+                scope="persistent",
+                packs=[],
+                registry=skill._new_method_pack_registry(),
+                activate=True,
+            )
+            run_generation, _manifest, _registry = skill.publish_method_generation(
+                state,
+                {"故障树.md": "run tree", "日志分析.md": "run logs"},
+                scope="run",
+                packs=[],
+                activate=False,
+            )
+            with self.assertRaisesRegex(skill.SkillError, "run-scoped"):
+                skill.bind_case_method_generation(
+                    state, "CASE-1", persistent, ttl_seconds=120,
+                )
+            for invalid_ttl in (True, 0, -1, float("nan"), float("inf")):
+                with self.subTest(ttl=invalid_ttl):
+                    with self.assertRaises(skill.SkillError):
+                        skill.bind_case_method_generation(
+                            state, "CASE-1", run_generation, ttl_seconds=invalid_ttl,
+                        )
+
+            binding = skill.bind_case_method_generation(
+                state, "CASE-1", run_generation, ttl_seconds=120,
+            )
+            case = types.SimpleNamespace(id="CASE-1")
+            control_root = skill.method_pack_root(state)
+            self.assertEqual(
+                backend_methods.resolve_case_method_root(control_root, case),
+                run_generation,
+            )
+            with self.assertRaisesRegex(skill.SkillError, "owner changed"):
+                skill.renew_case_method_generation(
+                    state,
+                    {**binding, "owner_token": "not-the-owner"},
+                    ttl_seconds=300,
+                )
+            with self.assertRaisesRegex(skill.SkillError, "owner changed"):
+                skill.release_case_method_generation(
+                    state, {**binding, "owner_token": "not-the-owner"},
+                )
+            self.assertTrue(Path(binding["binding_path"]).is_file())
+
+            stored = skill.read_json_file(Path(binding["binding_path"]))
+            stored["expires_at_epoch"] = float("nan")
+            skill.atomic_write_json(Path(binding["binding_path"]), stored)
+            with self.assertRaisesRegex(ValueError, "expiry is invalid"):
+                backend_methods.resolve_case_method_root(control_root, case)
+            stored["expires_at_epoch"] = 0
+            skill.atomic_write_json(Path(binding["binding_path"]), stored)
+            self.assertEqual(
+                backend_methods.resolve_case_method_root(control_root, case),
+                persistent,
+            )
+            binding = skill.renew_case_method_generation(
+                state, binding, ttl_seconds=300,
+            )
+            self.assertGreater(binding["expires_at_epoch"], skill.time.time() + 290)
+            self.assertEqual(
+                backend_methods.resolve_case_method_root(control_root, case),
+                run_generation,
+            )
+            self.assertTrue(skill.release_case_method_generation(state, binding))
+            self.assertFalse(Path(binding["binding_path"]).exists())
+
+            tampered_generation, tampered_manifest, _registry = (
+                skill.publish_method_generation(
+                    state,
+                    {"故障树.md": "tamper tree", "日志分析.md": "tamper logs"},
+                    scope="run",
+                    packs=[{
+                        "id": "pack-a",
+                        "name": "alpha",
+                        "content_sha256": "a" * 64,
+                    }],
+                    activate=False,
+                )
+            )
+            tampered_binding = skill.bind_case_method_generation(
+                state, "CASE-2", tampered_generation, ttl_seconds=120,
+            )
+            tampered_manifest["packs"][0]["content_sha256"] = "b" * 64
+            skill.atomic_write_json(
+                tampered_generation / "manifest.json", tampered_manifest,
+            )
+            tampered_binding_payload = skill.read_json_file(
+                Path(tampered_binding["binding_path"]),
+            )
+            tampered_binding_payload["manifest_sha256"] = (
+                skill.canonical_json_sha256(tampered_manifest)
+            )
+            skill.atomic_write_json(
+                Path(tampered_binding["binding_path"]), tampered_binding_payload,
+            )
+            with self.assertRaisesRegex(ValueError, "content identity is invalid"):
+                backend_methods.resolve_case_method_root(
+                    control_root, types.SimpleNamespace(id="CASE-2"),
+                )
+
+            persistent_manifest_path = persistent / "manifest.json"
+            persistent_manifest = skill.read_json_file(persistent_manifest_path)
+            persistent_manifest["scope"] = "run"
+            skill.atomic_write_json(persistent_manifest_path, persistent_manifest)
+            active_pointer_path = skill.method_active_pointer_path(state)
+            active_pointer = skill.read_json_file(active_pointer_path)
+            active_pointer["manifest_sha256"] = skill.canonical_json_sha256(
+                persistent_manifest
+            )
+            skill.atomic_write_json(active_pointer_path, active_pointer)
+            with self.assertRaisesRegex(ValueError, "manifest validation failed"):
+                backend_methods.resolve_case_method_root(control_root, case)
+
+    def test_run_renews_case_binding_before_each_method_using_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            first_log = base / "first.log"
+            second_log = base / "second.log"
+            first_log.write_text("first", encoding="utf-8")
+            second_log.write_text("second", encoding="utf-8")
+            args = skill.build_parser().parse_args([
+                "run",
+                "--mode", "deterministic",
+                "--title", "renewal regression",
+                "--log", str(first_log),
+                "--log", str(second_log),
+                "--state-dir", str(base / "state"),
+                "--output-dir", str(base / "output"),
+            ])
+            events: list[str] = []
+
+            class FakeClient:
+                uploaded = 0
+                submitted = 0
+
+                def request(self, method, path, **_kwargs):
+                    if (method, path) == ("GET", "/system/auth-info"):
+                        return {"mode": "disabled"}
+                    if (method, path) == ("GET", "/system/model"):
+                        return {}
+                    if (method, path) == ("POST", "/cases"):
+                        return {"id": "CASE-RENEW"}
+                    if path.endswith("/parse"):
+                        self.submitted += 1
+                        return {"id": f"parse-{self.submitted}"}
+                    if path.endswith("/triage"):
+                        events.append("triage")
+                        self.submitted += 1
+                        return {
+                            "triage_run_id": f"triage-{self.submitted}",
+                            "job": {"id": f"triage-job-{self.submitted}"},
+                        }
+                    if (method, path) == ("POST", "/cases/CASE-RENEW/analyses"):
+                        events.append("analysis")
+                        return {"id": "analysis-job"}
+                    raise AssertionError(f"Unexpected API call: {method} {path}")
+
+                def upload_artifact(self, *_args, **_kwargs):
+                    self.uploaded += 1
+                    return {"id": f"artifact-{self.uploaded}", "original_name": "fixture.log"}
+
+                def wait_job(self, job_id, **_kwargs):
+                    result_json = (
+                        json.dumps({"analysis_run_id": "analysis-1"})
+                        if job_id == "analysis-job"
+                        else "{}"
+                    )
+                    return {
+                        "id": job_id,
+                        "kind": "fixture",
+                        "status": "COMPLETED",
+                        "result_json": result_json,
+                    }
+
+            binding = {
+                "case_id": "CASE-RENEW",
+                "owner_token": "owner",
+                "generation_id": "gen-0123456789abcdef0123",
+            }
+
+            def renew(_state, current, **_kwargs):
+                events.append("renew")
+                return current
+
+            selection = {
+                "scope": "run",
+                "persisted": False,
+                "method_packs": [],
+                "generation_id": binding["generation_id"],
+                "generation_dir": str(base / "run-generation"),
+                "budget": {"estimated_tokens": 1},
+                "persistent_active_unchanged": True,
+            }
+            output = StringIO()
+            with (
+                mock.patch.object(skill, "prepare_requested_diagnostic_skills", return_value=selection),
+                mock.patch.object(
+                    skill,
+                    "ensure_backend_for_command",
+                    return_value=(SCRIPT.parents[1] / "runtime", skill.BackendProcess()),
+                ),
+                mock.patch.object(skill, "client_from_args", return_value=FakeClient()),
+                mock.patch.object(skill, "verify_backend_method_runtime") as runtime_verify,
+                mock.patch.object(skill, "bind_case_method_generation", return_value=binding),
+                mock.patch.object(skill, "renew_case_method_generation", side_effect=renew) as renew_mock,
+                mock.patch.object(skill, "release_case_method_generation", return_value=True),
+                mock.patch.object(skill, "export_result_bundle", return_value={"output_dir": str(base / "output")}),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(skill.command_run(args), 0)
+
+            self.assertEqual(
+                events,
+                ["renew", "triage", "renew", "triage", "renew", "analysis"],
+            )
+            self.assertEqual(renew_mock.call_count, 3)
+            runtime_verify.assert_called_once_with(mock.ANY, (base / "state").resolve())
+
+    def test_backend_model_run_enables_egress_only_after_parse_and_triages_once(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            log_path = base / "fixture.log"
+            log_path.write_text("fixture", encoding="utf-8")
+            args = skill.build_parser().parse_args([
+                "run",
+                "--mode", "backend-model",
+                "--approve-model-egress",
+                "--title", "backend model sequencing",
+                "--log", str(log_path),
+                "--state-dir", str(base / "state"),
+                "--output-dir", str(base / "output"),
+            ])
+            events: list[str] = []
+
+            class FakeClient:
+                def request(self, method, path, **kwargs):
+                    if (method, path) == ("GET", "/system/auth-info"):
+                        return {"mode": "disabled"}
+                    if (method, path) == ("GET", "/system/model"):
+                        return {
+                            "provider": "openai_compatible",
+                            "model": "fixture-model",
+                            "base_url_configured": True,
+                            "api_key_configured": True,
+                        }
+                    if (method, path) == ("POST", "/cases"):
+                        self.assert_payload = kwargs["json_body"]
+                        events.append(f"create-egress-{self.assert_payload['model_egress_approved']}")
+                        return {"id": "CASE-BACKEND"}
+                    if path.endswith("/parse"):
+                        events.append("parse")
+                        return {"id": "parse-job"}
+                    if (method, path) == ("PATCH", "/cases/CASE-BACKEND"):
+                        self.assert_patch = kwargs["json_body"]
+                        events.append(f"patch-egress-{self.assert_patch['model_egress_approved']}")
+                        return {"id": "CASE-BACKEND", **self.assert_patch}
+                    if path.endswith("/triage"):
+                        events.append("triage")
+                        return {
+                            "triage_run_id": "triage-1",
+                            "job": {"id": "triage-job"},
+                        }
+                    if (method, path) == ("POST", "/cases/CASE-BACKEND/analyses"):
+                        events.append("analysis")
+                        return {"id": "analysis-job"}
+                    if (method, path) == ("GET", "/cases/CASE-BACKEND/analyses"):
+                        return [{"id": "analysis-1"}]
+                    raise AssertionError(f"Unexpected API call: {method} {path}")
+
+                def upload_artifact(self, *_args, **_kwargs):
+                    return {"id": "artifact-1", "original_name": "fixture.log"}
+
+                def wait_job(self, job_id, **_kwargs):
+                    result_json = (
+                        json.dumps({"analysis_run_id": "analysis-1"})
+                        if job_id == "analysis-job"
+                        else "{}"
+                    )
+                    return {
+                        "id": job_id,
+                        "kind": "fixture",
+                        "status": "COMPLETED",
+                        "result_json": result_json,
+                    }
+
+            binding = {
+                "case_id": "CASE-BACKEND",
+                "owner_token": "owner",
+                "generation_id": "gen-0123456789abcdef0123",
+            }
+            selection = {
+                "scope": "run",
+                "persisted": False,
+                "method_packs": [],
+                "generation_id": binding["generation_id"],
+                "generation_dir": str(base / "generation"),
+                "budget": {"estimated_tokens": 10},
+                "persistent_active_unchanged": True,
+            }
+            with (
+                mock.patch.object(
+                    skill, "prepare_requested_diagnostic_skills", return_value=selection,
+                ),
+                mock.patch.object(
+                    skill,
+                    "ensure_backend_for_command",
+                    return_value=(SCRIPT.parents[1] / "runtime", skill.BackendProcess()),
+                ),
+                mock.patch.object(skill, "client_from_args", return_value=FakeClient()),
+                mock.patch.object(skill, "verify_backend_method_runtime"),
+                mock.patch.object(skill, "bind_case_method_generation", return_value=binding),
+                mock.patch.object(skill, "renew_case_method_generation", return_value=binding),
+                mock.patch.object(skill, "finish_case_method_binding"),
+                mock.patch.object(
+                    skill, "export_result_bundle", return_value={"output_dir": str(base / "output")},
+                ),
+                contextlib.redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(skill.command_run(args), 0)
+
+            self.assertEqual(
+                events,
+                ["create-egress-False", "parse", "patch-egress-True", "triage", "analysis"],
+            )
+
+    def test_keyboard_interrupt_preserves_binding_for_every_method_job_window(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            log_path = base / "fixture.log"
+            log_path.write_text("fixture", encoding="utf-8")
+            state = (base / "state").resolve()
+            binding = {
+                "case_id": "CASE-INTERRUPT",
+                "owner_token": "owner",
+                "generation_id": "gen-0123456789abcdef0123",
+            }
+            selection = {
+                "scope": "run",
+                "persisted": False,
+                "method_packs": [],
+                "generation_id": binding["generation_id"],
+                "generation_dir": str(base / "generation"),
+                "budget": {"estimated_tokens": 10},
+                "persistent_active_unchanged": True,
+            }
+
+            class InterruptingRunClient:
+                def __init__(self, stage: str) -> None:
+                    self.stage = stage
+
+                def request(self, method, path, **_kwargs):
+                    if (method, path) == ("GET", "/system/auth-info"):
+                        return {"mode": "disabled"}
+                    if (method, path) == ("GET", "/system/model"):
+                        return {}
+                    if (method, path) == ("POST", "/cases"):
+                        return {"id": "CASE-INTERRUPT"}
+                    if path.endswith("/parse"):
+                        return {"id": "parse-job"}
+                    if path.endswith("/triage"):
+                        return {
+                            "triage_run_id": "triage-1",
+                            "job": {"id": "triage-job"},
+                        }
+                    if (method, path) == ("POST", "/cases/CASE-INTERRUPT/analyses"):
+                        return {"id": "analysis-job"}
+                    raise AssertionError(f"Unexpected API call: {method} {path}")
+
+                def upload_artifact(self, *_args, **_kwargs):
+                    return {"id": "artifact-1", "original_name": "fixture.log"}
+
+                def wait_job(self, job_id, **_kwargs):
+                    if (self.stage, job_id) in {
+                        ("triage", "triage-job"),
+                        ("analysis", "analysis-job"),
+                    }:
+                        raise KeyboardInterrupt
+                    return {
+                        "id": job_id,
+                        "kind": "fixture",
+                        "status": "COMPLETED",
+                        "result_json": "{}",
+                    }
+
+            for stage in ("triage", "analysis"):
+                with self.subTest(command="run", stage=stage):
+                    args = skill.build_parser().parse_args([
+                        "run",
+                        "--mode", "deterministic",
+                        "--title", "interrupt regression",
+                        "--log", str(log_path),
+                        "--state-dir", str(state),
+                    ])
+                    with (
+                        mock.patch.object(
+                            skill, "prepare_requested_diagnostic_skills", return_value=selection,
+                        ),
+                        mock.patch.object(
+                            skill,
+                            "ensure_backend_for_command",
+                            return_value=(SCRIPT.parents[1] / "runtime", skill.BackendProcess()),
+                        ),
+                        mock.patch.object(
+                            skill, "client_from_args", return_value=InterruptingRunClient(stage),
+                        ),
+                        mock.patch.object(skill, "verify_backend_method_runtime"),
+                        mock.patch.object(skill, "bind_case_method_generation", return_value=binding),
+                        mock.patch.object(
+                            skill, "renew_case_method_generation", return_value=binding,
+                        ),
+                        mock.patch.object(skill, "finish_case_method_binding") as finish,
+                        contextlib.redirect_stdout(StringIO()),
+                    ):
+                        with self.assertRaises(KeyboardInterrupt):
+                            skill.command_run(args)
+                    finish.assert_called_once_with(
+                        state,
+                        binding,
+                        method_job_outcome_uncertain=True,
+                        binding_ttl_seconds=float(skill.MAX_CASE_METHOD_BINDING_TTL_SECONDS),
+                    )
+
+            class InterruptingDiagnoseClient:
+                def request(self, method, path, **_kwargs):
+                    if (method, path) == ("GET", "/system/model"):
+                        return {}
+                    if (method, path) == ("PATCH", "/cases/CASE-INTERRUPT"):
+                        return {"id": "CASE-INTERRUPT"}
+                    if (method, path) == ("POST", "/cases/CASE-INTERRUPT/analyses"):
+                        return {"id": "analysis-job"}
+                    raise AssertionError(f"Unexpected API call: {method} {path}")
+
+                def wait_job(self, _job_id, **_kwargs):
+                    raise KeyboardInterrupt
+
+            args = skill.build_parser().parse_args([
+                "diagnose",
+                "--mode", "deterministic",
+                "--case-id", "CASE-INTERRUPT",
+                "--state-dir", str(state),
+            ])
+            with (
+                mock.patch.object(
+                    skill, "prepare_requested_diagnostic_skills", return_value=selection,
+                ),
+                mock.patch.object(
+                    skill,
+                    "ensure_backend_for_command",
+                    return_value=(SCRIPT.parents[1] / "runtime", skill.BackendProcess()),
+                ),
+                mock.patch.object(
+                    skill, "client_from_args", return_value=InterruptingDiagnoseClient(),
+                ),
+                mock.patch.object(skill, "verify_backend_method_runtime"),
+                mock.patch.object(skill, "bind_case_method_generation", return_value=binding),
+                mock.patch.object(skill, "renew_case_method_generation", return_value=binding),
+                mock.patch.object(skill, "finish_case_method_binding") as finish,
+                contextlib.redirect_stdout(StringIO()),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    skill.command_diagnose(args)
+            finish.assert_called_once_with(
+                state,
+                binding,
+                method_job_outcome_uncertain=True,
+                binding_ttl_seconds=float(skill.MAX_CASE_METHOD_BINDING_TTL_SECONDS),
+            )
+
+    def test_existing_case_host_agent_diagnose_exports_before_binding_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            args = skill.build_parser().parse_args([
+                "diagnose",
+                "--mode", "host-agent",
+                "--approve-host-model-egress",
+                "--case-id", "CASE-HOST",
+                "--state-dir", str(base / "state"),
+                "--output-dir", str(base / "output"),
+            ])
+            selection = {
+                "scope": "run",
+                "persisted": False,
+                "method_packs": [],
+                "generation_id": "gen-0123456789abcdef0123",
+                "generation_dir": str(base / "generation"),
+                "budget": {"estimated_tokens": 10},
+                "persistent_active_unchanged": True,
+            }
+            binding = {
+                "case_id": "CASE-HOST",
+                "owner_token": "owner",
+                "generation_id": selection["generation_id"],
+            }
+
+            class FakeClient:
+                def request(self, method, path, **_kwargs):
+                    if (method, path) == ("GET", "/system/model"):
+                        return {"provider": "mock"}
+                    if (method, path) == ("PATCH", "/cases/CASE-HOST"):
+                        self.case_patch = _kwargs.get("json_body")
+                        return {"id": "CASE-HOST", **(self.case_patch or {})}
+                    if (method, path) == ("POST", "/cases/CASE-HOST/analyses"):
+                        return {"id": "JOB-1"}
+                    raise AssertionError(f"Unexpected API call: {method} {path}")
+
+                def wait_job(self, job_id, **_kwargs):
+                    self.assert_job = job_id
+                    return {
+                        "id": job_id,
+                        "status": "COMPLETED",
+                        "result_json": json.dumps({"analysis_run_id": "ANALYSIS-1"}),
+                    }
+
+            with (
+                mock.patch.object(skill, "prepare_requested_diagnostic_skills", return_value=selection),
+                mock.patch.object(
+                    skill,
+                    "ensure_backend_for_command",
+                    return_value=(SCRIPT.parents[1] / "runtime", skill.BackendProcess()),
+                ),
+                mock.patch.object(skill, "client_from_args", return_value=FakeClient()),
+                mock.patch.object(skill, "verify_backend_method_runtime"),
+                mock.patch.object(skill, "bind_case_method_generation", return_value=binding),
+                mock.patch.object(skill, "renew_case_method_generation", return_value=binding),
+                mock.patch.object(
+                    skill, "export_result_bundle", return_value={"output_dir": str(base / "output")},
+                ) as export,
+                mock.patch.object(skill, "finish_case_method_binding") as finish,
+                contextlib.redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(skill.command_diagnose(args), 0)
+            manifest = export.call_args.kwargs["manifest_extra"]
+            self.assertEqual(manifest["execution_mode"], "host-agent")
+            self.assertTrue(manifest["host_model_egress_approved"])
+            self.assertEqual(manifest["diagnostic_methods_dir"], selection["generation_dir"])
+            finish.assert_called_once_with(
+                (base / "state").resolve(),
+                binding,
+                method_job_outcome_uncertain=False,
+                binding_ttl_seconds=float(skill.MAX_CASE_METHOD_BINDING_TTL_SECONDS),
+            )
+
+    def test_method_pack_lock_rejects_overlap_and_recovers_after_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            lock_path = skill.method_pack_root(state) / ".method-packs.lock"
+            with skill.method_pack_lock(state):
+                with self.assertRaisesRegex(skill.SkillError, "operation is active"):
+                    with skill.method_pack_lock(state):
+                        pass
+            with self.assertRaises(RuntimeError):
+                with skill.method_pack_lock(state):
+                    raise RuntimeError("simulated failure")
+            with skill.method_pack_lock(state):
+                self.assertTrue(True)
+
+            # The metadata file is intentionally persistent.  Kernel ownership,
+            # not PID parsing or stale-file unlinking, controls exclusivity.
+            skill.atomic_write_json(lock_path, {
+                "schema": "gw-ap-debug-method-pack-lock/v2",
+                "pid": 999_999_999,
+                "token": "abandoned",
+                "created_at_epoch": 0,
+            })
+            with skill.method_pack_lock(state):
+                pass
+            metadata = skill.read_json_file(lock_path)
+            self.assertEqual(metadata["schema"], "gw-ap-debug-method-pack-lock/v2")
+            self.assertEqual(metadata["kernel_lock"], "byte-0-exclusive")
+            self.assertNotEqual(metadata["token"], "abandoned")
+
     def test_diagnostic_skill_metadata_maps_complete_role_documents(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
@@ -490,7 +1579,7 @@ metadata:
             self.assertEqual(parsed["execution_policy"], "MARKDOWN_ONLY_NO_IMPORTED_CODE_EXECUTION")
             self.assertIn("LINK_CANARY", parsed["roles"]["故障树.md"]["content"])
             self.assertIn("LOG_CANARY", parsed["roles"]["日志分析.md"]["content"])
-            self.assertEqual(parsed["parsed_markdown_files"], 4)
+            self.assertEqual(parsed["parsed_markdown_files"], 3)
 
     def test_diagnostic_skill_auto_classifies_role_sections(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -544,8 +1633,7 @@ description: Must remain contained.
             base = Path(raw)
             source = base / "pack"
             source.mkdir()
-            (source / "SKILL.md").write_text(
-                """---
+            skill_document = """---
 name: idempotent-diagnosis
 description: Log and fault-tree method pack.
 ---
@@ -554,15 +1642,19 @@ description: Log and fault-tree method pack.
 | 判断点 | 日志关键字 | 结论 |
 |---|---|---|
 | Canary | `PACK_CANARY` | imported knowledge works |
-""",
-                encoding="utf-8",
-            )
+"""
+            (source / "SKILL.md").write_text(skill_document, encoding="utf-8")
             state = base / "state"
             runtime = SCRIPT.parents[1] / "runtime"
             first = skill.install_diagnostic_skill(runtime, state, source)
             second = skill.install_diagnostic_skill(runtime, state, source)
+            relocated = base / "relocated-pack"
+            relocated.mkdir()
+            (relocated / "SKILL.md").write_text(skill_document, encoding="utf-8")
+            third = skill.install_diagnostic_skill(runtime, state, relocated)
             self.assertEqual(first["status"], "IMPORTED")
             self.assertEqual(second["status"], "UNCHANGED")
+            self.assertEqual(third["status"], "UNCHANGED")
             for filename in skill.METHOD_FILENAMES:
                 active = (skill.resolve_methods_dir(state) / filename).read_text(encoding="utf-8")
                 self.assertEqual(active.count("PACK_CANARY"), 1)
@@ -585,6 +1677,103 @@ description: Log and fault-tree method pack.
                 active = (skill.resolve_methods_dir(state) / filename).read_text(encoding="utf-8")
                 self.assertNotIn("PACK_CANARY", active)
 
+    def test_composition_rejects_tampered_cached_pack_and_base(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            source = base / "pack"
+            source.mkdir()
+            (source / "SKILL.md").write_text(
+                """---
+name: integrity-canary
+description: Integrity regression pack.
+---
+# 日志分析与综合诊断
+
+Search `INTEGRITY_CANARY`.
+""",
+                encoding="utf-8",
+            )
+            state = base / "state"
+            runtime = SCRIPT.parents[1] / "runtime"
+            installed = skill.install_diagnostic_skill(runtime, state, source)
+            registry = skill.load_method_pack_registry(state)
+            entry = registry["packs"][0]
+            role = entry["roles"][0]
+            cached_role = skill.method_pack_root(state) / entry["path"] / role
+            cached_role.write_text("tampered\n", encoding="utf-8")
+            with self.assertRaisesRegex(skill.SkillError, "role hash mismatch"):
+                skill.rebuild_composed_methods(runtime, state, registry)
+
+            # Restore the pack through its reviewed source, then prove the
+            # authenticated base cache is also fail-closed.
+            skill.install_diagnostic_skill(runtime, state, source)
+            registry = skill.load_method_pack_registry(state)
+            base_role = skill.method_pack_root(state) / registry["base"]["故障树.md"]["path"]
+            base_role.write_text("tampered base\n", encoding="utf-8")
+            with self.assertRaisesRegex(skill.SkillError, "base diagnostic method"):
+                skill.rebuild_composed_methods(runtime, state, registry)
+
+    def test_custom_seed_directory_never_bypasses_active_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            state = base / "state"
+            seed = base / "custom-seed"
+            seed.mkdir()
+            for filename in skill.METHOD_FILENAMES:
+                (seed / filename).write_text(f"# seed\n{filename}\n", encoding="utf-8")
+            runtime = SCRIPT.parents[1] / "runtime"
+            with mock.patch.dict(skill.os.environ, {"GW_AP_DEBUG_METHODS_DIR": str(seed)}):
+                skill.ensure_method_control_root(runtime, state)
+                active = skill.active_method_generation_dir(state)
+                self.assertIsNotNone(active)
+                self.assertEqual(skill.resolve_legacy_methods_dir(state), seed.resolve())
+                self.assertEqual(skill.resolve_methods_dir(state), active)
+
+    def test_uncertain_method_job_preserves_binding_instead_of_releasing(self) -> None:
+        self.assertFalse(
+            skill.method_job_failure_is_uncertain(
+                skill.JobTerminalError("failed"), submitted=True,
+            )
+        )
+        self.assertFalse(
+            skill.method_job_failure_is_uncertain(
+                skill.ApiError(409, "rejected"), submitted=False,
+            )
+        )
+        self.assertTrue(
+            skill.method_job_failure_is_uncertain(
+                KeyboardInterrupt(), submitted=False,
+            )
+        )
+        binding = {"case_id": "CASE-1", "owner_token": "owner"}
+        renewed = {**binding, "expires_at_epoch": skill.time.time() + 3600}
+        with (
+            mock.patch.object(skill, "renew_case_method_generation", return_value=renewed) as renew,
+            mock.patch.object(skill, "release_case_method_generation") as release,
+            contextlib.redirect_stderr(StringIO()),
+        ):
+            skill.finish_case_method_binding(
+                Path("state"),
+                binding,
+                method_job_outcome_uncertain=True,
+                binding_ttl_seconds=60,
+            )
+        renew.assert_called_once()
+        release.assert_not_called()
+
+        with (
+            mock.patch.object(skill, "renew_case_method_generation") as renew,
+            mock.patch.object(skill, "release_case_method_generation", return_value=True) as release,
+        ):
+            skill.finish_case_method_binding(
+                Path("state"),
+                binding,
+                method_job_outcome_uncertain=False,
+                binding_ttl_seconds=60,
+            )
+        renew.assert_not_called()
+        release.assert_called_once()
+
     def test_diagnostic_skill_cli_supports_preview_and_pre_diagnosis_import(self) -> None:
         parser = skill.build_parser()
         preview = parser.parse_args([
@@ -594,8 +1783,20 @@ description: Log and fault-tree method pack.
         run = parser.parse_args([
             "run", "--mode", "deterministic", "--title", "case", "--log", "sample.log",
             "--diagnostic-skill", "C:/diagnostic-skill",
+            "--diagnostic-skill-fault-tree", "references/tree.md",
+            "--diagnostic-skill-log-analysis", "references/logs.md",
         ])
         self.assertEqual(run.diagnostic_skill, ["C:/diagnostic-skill"])
+        self.assertEqual(run.diagnostic_skill_fault_tree, ["references/tree.md"])
+        self.assertEqual(run.diagnostic_skill_log_analysis, ["references/logs.md"])
+        diagnose = parser.parse_args([
+            "diagnose", "--case-id", "CASE-1",
+            "--diagnostic-skill", "C:/diagnostic-skill",
+            "--diagnostic-skill-fault-tree", "references/tree.md",
+            "--diagnostic-skill-log-analysis", "references/logs.md",
+        ])
+        self.assertEqual(diagnose.diagnostic_skill_fault_tree, ["references/tree.md"])
+        self.assertEqual(diagnose.diagnostic_skill_log_analysis, ["references/logs.md"])
 
     def test_export_rejects_reused_nonempty_output_directory_before_api_calls(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -619,11 +1820,15 @@ description: Log and fault-tree method pack.
             python_path = state / "venv" / "Scripts" / "python.exe"
             python_path.parent.mkdir(parents=True)
             python_path.write_bytes(b"")
+            methods = state / "methods"
+            methods.mkdir(parents=True)
+            for filename in skill.METHOD_FILENAMES:
+                (methods / filename).write_text(f"# {filename}\nfixture\n", encoding="utf-8")
             process = mock.Mock()
             process.poll.return_value = None
             with (
                 mock.patch.object(skill, "backend_is_healthy", return_value=False),
-                mock.patch.object(skill, "synchronize_methods", return_value=(state / "methods", [])),
+                mock.patch.object(skill, "synchronize_methods", return_value=(methods, [])),
                 mock.patch.object(skill, "venv_python", return_value=python_path),
                 mock.patch.object(skill, "backend_environment_ready", return_value=True),
                 mock.patch.object(skill, "wait_backend"),
@@ -690,6 +1895,55 @@ class HostContractTests(unittest.TestCase):
                 self.assertRaises(skill.SkillError),
             ):
                 skill.hydrate_host_method_documents(NoNetwork(), result, {"state_dir": str(base)})
+
+    def test_host_reexport_recovers_analyzed_run_generation_by_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            skill.publish_method_generation(
+                state,
+                {"故障树.md": "persistent tree", "日志分析.md": "persistent logs"},
+                scope="persistent",
+                packs=[],
+                registry=skill._new_method_pack_registry(),
+                activate=True,
+            )
+            run_generation, _manifest, _registry = skill.publish_method_generation(
+                state,
+                {"故障树.md": "run tree", "日志分析.md": "run log canary"},
+                scope="run",
+                packs=[],
+                activate=False,
+            )
+            content = skill._decode_diagnostic_method(run_generation / "日志分析.md")
+            digest = skill.hashlib.sha256(content.encode("utf-8")).hexdigest()
+            result = {
+                "diagnostic_planning": {
+                    "method_catalog": [{
+                        "id": f"LOCALDOC-{digest[:20]}",
+                        "title": "run logs",
+                        "source_type": "analysis_skill",
+                        "role": "LOG_ANALYSIS_METHOD",
+                        "version": 1,
+                        "content_sha256": digest,
+                    }],
+                },
+            }
+
+            class NoNetwork:
+                def request(self, *_args, **_kwargs):
+                    raise AssertionError("Historical LOCALDOC hydration must remain local")
+
+            with mock.patch.object(skill, "DEFAULT_MAX_METHOD_GENERATIONS_SCAN", 1):
+                hydrated = skill.hydrate_host_method_documents(
+                    NoNetwork(),
+                    result,
+                    {
+                        "state_dir": str(state),
+                        "diagnostic_methods_dir": str(run_generation),
+                    },
+                )
+            self.assertEqual(hydrated[0]["content"], content)
+            self.assertEqual(hydrated[0]["content_sha256"], digest)
 
     def test_host_tool_budget_is_enforced_per_round(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

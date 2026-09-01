@@ -32,7 +32,7 @@ The bundled `fault-tree.md` and `log-analysis.md` are exact local method copies 
 
 For v0.3.5, the repository owner explicitly directed publication of the complete
 MVP with the bundled methods to the public `skillonly` branch on 2026-08-28.
-The v0.3.6, v0.4.0, and v0.5.0 packaging/interaction updates retain the same runtime and
+The v0.3.6, v0.4.0, v0.5.0, and v0.6.0 packaging/interaction updates retain
 both method documents under that recorded repository-audience decision. A
 downstream publisher must make its own authorization decision.
 
@@ -42,15 +42,20 @@ For another audience or a later replacement, an authorized owner must choose one
 2. replace them with reviewed generic methods using `sync-methods --fault-tree ... --log-analysis ...`;
 3. remove them and require user-supplied methods.
 
-Active copies live in the external state method directory. The Skill initializes
-missing copies but preserves different user-owned methods unless `--force` is
-explicit.
+Active copies live in immutable generations under the external state method-
+pack directory. Persistent changes atomically replace a hash-pinned active
+pointer instead of editing a selected generation in place. The Skill
+initializes missing base copies but preserves different user-owned base methods
+unless `--force` is explicit.
 
-Imported diagnostic Skills are separate local inputs. The v0.5.0 importer reads
+Imported diagnostic Skills are separate local inputs. The v0.6.0 importer reads
 only bounded Markdown contained in the supplied Skill, records file/content
-hashes, and never executes imported scripts, hooks, tools, or dynamic commands.
-Composed packs remain in the external state directory and are not committed by
-the importer.
+hashes and a conservative size estimate, and never executes imported scripts,
+hooks, tools, or dynamic commands. `run`/`diagnose` use a per-case run-scoped
+generation by default; persistent installation requires the importer without
+`--dry-run` or explicit `--diagnostic-skill-scope persistent`. Composed
+generations remain in the external state directory and are not committed to the
+repository.
 
 ## Untrusted content
 

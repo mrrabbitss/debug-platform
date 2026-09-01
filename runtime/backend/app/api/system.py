@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -98,6 +100,16 @@ def auth_info() -> dict:
         "legacy_admin_enabled": bool(
             settings.api_key and settings.auth_allow_legacy_admin
         ),
+    }
+
+
+@router.get("/system/diagnostic-method-runtime")
+def diagnostic_method_runtime() -> dict:
+    configured = os.environ.get("DIAGNOSTIC_METHODS_ROOT")
+    return {
+        "schema": "gw-ap-debug-diagnostic-method-runtime/v1",
+        "case_binding_supported": True,
+        "control_root": str(Path(configured).expanduser().resolve()) if configured else None,
     }
 
 

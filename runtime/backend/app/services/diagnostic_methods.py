@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import json
+import math
 import os
 import re
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +35,10 @@ LOG_METHOD_SOURCE_TYPES = frozenset({
     "diagnostic_rule",
     "fault_tree",
 })
+_METHOD_GENERATION_SCHEMA = "gw-ap-debug-method-generation/v1"
+_METHOD_ACTIVE_POINTER_SCHEMA = "gw-ap-debug-method-active/v1"
+_METHOD_BINDING_SCHEMA = "gw-ap-debug-method-binding/v1"
+_METHOD_FILENAMES = ("故障树.md", "日志分析.md")
 _INLINE_CODE = re.compile(r"`([^`\r\n]{2,500})`")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
@@ -112,6 +120,174 @@ def _document_role(source_type: str) -> str:
     return "REFERENCE_CASE"
 
 
+def _canonical_json_sha256(payload: Any) -> str:
+    rendered = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(rendered).hexdigest()
+
+
+def _method_generation_identity(
+    scope: str,
+    role_hashes: dict[str, str],
+    packs: Any,
+) -> dict[str, Any]:
+    if scope not in {"persistent", "run"}:
+        raise ValueError("Diagnostic method generation scope is invalid")
+    if set(role_hashes) != set(_METHOD_FILENAMES) or any(
+        not re.fullmatch(r"[0-9a-f]{64}", str(role_hashes.get(filename) or ""))
+        for filename in _METHOD_FILENAMES
+    ):
+        raise ValueError("Diagnostic method generation role identity is invalid")
+    if not isinstance(packs, list):
+        raise ValueError("Diagnostic method generation packs are invalid")
+    projected: list[dict[str, str]] = []
+    for pack in packs:
+        if not isinstance(pack, dict):
+            raise ValueError("Diagnostic method generation pack identity is invalid")
+        item = {
+            "id": str(pack.get("id") or ""),
+            "name": str(pack.get("name") or ""),
+            "content_sha256": str(pack.get("content_sha256") or ""),
+        }
+        if (
+            not item["id"]
+            or not item["name"]
+            or not re.fullmatch(r"[0-9a-f]{64}", item["content_sha256"])
+        ):
+            raise ValueError("Diagnostic method generation pack identity is incomplete")
+        projected.append(item)
+    projected.sort(
+        key=lambda item: (
+            item["name"].casefold(),
+            item["id"],
+            item["content_sha256"],
+        )
+    )
+    return {"scope": scope, "roles": dict(role_hashes), "packs": projected}
+
+
+def _read_method_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Diagnostic method control file is unreadable: {path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Diagnostic method control file must be an object: {path}")
+    return payload
+
+
+def _validated_generation_root(
+    control_root: Path,
+    selector: dict[str, Any],
+    *,
+    expected_scope: str,
+) -> Path:
+    generation_id = str(selector.get("generation_id") or "")
+    relative = Path(str(selector.get("path") or ""))
+    if not re.fullmatch(r"gen-[0-9a-f]{20}", generation_id):
+        raise ValueError("Diagnostic method generation ID is invalid")
+    if relative.is_absolute() or relative.as_posix() != f"generations/{generation_id}":
+        raise ValueError("Diagnostic method generation path is invalid")
+    generation_root = (control_root / relative).resolve()
+    generations_root = (control_root / "generations").resolve()
+    try:
+        generation_root.relative_to(generations_root)
+    except ValueError as exc:
+        raise ValueError("Diagnostic method generation escapes its control root") from exc
+    manifest_path = generation_root / "manifest.json"
+    manifest = _read_method_json(manifest_path)
+    if (
+        manifest.get("schema") != _METHOD_GENERATION_SCHEMA
+        or manifest.get("id") != generation_id
+        or manifest.get("scope") != expected_scope
+        or not hmac.compare_digest(
+            str(selector.get("manifest_sha256") or ""),
+            _canonical_json_sha256(manifest),
+        )
+    ):
+        raise ValueError("Diagnostic method generation manifest validation failed")
+    roles = manifest.get("roles")
+    if not isinstance(roles, dict) or set(roles) != set(_METHOD_FILENAMES):
+        raise ValueError("Diagnostic method generation role set is invalid")
+    role_hashes = {
+        filename: str((roles.get(filename) or {}).get("sha256") or "")
+        for filename in _METHOD_FILENAMES
+    }
+    identity = _method_generation_identity(
+        str(manifest.get("scope") or ""),
+        role_hashes,
+        manifest.get("packs"),
+    )
+    expected_generation_id = f"gen-{_canonical_json_sha256(identity)[:20]}"
+    if manifest.get("packs") != identity["packs"] or not hmac.compare_digest(
+        generation_id,
+        expected_generation_id,
+    ):
+        raise ValueError("Diagnostic method generation content identity is invalid")
+    registry = manifest.get("registry")
+    if expected_scope == "run":
+        if registry is not None:
+            raise ValueError("Run-scoped diagnostic method generation contains a registry")
+    else:
+        if not isinstance(registry, dict) or registry.get("schema") != "gw-ap-debug-method-pack-registry/v2":
+            raise ValueError("Persistent diagnostic method generation registry is invalid")
+        if registry.get("active") != role_hashes or registry.get("active_generation") != {
+            "id": generation_id,
+            "path": f"generations/{generation_id}",
+        }:
+            raise ValueError("Persistent diagnostic method generation registry selector is invalid")
+        registry_identity = _method_generation_identity(
+            expected_scope,
+            role_hashes,
+            registry.get("packs"),
+        )
+        if registry_identity["packs"] != identity["packs"]:
+            raise ValueError("Persistent diagnostic method generation pack registry is invalid")
+    for filename in _METHOD_FILENAMES:
+        path = generation_root / filename
+        decoded = read_text_file(path)
+        if decoded is None:
+            raise ValueError(f"Diagnostic method generation role is unreadable: {path}")
+        content = decoded.replace("\r\n", "\n").replace("\r", "\n")
+        actual = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        expected = str((roles.get(filename) or {}).get("sha256") or "")
+        if not expected or not hmac.compare_digest(actual, expected):
+            raise ValueError(f"Diagnostic method generation role hash mismatch: {path}")
+    return generation_root
+
+
+def resolve_case_method_root(configured_root: Path, case: Case) -> Path:
+    """Resolve one immutable method pair for the case, then fall back to v0.5 files."""
+    control_root = configured_root.expanduser().resolve()
+    binding_name = hashlib.sha256(str(case.id).encode("utf-8")).hexdigest()[:24]
+    binding_path = control_root / "bindings" / f"case-{binding_name}.json"
+    if binding_path.is_file():
+        binding = _read_method_json(binding_path)
+        if binding.get("schema") != _METHOD_BINDING_SCHEMA or binding.get("case_id") != case.id:
+            raise ValueError("Diagnostic method case binding is invalid")
+        expires = binding.get("expires_at_epoch")
+        if (
+            isinstance(expires, bool)
+            or not isinstance(expires, (int, float))
+            or not math.isfinite(float(expires))
+        ):
+            raise ValueError("Diagnostic method case binding expiry is invalid")
+        if float(expires) > time.time():
+            return _validated_generation_root(
+                control_root, binding, expected_scope="run",
+            )
+    active_path = control_root / "active.json"
+    if active_path.is_file():
+        active = _read_method_json(active_path)
+        if active.get("schema") != _METHOD_ACTIVE_POINTER_SCHEMA:
+            raise ValueError("Diagnostic method active pointer is invalid")
+        return _validated_generation_root(
+            control_root, active, expected_scope="persistent",
+        )
+    return control_root
+
+
 def load_applicable_diagnostic_methods(
     db: Session,
     case: Case,
@@ -152,6 +328,7 @@ def load_applicable_diagnostic_methods(
         if configured_method_root
         else Path(__file__).resolve().parents[3]
     )
+    repository_root = resolve_case_method_root(repository_root, case)
     for filename, (source_type, role) in _LOCAL_METHOD_FILES.items():
         path = repository_root / filename
         if not path.is_file():

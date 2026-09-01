@@ -7,10 +7,10 @@ base methods.
 
 The importer is deterministic and Markdown-only. It reads `SKILL.md` and local
 Markdown files linked from it, classifies log-analysis and comprehensive-
-diagnosis sections, records source files and SHA-256 values, and rebuilds the
-two active method documents under the external state directory. It never runs
-scripts, hooks, shell commands, MCP tools, or model calls from the imported
-Skill.
+diagnosis sections, records source files and SHA-256 values, and composes the
+two method documents into an immutable generation under the external state
+directory. It never runs scripts, hooks, shell commands, MCP tools, or model
+calls from the imported Skill.
 
 ## Fastest Windows 11 workflow
 
@@ -20,23 +20,33 @@ Preview what will be selected:
 powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" import-skill-methods --skill "D:\skills\complete-network-diagnosis" --dry-run
 ```
 
-Import it, then inspect the active registry:
+Use it for one diagnosis without changing persistent knowledge:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" run --mode host-agent --approve-host-model-egress --title "AP offline" --diagnostic-skill "D:\skills\complete-network-diagnosis" --gw-log "D:\logs\gw" --ap-log "D:\logs\ap"
+```
+
+`--diagnostic-skill-scope run` is the default. It overlays the supplied Skill
+for this case and leaves the persistent active generation unchanged. The live
+binding is removed after every method-using backend job is confirmed terminal.
+If a wait times out or its network outcome is uncertain, the runner renews the
+finite binding instead of deleting it while a queued worker may still start.
+
+Install knowledge persistently only when that is the intended state change:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" import-skill-methods --skill "D:\skills\complete-network-diagnosis"
 powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" list-method-packs
 ```
 
-Or let a new run import/update the Skill immediately before local triage and
-comprehensive diagnosis:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" run --mode host-agent --approve-host-model-egress --title "AP offline" --diagnostic-skill "D:\skills\complete-network-diagnosis" --gw-log "D:\logs\gw" --ap-log "D:\logs\ap"
-```
-
-`--diagnostic-skill` is repeatable. The `diagnose` command accepts the same
-option for an existing case. Linux/macOS use `scripts/gw_ap_debug.sh` with the
-same subcommands and arguments.
+Equivalently, add `--diagnostic-skill-scope persistent` to `run` or `diagnose`
+only when that persistent state change was explicitly requested. Multiple
+packs in one request are fully parsed first and published with one active-
+pointer update, so a later parse failure cannot partially install earlier
+packs. `--diagnostic-skill` is repeatable, and `diagnose --mode host-agent`
+accepts it for an existing case and creates the host bundle before releasing a
+known-finished binding. Linux/macOS use `scripts/gw_ap_debug.sh` with the same
+subcommands and arguments.
 
 ## Imported Skill format
 
@@ -64,40 +74,102 @@ separated with `;`, or supplied explicitly with repeatable CLI arguments:
 powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" import-skill-methods --skill "D:\skills\complete-network-diagnosis" --fault-tree "references\tree.md" --log-analysis "references\patterns.md"
 ```
 
+For `run` and `diagnose`, use the scoped equivalents when the source Skill has
+ambiguous headings or no mapping metadata:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" run --mode host-agent --approve-host-model-egress --title "AP offline" --diagnostic-skill "D:\skills\complete-network-diagnosis" --diagnostic-skill-fault-tree "references\tree.md" --diagnostic-skill-log-analysis "references\patterns.md" --log "D:\logs\device.log"
+```
+
+Both role options are repeatable, but they are accepted only when exactly one
+`--diagnostic-skill` is supplied, so every relative path has an unambiguous
+Skill root. For multiple Skills, declare each Skill's role paths in its own
+frontmatter metadata instead; a multi-Skill command combined with either
+explicit role option fails closed. The same rule applies to both `run` scope
+and `persistent` scope.
+
 Only Markdown inside that Skill directory is accepted. The default envelope is
 32 files, 2 MiB total, and 512 KiB per file; `--max-files`, `--max-bytes`, and
-`--max-file-bytes` can narrow or deliberately enlarge it.
+`--max-file-bytes` can narrow or deliberately enlarge it. When both roles have
+explicit metadata or CLI paths, the importer reads only `SKILL.md` and those
+role documents instead of recursively loading unrelated linked Markdown.
 
-## Composition and provenance
+## Scope, generations, and provenance
 
-On the first import, the current active methods are snapshotted as the base.
-This preserves reviewed replacements that were installed before composition.
-Every imported Skill becomes one external method pack with:
+On the first composition, the current methods are snapshotted as the base. This
+preserves reviewed replacements that were installed before composition. Every
+parsed Skill carries:
 
 - a stable pack ID and content SHA-256;
 - the selected relative Markdown paths and per-role hashes;
 - generated fault-tree and/or log-analysis content;
 - an explicit `MARKDOWN_ONLY_NO_IMPORTED_CODE_EXECUTION` policy.
 
-The registry and cached packs live under `<state>/method-packs`; composed active
-methods remain under `<state>/methods`. They are not written to the installed
-Skill or the Git repository. Re-importing identical content is idempotent. A
-new version with the same Skill `name` replaces that name's active pack instead
-of appending a duplicate.
+Persistent registry data and cached packs live under `<state>/method-packs`.
+Every composition writes or reuses a content-addressed immutable directory
+under `<state>/method-packs/generations`; each generation manifest pins both
+method hashes, its scope, selected packs, and size estimate. A persistent
+change commits `<state>/method-packs/active.json` with an atomic replace. The
+backend validates the pointer, generation manifest, and both method hashes
+before reading them.
 
-If an active composed method was manually edited, importing fails closed. After
-reviewing the recorded base and packs, use `--force` to rebuild. With packs
-installed, `sync-methods --force` updates the recorded base and then reapplies
-all active packs.
+A run-scoped composition does not update the registry or active pointer. After
+the case is created, the runner creates a finite per-case binding under
+`<state>/method-packs/bindings`. The backend resolves that binding before the
+persistent active pointer, so concurrent cases can use different reviewed
+method generations without changing one another. The runner releases its
+binding after analysis/export when every method-using job outcome is known. An
+uncertain asynchronous outcome retains a renewed finite lease; the generation
+stays immutable for provenance and later hash-based host export.
 
-Remove one active pack and rebuild from the retained base plus remaining packs:
+Runs that use only persistent knowledge are pinned the same way: the runner
+creates or reuses a content-addressed run-scope snapshot of the selected
+persistent generation and binds the case to it. A concurrent persistent import
+therefore cannot change methods halfway through Triage or analysis. The export
+records both the case snapshot ID and its persistent source-generation ID.
+
+Re-importing identical persistent content is idempotent even when its reviewed
+source directory moved to another machine. A new version with the
+same Skill `name` replaces that name's persistent pack instead of appending a
+duplicate. A run-scoped pack with the same name overlays the persistent version
+for that run only. Method-pack changes are guarded by a kernel-backed exclusive
+byte-range lock, so process death releases ownership without an unlink/recreate
+stale-lock race. None of these files are written to the installed Skill or Git
+repository.
+
+If a generation body, manifest, pointer, or binding does not match its recorded
+identity or hash, loading fails closed. With persistent packs installed,
+`sync-methods --force` updates the recorded base and then publishes a new
+generation with all persistent packs reapplied; existing generations are not
+edited in place.
+
+Remove one persistent pack and rebuild from the retained base plus remaining
+packs:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\gw_ap_debug.ps1" remove-method-pack --name "complete-network-diagnosis"
 ```
 
-The cached source snapshot is retained for recovery/audit; it is no longer
-included in active methods.
+The cached source snapshot and older immutable generations are retained for
+recovery/audit; the removed pack is no longer included by the active pointer.
+
+## Host context budget
+
+Dry-run and import results report selected-file and knowledge-size metadata.
+For every host-agent `run` or `diagnose`, including runs that use only
+persistent methods, the runner estimates the total composed fault-tree and
+log-analysis payload before creating the case. The tokenizer-free estimator
+uses UTF-8 byte count as a deliberately conservative upper-bound proxy. This
+is a portable preflight, not the host provider's tokenizer.
+
+The default ceiling is 120,000 estimated method tokens. If it is exceeded, the
+command stops before diagnosis. Prefer narrowing the imported Skill with
+`gw_ap_debug_fault_tree` / `gw_ap_debug_log_analysis` metadata or explicit role
+paths. Raise `--max-host-method-tokens` only after checking that the currently
+selected Claude Code, Codex CLI, or OpenCode CLI model has enough context for
+the methods plus case evidence, instructions, and output. The preflight does
+not claim a trusted host token counter or reserve the provider's exact context
+overhead.
 
 ## Diagnostic behavior
 

@@ -2,7 +2,9 @@
 
 Host-agent mode uses the model already selected by the current Claude Code,
 Codex CLI, or OpenCode CLI session. The Python client never invokes a nested
-CLI and never reads a host model credential.
+CLI and never reads a host model credential. Windows 11 with Claude Code is the
+primary path; Codex CLI is the preferred fallback and OpenCode CLI remains a
+compatible auxiliary path.
 
 ## Trust split
 
@@ -11,6 +13,26 @@ CLI and never reads a host model credential.
 - The host-result validator owns the evidence allowlist, context hash, fault-tree completeness, method binding, citation validity, rank normalization, and atomic publication.
 
 The CLI model is still commonly remote. `--approve-host-model-egress` therefore authorizes the active diagnostic method bodies and bounded, redacted case context/evidence to enter that model's context. It does not authorize raw-log disclosure or the backend Chat model.
+
+When `run` or `diagnose` receives external diagnostic Skills, its default
+`--diagnostic-skill-scope run` creates an immutable method generation and binds
+it only to the target case while backend analysis/export is active. Every
+host-agent run, including one using only persistent methods, preflights the
+complete composed payload before case creation and rejects more than 120,000
+estimated tokens by default. The estimate uses UTF-8 bytes as a conservative
+tokenizer-free upper-bound proxy; it is not a trusted counter from the host
+CLI. Raise
+`--max-host-method-tokens` only after verifying the selected model's context
+window and leaving room for evidence, instructions, and output.
+
+`run` and `diagnose` validate `--job-timeout` together with two configured HTTP
+timeout windows and 60 seconds of scheduling margin. Their combined client
+window must fit inside the finite 24-hour binding lease; the parser cap is sized
+for the default 300-second HTTP timeout. The runner renews the full finite lease
+before each Triage/analysis job, releases it after a successful or known-terminal
+outcome, and retains it when submission/wait state is uncertain. Backend queues
+that remain unresolved beyond 24 hours are outside the guaranteed binding
+window and are handled on a best-effort basis.
 
 ## Generated session files
 
@@ -23,7 +45,14 @@ The CLI model is still commonly remote. `--approve-host-model-egress` therefore 
 
 Do not directly edit the session state. Every tool entry is HMAC chained to its predecessor and contains fingerprints for the exact returned evidence. A signed external anchor detects bundle rollback and is updated only after the bundle state is committed.
 
-To continue from an existing case/analysis instead of creating a new case, export it with explicit host-model approval:
+To run a fresh host-agent analysis for an existing case, use:
+
+```text
+python "<SKILL_DIR>/scripts/debug_platform_skill.py" diagnose --case-id CASE-... --mode host-agent --approve-host-model-egress --output-dir "/path/to/run"
+```
+
+To continue from an already completed analysis without rerunning it, export it
+with explicit host-model approval:
 
 ```text
 python "<SKILL_DIR>/scripts/debug_platform_skill.py" result --case-id CASE-... --mode host-agent --approve-host-model-egress --output-dir "/path/to/run"
@@ -31,7 +60,25 @@ python "<SKILL_DIR>/scripts/debug_platform_skill.py" result --case-id CASE-... -
 
 The v3 context verifies the exported case, analysis, analysis record, evidence, Agent run (when present), and the exact Triage JSON file set before every host command. A changed, added, removed, or mixed source file invalidates the bundle. Export directories must be new or empty so an old case cannot contribute stale Triage evidence.
 
-Before the context is written, every method in the backend analysis catalog is reloaded and checked against its recorded SHA-256. Local methods come from the external active method directory; managed knowledge methods come from the read-only knowledge detail API. Missing or changed content aborts host-agent export instead of giving the CLI model a partial method set.
+Before the context is written, every method in the backend analysis catalog is
+reloaded and checked against its recorded SHA-256. For local methods, the
+backend resolves a valid per-case generation binding first, then the atomically
+published persistent active pointer; managed knowledge methods come from the
+read-only knowledge detail API. The runner also records
+`diagnostic_method_scope`, `method_generation_id`,
+`diagnostic_methods_dir`, `diagnostic_method_budget`, and
+`persistent_active_unchanged` in the bundle manifest. An expired case binding
+is not selected; invalid, changed, or mismatched selected method control data
+aborts instead of giving the CLI model a partial or cross-case method set.
+
+Normal `run`/`diagnose` export records the exact generation directory and checks
+it before considering historical candidates. A later `result --mode host-agent`
+re-export does not retain that selector in the backend analysis record, so hash
+recovery scans at most 2,048 immutable generation directories. If an unusually
+long-lived state exceeds that limit and the needed generation is not otherwise
+selected, use the original validated bundle or rerun diagnosis. Persisting a
+generation selector or hash index in the backend analysis record is outside this
+MVP.
 
 ## Read-only tools
 

@@ -11,6 +11,20 @@ permissions:
   contents: read
 
 jobs:
+  source-mapping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Runtime source mapping
+        run: python -B scripts/check_source_mapping.py --source-repo .
+
   validate:
     strategy:
       fail-fast: false
@@ -18,19 +32,33 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.11", "3.14"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v7
+      - name: Set up Python
+        if: matrix.os != 'windows-latest' || matrix.python != '3.14'
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
+      - name: Set up Python with bootstrap cache
+        if: matrix.os == 'windows-latest' && matrix.python == '3.14'
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            runtime/backend/constraints.lock
+            runtime/backend/pyproject.toml
       - name: Unit tests
         run: python -B -m unittest discover -s tests -q
       - name: Runtime provenance
         run: python -B scripts/check_provenance.py
       - name: Release envelope
         run: python -B scripts/validate_release.py
+      - name: Deterministic smoke contract
+        run: python -B scripts/ci_deterministic_smoke.py --check-only
       - name: Cross-platform launcher
         if: runner.os != 'Windows'
         shell: bash
@@ -59,6 +87,15 @@ jobs:
               throw "Expected a junction: $target"
             }
           }
+      - name: Windows Python 3.14 deterministic bootstrap smoke
+        if: matrix.os == 'windows-latest' && matrix.python == '3.14'
+        shell: powershell
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+          PIP_PROGRESS_BAR: "off"
+          PYTHONUTF8: "1"
+        run: python -B scripts/ci_deterministic_smoke.py
       - name: POSIX installer registration
         if: runner.os != 'Windows'
         shell: bash

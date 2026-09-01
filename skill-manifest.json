@@ -1,20 +1,20 @@
 {
   "schema": "gw-ap-debug-skill-manifest/v1",
   "name": "gw-ap-debug",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "default_execution_mode": "host-agent",
   "source": {
     "repository": "debugplatform",
     "branch": "main",
     "commit": "181dae7b26863accd02e8206895d3cfb670739ac",
-    "snapshot_note": "Vendored backend snapshot with Skill-only portability and host-agent bridge patches"
+    "snapshot_note": "Vendored backend snapshot with Skill-only portability, host-agent bridge, and immutable case-bound diagnostic-method patches"
   },
   "runtime": {
-    "tree_sha256": "e3ad23bb7020c3b4fa0870a1ed68175a3bad3bb4731ed90dcd27775a5c65477a",
+    "tree_sha256": "2c391be3b8f284727836d9607a8863f62e200fdd57c0ceaeede6ac91d3f1291c",
     "file_count": 137,
     "local_patches": [
       "external DATA_ROOT support",
-      "external user-writable diagnostic-method root",
+      "external method root with immutable generations, case bindings, and runtime probe",
       "dependency-only bootstrap without editable source writes",
       "deterministic Triage when backend model egress is not approved",
       "Mako 1.4.1 non-yanked dependency lock"
@@ -34,7 +34,16 @@
   "tests": "python -B -m unittest discover -s tests -v",
   "release_validation": [
     "python -B scripts/check_provenance.py",
-    "python -B scripts/validate_release.py"
+    "python -B scripts/validate_release.py",
+    "python -B scripts/ci_deterministic_smoke.py --check-only"
+  ],
+  "source_mapping_validation": {
+    "command": "python -B scripts/check_source_mapping.py --source-repo <debugplatform-main-checkout>",
+    "requires_source_commit": "181dae7b26863accd02e8206895d3cfb670739ac",
+    "ci_command": "python -B scripts/check_source_mapping.py --source-repo ."
+  },
+  "ci_validation": [
+    "python -B scripts/ci_deterministic_smoke.py"
   ],
   "deployment": {
     "guide": "DEPLOYMENT.md",

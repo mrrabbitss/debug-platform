@@ -4,37 +4,63 @@
 > an expected answer, or a substitute for the current run's authenticated
 > context and tool trace.
 
-Date: 2026-08-30 (Asia/Shanghai)
+Date: 2026-09-01 (Asia/Shanghai)
 
 Source baseline: Debug Platform `main` / `origin/main` commit
 `181dae7b26863accd02e8206895d3cfb670739ac`.
 
-## Snapshot fidelity
+## Current v0.6.0 release candidate
 
-- Candidate version: `0.5.0` (bounded Markdown-only diagnostic Skill import,
-  deterministic method-pack composition, pre-diagnosis integration, and
-  Windows launcher passthrough correction over the v0.4.0 package).
+- Candidate version: `0.6.0`.
+- External diagnostic Skills can provide explicit fault-tree and log-analysis
+  role documents. Run-scoped imports are the default; persistent imports are
+  explicit and are snapshotted into an immutable run generation before case
+  execution.
+- Each Skill `run`/`diagnose` execution binds its case to a content-addressed
+  method generation. The backend verifies binding schema, runtime selector,
+  expiry, generation identity, and content hashes; the runner verifies the
+  owner token for renewal/release. A timed-out, unreachable, or interrupted job
+  retains a finite renewable lease instead of deleting a generation whose
+  outcome is unknown. The guaranteed client window is capped at 24 hours;
+  longer backend queues are best effort. Standalone low-level commands are not
+  claimed to provide this orchestration-level pinning.
 - The published `skillonly` Git commit and tree IDs are the authoritative
   release fingerprint; the release file count is intentionally not used as a
   mutable identity check.
 - Vendored runtime files: 137.
-- Raw-byte identical to the source commit: 104. After Git text/EOL
-  normalization, 130 runtime files match the source commit, 5 are deliberate
-  Skill portability patches, and 2 bundled method files originate from the
-  local source environment rather than a path in that commit.
-- Deliberate Skill portability patches: 5 (`config.py`,
-  `diagnostic_methods.py`, `log_triage.py`, `constraints.lock`, and `uv.lock`).
+- After Git text/EOL normalization, 129 runtime files match the source commit,
+  6 are deliberate Skill portability patches, and 2 bundled method files
+  originate from the local source environment rather than a path in that
+  commit.
+- Source-mapping schema `gw-ap-debug-source-mapping/v2` pins the normalized
+  source hash, normalized runtime hash, and canonical normalized-diff hash for
+  all six patched files:
+  `config.py`, `system.py`, `diagnostic_methods.py`, `log_triage.py`,
+  `constraints.lock`, and `uv.lock`.
 - Provenance tree SHA-256:
-  `e3ad23bb7020c3b4fa0870a1ed68175a3bad3bb4731ed90dcd27775a5c65477a`.
+  `2c391be3b8f284727836d9607a8863f62e200fdd57c0ceaeede6ac91d3f1291c`.
 
 ## Automated validation
 
-- `python -B -m unittest discover -s tests -v`: 49 passed.
+- `python -B -m unittest discover -s tests -v`: 82 passed.
 - Skill Creator `quick_validate.py`: passed.
 - `python -B scripts/check_provenance.py`: passed.
+- `python -B scripts/check_source_mapping.py --source-repo
+  D:\\GRXM\\debugplatform`: passed with 137 runtime files, 129
+  normalized-identical files, 6 verified patches, 2 local method files, and 0
+  failed or unexpected mappings.
 - `python -B scripts/validate_release.py`: passed.
-- Windows user-registration script: plan and isolated three-client junction
-  registration passed without overwriting pre-existing paths.
+- `python -B scripts/ci_deterministic_smoke.py --check-only`: passed through
+  both portable launchers.
+- A real Windows 11 / Python 3.14 full smoke passed through the PowerShell
+  launcher. It bootstrapped the runtime, imported a synthetic external Skill
+  with explicit role paths, completed a deterministic diagnosis, verified both
+  role hashes and canary matches, left the persistent pointer unchanged, and
+  cleaned the case binding.
+- Windows user-registration script: plan and isolated three-client registration
+  passed without overwriting pre-existing paths. The current installer also
+  recognizes a canonical checkout already located at Claude's real discovery
+  directory; native Claude execution remains pending below.
 - Windows launcher: automatic Python selection and explicit-interpreter
   `doctor --check package` passed under Windows PowerShell 5.1.
 - POSIX registration script: Bash syntax check and plan passed locally; the
@@ -48,18 +74,35 @@ Source baseline: Debug Platform `main` / `origin/main` commit
   binding option.
 - Fresh dependency-only bootstrap on Python 3.14: passed with the locked
   backend environment and no editable source install.
-- Fresh-checkout validation covers tests, provenance, release envelope, and
-  Skill Creator format validation.
+- Fresh-checkout CI covers tests, provenance, exact source mapping, release
+  envelope/frontmatter checks, wrapper checks, and one full Windows
+  deterministic smoke. Skill Creator `quick_validate.py` remains the separate
+  local format check recorded above.
 - Candidate and retained validated-run credential-shape scans: zero matches.
 
-The regression suite covers authenticated state and trace rollback protection,
-immutable source hashes, dynamic-evidence fingerprints, per-round and global
-budgets before backend access, same-node evidence binding, hypothesis-only
-scope isolation, result normalization, finalization idempotency, post-finalize
-mutation rejection, opaque-ID narrative guards, and provenance-based AP/GW
-case inference.
+The regression suite additionally covers immutable method generations,
+case-bound leases, kernel-backed writer locking, timeout/network/Ctrl+C cleanup,
+content-addressed persistent snapshots, atomic multi-Skill activation, explicit
+role-path selection, import traversal limits, same-lock host budget enforcement,
+case-job lease bounds, cached-pack hash validation, late host export, and
+runtime capability mismatch rejection.
 
-## v0.5.0 composable diagnostic Skill validation
+### Current native CLI status
+
+- Codex CLI `0.151.0-alpha.7.2` natively discovered the installed v0.6.0
+  Skill from `C:\\Users\\23173\\.agents\\skills\\gw-ap-debug`. A built-in-model
+  session read the candidate `SKILL.md`, executed only the documented Windows
+  `doctor --check host-agent` launcher path, and returned
+  `skill_version=0.6.0`, `package_ready=true`, and `host_agent_ready=true` with
+  exit code 0. WebSocket sampling timed out before the CLI's HTTPS fallback
+  completed successfully; no third-party model endpoint was used.
+- Claude Code is not installed on this validation computer. The Windows-first
+  registration, slash-command guidance, and wrapper contract are covered by
+  tests, but native Claude model execution remains pending.
+- OpenCode was intentionally not run for v0.6.0 at the repository owner's
+  request because the available model quota is exhausted.
+
+## Historical v0.5.0 composable diagnostic Skill validation
 
 An isolated complete diagnostic Skill supplied explicit fault-tree and
 log-analysis Markdown through frontmatter metadata. The fixture also linked an
@@ -112,7 +155,7 @@ finalization: synthesis was correctly `SKIPPED`, fault-tree state remained
 0 attempted / 0 concluded / 29 total, and the stop reason was
 `MOCK_PROVIDER_DETERMINISTIC_BASELINE`.
 
-## Current v0.3.4 host-agent validation
+## Historical v0.3.4 host-agent validation
 
 A fresh isolated run used the current Codex desktop model as the host reasoning
 model and the exact v0.3.4 candidate snapshot. This validates the current
@@ -226,7 +269,7 @@ No key was written into the candidate, OpenCode configuration, probe script,
 logs, or retained run artifacts. OpenCode shell tools receive the provider key
 removed by the project plugin.
 
-## Other CLI discovery status
+## Historical CLI discovery status
 
 - OpenCode project Skills use `.opencode/skills`; the native load was verified
   by retained remote runs.
