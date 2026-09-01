@@ -14,7 +14,7 @@ LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 EXPECTED_VERSION = "0.6.0"
 EXPECTED_RUNTIME_HASH = "2c391be3b8f284727836d9607a8863f62e200fdd57c0ceaeede6ac91d3f1291c"
 EXPECTED_SOURCE_MAPPING_SCHEMA = "gw-ap-debug-source-mapping/v2"
-EXPECTED_VALIDATION_TEST_COUNT = 82
+EXPECTED_VALIDATION_TEST_COUNT = 83
 EXPECTED_RELEASE_VALIDATION = [
     "python -B scripts/check_provenance.py",
     "python -B scripts/validate_release.py",

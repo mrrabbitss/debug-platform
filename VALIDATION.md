@@ -42,7 +42,7 @@ Source baseline: Debug Platform `main` / `origin/main` commit
 
 ## Automated validation
 
-- `python -B -m unittest discover -s tests -v`: 82 passed.
+- `python -B -m unittest discover -s tests -v`: 83 passed.
 - Skill Creator `quick_validate.py`: passed.
 - `python -B scripts/check_provenance.py`: passed.
 - `python -B scripts/check_source_mapping.py --source-repo

@@ -246,6 +246,18 @@ class RunScopedExternalSkillSmokeTests(unittest.TestCase):
 
 
 class CliContractSmokeTests(unittest.TestCase):
+    def test_posix_wrapper_uses_bash_for_pipefail_contract(self) -> None:
+        repository_root = SCRIPT.parents[1]
+        with (
+            mock.patch.object(smoke.sys, "platform", "linux"),
+            mock.patch.object(smoke.shutil, "which", return_value="/usr/bin/bash") as which,
+        ):
+            command = smoke.skill_wrapper_command(repository_root, "--help")
+
+        which.assert_called_once_with("bash")
+        self.assertEqual(command[0], "/usr/bin/bash")
+        self.assertEqual(command[1], str(repository_root / "scripts" / "gw_ap_debug.sh"))
+
     def test_check_cli_contract_requires_explicit_role_path_flags(self) -> None:
         repository_root = SCRIPT.parents[1]
         top_help = "bootstrap run triage diagnose result"

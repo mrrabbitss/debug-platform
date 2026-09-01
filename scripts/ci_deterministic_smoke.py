@@ -92,8 +92,8 @@ def skill_wrapper_command(repository_root: Path, *arguments: str) -> list[str]:
         ]
     wrapper = repository_root / "scripts" / "gw_ap_debug.sh"
     require(wrapper.is_file(), f"POSIX Skill wrapper is missing: {wrapper}")
-    shell = shutil.which("sh")
-    require(bool(shell), "A POSIX sh executable is required for the package smoke")
+    shell = shutil.which("bash")
+    require(bool(shell), "Bash is required for the POSIX package smoke")
     return [str(shell), str(wrapper), *arguments]
 
 
