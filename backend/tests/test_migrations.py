@@ -36,12 +36,12 @@ def test_migrations_create_fresh_database_and_are_idempotent(tmp_path: Path) -> 
         "retrieval_evaluation_cases", "retrieval_evaluation_runs",
         "knowledge_curation_sessions", "knowledge_curation_source_files",
         "knowledge_curation_revisions", "knowledge_curation_messages",
-        "agent_runs", "agent_trace_events",
+        "agent_runs", "agent_trace_events", "host_agent_sessions",
         "log_triage_runs", "log_evidence_matches", "log_evidence_occurrences",
         "analysis_revisions",
     }.issubset(table_names)
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0016"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0017"
     analysis_column_info = {item["name"]: item for item in inspect(engine).get_columns("analysis_runs")}
     event_indexes = {item["name"] for item in inspect(engine).get_indexes("log_events")}
     model_indexes = {item["name"] for item in inspect(engine).get_indexes("model_profiles")}
@@ -53,6 +53,16 @@ def test_migrations_create_fresh_database_and_are_idempotent(tmp_path: Path) -> 
     assert analysis_column_info["model"]["type"].length == 512
     artifact_columns = {item["name"] for item in inspect(engine).get_columns("artifacts")}
     job_columns = {item["name"] for item in inspect(engine).get_columns("jobs")}
+    host_session_columns = {
+        item["name"]
+        for item in inspect(engine).get_columns("host_agent_sessions")
+    }
+    assert {
+        "agent_run_id", "version", "coverage_json", "planning_rounds_json",
+        "tool_receipts_json",
+        "allowed_evidence_ids_json", "evidence_cache_json", "lease_owner",
+        "lease_expires_at", "expires_at",
+    }.issubset(host_session_columns)
     assert {
         "idempotency_key", "attempt", "max_attempts", "available_at",
         "lease_owner", "lease_expires_at", "heartbeat_at", "deadline_at",
@@ -177,7 +187,7 @@ def test_migrations_adopt_legacy_create_all_database_without_data_loss(tmp_path:
             "SELECT parse_run_id FROM log_events WHERE id = 'EVT-legacy'"
         ))
     assert title == "legacy case"
-    assert version == "0016"
+    assert version == "0017"
     assert active_run_id == "ART-legacy"
     assert event_run_id == "ART-legacy"
     engine.dispose()

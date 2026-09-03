@@ -5,6 +5,7 @@ from pathlib import Path
 from dateutil import parser as date_parser
 
 from app.core.utils import mask_sensitive
+from app.services.diagnosis_rules import heartbeat_timeout_confirmed
 from app.services.parser_registry import ParsedEvent, registry
 
 
@@ -27,6 +28,13 @@ HUAWEI_RUNTIME_LOG_PATTERN = re.compile(
 
 RULES = [
     ("KERNEL_OOPS", "KERNEL", "kernel", "CRITICAL", re.compile(r"kernel panic|oops:|BUG: unable|call trace|segmentation fault", re.I)),
+    ("AP_UDM_PROCESS_ABNORMAL", "SMARTLINK", "udm", "CRITICAL", re.compile(r"udm\s+is\s+abnormal!\s*reset\s+proc!|process\s+udm\s+died", re.I)),
+    ("AP_UDM_LISTEN_PORT_FAILED", "SMARTLINK", "udm", "ERROR", re.compile(r"dynamic:\[udm\].*listen\s+port\s+(?:check\s+failed|not\s+exist)", re.I)),
+    ("AP_UDM_HEARTBEAT_SEND_FAILED", "SMARTLINK", "udm", "ERROR", re.compile(r"error\s+sending\s+alive\s+advertisements", re.I)),
+    ("GW_AP_HEARTBEAT_TIMEOUT", "SMARTLINK", "udm", "WARN", re.compile(r"\[abnormal\].*curtime\[.*iadvrtimeout\[.*lasteventtime\[", re.I)),
+    ("GW_AP_OFFLINE_DETECTED", "SMARTLINK", "ctrlpoint", "WARN", re.compile(r"apinst\s*:?\s*\d+\s+recv\s+offline\s+event.*src=ctrlpointverify", re.I)),
+    ("GW_AP_TOPOLOGY_OFFLINE", "SMARTLINK", "topology", "WARN", re.compile(r"topo,\s*apinst=\[\d+\]\s*status=\[0\]|delaptopotree", re.I)),
+    ("AP_LINK_REACHABLE", "NETWORK", "neighbor", "INFO", re.compile(r"\b(?:lan\d+\s+)?reachable\b.*(?:\b(?:\d{1,3}\.){3}\d{1,3}\b|[0-9a-f]{2}(?::[0-9a-f]{2}){5})", re.I)),
     ("PROCESS_CRASH", "SYSTEM", "process", "ERROR", re.compile(r"segfault|core dumped|aborted|process .* died|signal 11", re.I)),
     ("WATCHDOG_RESTART", "SYSTEM", "watchdog", "WARN", re.compile(r"watchdog.*(?:restart|timeout|reset)|restarting service", re.I)),
     ("HOSTAPD_START_FAILED", "WLAN", "hostapd", "ERROR", re.compile(r"hostapd.*(?:failed|error)|failed to set beacon|could not configure driver", re.I)),
@@ -115,13 +123,18 @@ def _entities(line: str) -> dict:
 def _matching_rule(line: str) -> tuple[str, str, str, str] | None:
     for code, module, component, fallback_level, pattern in RULES:
         if pattern.search(line):
+            if (
+                code == "GW_AP_HEARTBEAT_TIMEOUT"
+                and not heartbeat_timeout_confirmed(line)
+            ):
+                continue
             return code, module, component, fallback_level
     return None
 
 
 class GenericLogParser:
     parser_id = "generic-log"
-    parser_version = "1.1"
+    parser_version = "1.2"
 
     def probe(self, path: Path, sample: str) -> float:
         score = 0.25
@@ -205,7 +218,7 @@ class GenericLogParser:
 
 class HuaweiCollectDebugInfoParser:
     parser_id = "huawei-collectdebuginfo"
-    parser_version = "1.0"
+    parser_version = "1.1"
 
     def probe(self, path: Path, sample: str) -> float:
         score = 0.0

@@ -1,4 +1,4 @@
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.migrations import run_database_migrations
 from app.core.security import verify_api_key
+from app.mcp.integration import configure_debugplatform_mcp
 from app.services.knowledge import seed_builtin_knowledge
 from app.services.knowledge_taxonomy import assign_uncategorized_documents, seed_knowledge_categories
 from app.services.jobs import job_runner
@@ -31,7 +32,11 @@ async def lifespan(app: FastAPI):
         ensure_builtin_embedding_index(db)
     job_runner.resume_incomplete()
     try:
-        yield
+        async with AsyncExitStack() as stack:
+            mcp_transport = getattr(app.state, "mcp_transport", None)
+            if mcp_transport is not None:
+                await stack.enter_async_context(mcp_transport.lifespan())
+            yield
     finally:
         job_runner.shutdown(wait=False)
 
@@ -51,10 +56,12 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=[
         "X-Start-Line", "X-Returned-Lines", "X-Total-Lines", "X-Has-More", "X-Text-Encoding",
+        "Mcp-Session-Id",
     ],
 )
 app.add_middleware(AuditMiddleware)
 app.include_router(router, prefix=settings.api_prefix, dependencies=[Depends(verify_api_key)])
+configure_debugplatform_mcp(app, settings)
 
 if settings.static_frontend_root is not None:
     mount_static_frontend(app, settings.static_frontend_root)

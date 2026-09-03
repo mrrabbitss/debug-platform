@@ -273,11 +273,16 @@ def model_download_catalog() -> dict[str, Any]:
             "resolved_revision": payload.get("resolved_revision"),
             "completed_at": payload.get("completed_at"),
         })
+    bundled_runtime_ready = bool(
+        os.environ.get("BUNDLED_GGUF_API_KEY", "").strip()
+        and os.environ.get("BUNDLED_GGUF_EMBEDDING_URL", "").strip()
+        and os.environ.get("BUNDLED_GGUF_RERANKER_URL", "").strip()
+    )
     return {
         "download_root": str(root),
         "mirrors": allowed_model_mirrors(),
         "models": models,
-        "runtime_installed": False,
+        "runtime_installed": bundled_runtime_ready,
     }
 
 

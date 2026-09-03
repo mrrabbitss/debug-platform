@@ -15,17 +15,18 @@ Db = Annotated[Session, Depends(get_db)]
 
 def _protect_system_job(request: Request, job: Job) -> None:
     if (
-        job.kind == "download_model_files"
+        job.kind in {"download_model_files", "route_markdown_knowledge"}
         and getattr(request.state, "principal", {}).get("role") != "ADMIN"
     ):
-        raise HTTPException(403, "Administrator role required for model download jobs")
+        raise HTTPException(403, "Administrator role required for this job")
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
-def get_job(job_id: str, db: Db) -> Job:
+def get_job(job_id: str, request: Request, db: Db) -> Job:
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    _protect_system_job(request, job)
     return job
 
 

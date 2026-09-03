@@ -28,10 +28,13 @@ def test_report_versions_are_reserved_uniquely_and_published_atomically(
             case_id="CASE-report",
             status="COMPLETED",
             result_json=json_dumps({
-                "summary": "<b>untrusted</b> based on EVT-report",
+                "summary": "<b>untrusted</b> based on EVT-report and LDE-local",
                 "confirmed_facts": [{
                     "statement": "Timeout confirmed by EVT-report",
                     "evidence_ids": ["EVT-report"],
+                }, {
+                    "statement": "Local identity comparison LDE-local",
+                    "evidence_ids": ["LDE-local"],
                 }],
                 "hypotheses": [{
                     "rank": 1,
@@ -53,6 +56,17 @@ def test_report_versions_are_reserved_uniquely_and_published_atomically(
                 "line_start": 42,
                 "line_end": 42,
                 "content": "Heartbeat timeout",
+            }, {
+                "evidence_id": "LDE-local",
+                "source_type": "local_derived_evidence",
+                "title": "LDE-local",
+                "source_file": "gw.log",
+                "line_start": 21,
+                "line_end": 21,
+                "metadata": {
+                    "udn_location": {"source_file": "gw.log", "line": 21},
+                    "mac_location": {"source_file": "gw.log", "line": 14},
+                },
             }]),
         ))
         db.commit()
@@ -74,7 +88,9 @@ def test_report_versions_are_reserved_uniquely_and_published_atomically(
     rendered = first_path.read_text(encoding="utf-8")
     assert "&lt;b&gt;untrusted&lt;/b&gt;" in rendered
     assert "nested/ap.log - 第 42 行" in rendered
+    assert "gw.log - 第 21 行、gw.log - 第 14 行" in rendered
     assert "EVT-report" not in rendered
+    assert "LDE-local" not in rendered
     assert rendered.index("六、缺失信息与限制") < rendered.index("八、已确认事实")
     assert not list(first_path.parent.glob("*.tmp"))
     with factory() as db:

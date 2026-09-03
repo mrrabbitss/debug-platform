@@ -1,0 +1,45 @@
+============================================================
+Start run collect command:WAP:get wlan basic laninst 1 wlaninst6
+get wlan basic laninst 1 wlaninst6
+get WLANConfiguration!
+Device Model : DEMO-AP-6000
+Firmware Version : DEMO-V1.0.0
+Serial Number : SYNTHETIC-AP-001
+============================================================
+Start run collect command:WAP:cat /proc/self/maps
+NOTICE 2026-08-28 09:59:50.000[33][UDM]libmap loaded /lib/libudm_rpc_adapt.so
+============================================================
+Start run collect command:WAP:display ip neigh
+NOTICE 2026-08-28 09:59:55.000[90][LAN]LAN3 REACHABLE 02:00:00:00:00:33 192.0.2.1
+============================================================
+Start run collect command:WAP:display debuglog info
+NOTICE 2026-08-28 10:00:00.000[33][UDM]deviceApHandle:1 alive
+NOTICE 2026-08-28 10:00:00.030[33][UDM]UpnpSendAdvertisement success
+ERROR 2026-08-28 10:00:01.000[33][UDM]Error sending alive advertisements : -5
+DEBUG 2026-08-28 10:00:01.030[33][UDM][Debug] dynamic:[udm] listen port check failed
+DEBUG 2026-08-28 10:00:01.060[33][UDM][Debug] dynamic:[udm] listen port not exist
+CRITICAL 2026-08-28 10:00:01.090[33][UDM][Critical] udm Is Abnormal!Reset Proc! [Proc Not Exist]
+CRITICAL 2026-08-28 10:00:01.100[33][UDM]process udm died unexpectedly with signal 11
+WARN 2026-08-28 10:00:01.120[90][SYSTEM]watchdog restarting service udm after process exit
+NOTICE 2026-08-28 10:05:00.000[33][UDM]udm process restart completed, listen ports 1900 and 37443 ready
+NOTICE 2026-08-28 10:05:00.030[33][UDM]UpnpSendAdvertisement success
+NOTICE 2026-08-28 10:10:00.000[33][UDM]deviceApHandle:1 alive
+ERROR 2026-08-28 10:10:01.000[33][UDM]Error sending alive advertisements : -5
+DEBUG 2026-08-28 10:10:01.030[33][UDM][Debug] dynamic:[udm] listen port check failed
+DEBUG 2026-08-28 10:10:01.060[33][UDM][Debug] dynamic:[udm] listen port not exist
+CRITICAL 2026-08-28 10:10:01.090[33][UDM][Critical] udm Is Abnormal!Reset Proc! [Proc Not Exist]
+CRITICAL 2026-08-28 10:10:01.100[33][UDM]process udm died unexpectedly with signal 11
+WARN 2026-08-28 10:10:01.120[90][SYSTEM]watchdog restarting service udm after process exit
+NOTICE 2026-08-28 10:15:00.000[33][UDM]udm process restart completed, listen ports 1900 and 37443 ready
+NOTICE 2026-08-28 10:15:00.030[33][UDM]UpnpSendAdvertisement success
+NOTICE 2026-08-28 10:20:00.000[33][UDM]deviceApHandle:1 alive
+ERROR 2026-08-28 10:20:01.000[33][UDM]Error sending alive advertisements : -5
+DEBUG 2026-08-28 10:20:01.030[33][UDM][Debug] dynamic:[udm] listen port check failed
+DEBUG 2026-08-28 10:20:01.060[33][UDM][Debug] dynamic:[udm] listen port not exist
+CRITICAL 2026-08-28 10:20:01.090[33][UDM][Critical] udm Is Abnormal!Reset Proc! [Proc Not Exist]
+CRITICAL 2026-08-28 10:20:01.100[33][UDM]process udm died unexpectedly with signal 11
+WARN 2026-08-28 10:20:01.120[90][SYSTEM]watchdog restarting service udm after process exit
+NOTICE 2026-08-28 10:25:00.000[33][UDM]udm process restart completed, listen ports 1900 and 37443 ready
+NOTICE 2026-08-28 10:25:00.030[33][UDM]UpnpSendAdvertisement success
+NOTICE 2026-08-28 10:25:02.000[90][LAN]LAN3 REACHABLE 02:00:00:00:00:33 192.0.2.1
+NOTICE 2026-08-28 10:25:03.000[90][SYSTEM]demo capture complete

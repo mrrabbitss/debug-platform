@@ -1,0 +1,45 @@
+GW/AP Debug Platform - Offline GGUF Edition
+============================================
+
+Recommended installation
+------------------------
+1. Keep every extracted file in the same directory.
+2. Double-click Install.bat.
+3. The installer verifies all bundled files before replacing an older version.
+4. The platform starts automatically and opens in the default browser.
+
+The package contains the application runtime, BGE GGUF Embedding, Qwen3 GGUF
+Reranker and the llama.cpp CPU runtime. The target Win11 computer does not need
+Python, Node.js, npm, pip, Torch or sentence-transformers.
+
+Local retrieval behavior
+------------------------
+- Both native model processes bind only to dynamic 127.0.0.1 ports.
+- A new random API key is generated for every platform run.
+- The application waits for /health before FastAPI starts.
+- If one model cannot start, the application stays available and falls back for
+  that task. Diagnostic logs are stored below:
+  %LOCALAPPDATA%\GWAPDebugPlatform\data\logs\local-models
+- To temporarily skip both local models, run:
+  start.bat --no-local-retrieval
+
+Integrity and diagnostics
+-------------------------
+start.bat --check
+    Verify every packaged file and the isolated application runtime.
+
+start.bat --check --check-models
+    Also load both GGUF models and require their health checks to pass.
+
+Data and upgrades
+-----------------
+Application files are installed per user under:
+  %LOCALAPPDATA%\Programs\GWAPDebugPlatform
+
+Cases, uploaded files, settings and encrypted credentials remain under:
+  %LOCALAPPDATA%\GWAPDebugPlatform
+
+An application upgrade therefore does not replace runtime data. Uninstalling an
+installer-built release also preserves runtime data unless it is deleted by the
+user separately.
+

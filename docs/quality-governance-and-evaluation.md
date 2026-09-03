@@ -63,6 +63,16 @@ stateDiagram-v2
 每个版本在 `knowledge_revisions` 中保存不可变快照、内容 SHA-256、变更说明、操作者和
 时间。恢复历史版本会创建一个新的草稿版本，不覆盖或删除已有历史。
 
+### 2.3 模型智能归类仍受草稿门禁
+
+管理员可一次导入 1–20 个 Markdown，系统按文件创建独立任务和独立知识文档，不把多个来源
+合并。Web 使用选择或激活的平台 Chat Profile；CLI 先经 REST multipart 上传，再由当前
+Claude Code/Codex 会话模型读取脱敏、限长上下文并通过 MCP 写回。模型只能选择活动叶子分类，
+Host 写回同时校验 `lock_version` 和正文 SHA-256。无论模型置信度多高，结果都固定为
+`DRAFT/active=false`，不能自动进入 `IN_REVIEW` 或 `ACTIVE`，因此不会在人工审核前污染正式
+检索或领域图谱。2026-09-03 的 Web 多文件 E2E 和真实 Codex CLI 路由均验证了这一边界；
+两份 Codex 路由文档分别进入故障树和协议诊断规则分类，但都没有被发布。
+
 ## 3. 领域知识图谱与 GraphRAG
 
 ### 3.1 数据来源
@@ -200,6 +210,8 @@ flowchart LR
 ## 7. 主要 API
 
 ```text
+POST /knowledge-routing/import
+
 GET  /knowledge/{document_id}/revisions
 POST /knowledge/{document_id}/review/submit
 POST /knowledge/{document_id}/review/approve

@@ -14,12 +14,15 @@ const agentBudget = computed(() => props.planning?.budget || {})
 const budgetLimits = computed(() => agentBudget.value.limits || {})
 const budgetUsage = computed(() => agentBudget.value.usage || {})
 const contextGovernance = computed(() => props.planning?.context_governance || {})
+const plannerRepairs = computed(() => (props.planning?.rounds || []).flatMap(
+  (round: any) => round.planner_repairs || []
+))
 const contextSections = computed(() => Object.entries(contextGovernance.value.sections || {}).map(([name, value]: [string, any]) => ({
   name,
   ...value
 })))
 const methodTitles = computed<Record<string, string>>(() => Object.fromEntries(
-  methodCatalog.value.map((item: any) => [String(item.id), String(item.title || item.id)])
+  methodCatalog.value.map((item: any) => [String(item.id), String(item.title || '诊断方法')])
 ))
 
 function methodLabel(documentId: string): string {
@@ -32,9 +35,30 @@ function displayText(value: unknown): string {
     rendered = rendered.split(evidenceId).join(label)
   }
   return rendered.replace(
-    /\b(?:EVT|LEM|LEH|DOC|KCHUNK|LOCALDOC|SYM|COMMIT|MEM|ANL|AREV)-[A-Za-z0-9_.:-]+\b/g,
+    /\b(?:EVT|LEM|LEH|LDE|DOC|KCHUNK|LOCALDOC|SYM|COMMIT|MEM|ANL|AREV)-[A-Za-z0-9_.:-]+\b/g,
     '证据位置未记录'
   )
+}
+
+function evidenceLabel(evidenceId: unknown): string {
+  return props.evidenceLabels?.[String(evidenceId)] || '证据位置未记录'
+}
+
+function repairLabel(code: unknown): string {
+  return ({
+    MISSING_METHOD_ASSESSMENTS_ADDED: '补齐逐文档相关性判断',
+    SYMPTOM_METHOD_RELEVANCE_UPGRADED: '保留与现象重叠的故障树',
+    UNSUPPORTED_CONCLUSIONS_DOWNGRADED: '无证据结论降级为证据不足',
+    UNKNOWN_FAULT_TREE_ITEMS_REMOVED: '移除未知故障树节点',
+    EXECUTABLE_CHECKS_ADDED: '补齐可执行检查',
+    READ_ONLY_EVIDENCE_BINDINGS_ADDED: '补齐只读证据检索'
+  } as Record<string, string>)[String(code || '')] || String(code || '安全规范化')
+}
+
+function repairSummary(repairs: any[]): string {
+  return (repairs || []).map(
+    (item: any) => `${repairLabel(item.code)} × ${item.count || 1}`
+  ).join('；')
 }
 
 function coverageStatusLabel(status: string): string {
@@ -71,7 +95,16 @@ function budgetStopLabel(reason: unknown): string {
   <section v-if="planning" data-testid="diagnostic-planning-details">
     <h3 class="section-title">故障树规划与排查</h3>
     <el-alert
-      v-if="planning.planner_failure || planning.planner_mode === 'deterministic_fallback'"
+      v-if="planning.demo_snapshot"
+      type="info"
+      :closable="false"
+      data-testid="demo-planning-snapshot"
+      :title="`真实 GLM-5.2 历史规划快照 · ${planning.rounds?.length || 0} 轮 LLM Planning · ${integer(planning.budget?.usage?.total_tokens)} 规划 Token`"
+      description="模型规划、只读工具调用和故障树结论来自历史成功运行；当前仅导入并重定位证据，没有再次调用模型，也没有复制私有方法正文。"
+      style="margin-bottom:10px"
+    />
+    <el-alert
+      v-else-if="planning.planner_failure || planning.planner_mode === 'deterministic_fallback'"
       type="warning"
       :closable="false"
       :title="`LLM 规划已回退：${planning.planner_failure?.code || planning.stop_reason || '校验失败'}`"
@@ -82,7 +115,7 @@ function budgetStopLabel(reason: unknown): string {
       v-else
       type="success"
       :closable="false"
-      :title="`LLM 规划已通过 · ${planning.agent_mode || '受控规划'} · ${planning.rounds.length}/20 轮`"
+      :title="`LLM 规划已通过 · ${planning.agent_mode || '受控规划'} · ${planning.rounds?.length || 0}/20 轮`"
       style="margin-bottom:10px"
     />
     <el-alert
@@ -91,6 +124,30 @@ function budgetStopLabel(reason: unknown): string {
       :closable="false"
       :title="`故障树逐节点覆盖：${faultTreeCoverage.concluded || 0}/${faultTreeCoverage.total || 0} 已有结论，${faultTreeCoverage.attempted || 0}/${faultTreeCoverage.total || 0} 已执行检索`"
       :description="faultTreeCoverage.complete ? '全部节点均已得到证据支持、排除或明确的证据不足结论。' : '覆盖未完成时 LLM 规划不会被标记为通过，也不会伪造已完成结论。'"
+      style="margin-bottom:10px"
+    />
+    <el-alert
+      v-if="faultTreeCoverage.fallback_applied"
+      type="warning"
+      :closable="false"
+      title="模型规划未完整通过，已执行确定性方法证据扫描"
+      :description="`故障树仍完成 ${faultTreeCoverage.concluded || 0}/${faultTreeCoverage.total || 0} 个终态；支持和排除只绑定实际日志证据，其他节点明确保留为证据不足。原因：${faultTreeCoverage.fallback_reason || planning.stop_reason || '未知'}`"
+      style="margin-bottom:10px"
+    />
+    <el-alert
+      v-else-if="faultTreeCoverage.resolution_source_counts?.DETERMINISTIC_METHOD_EVIDENCE"
+      type="info"
+      :closable="false"
+      title="模型覆盖账本已与方法 Pattern 的本地证据扫描交叉核验"
+      :description="`确定性核验节点：${faultTreeCoverage.resolution_source_counts.DETERMINISTIC_METHOD_EVIDENCE}；模型证据门禁节点：${faultTreeCoverage.resolution_source_counts.LLM_EVIDENCE_GATED || 0}。`"
+      style="margin-bottom:10px"
+    />
+    <el-alert
+      v-if="plannerRepairs.length"
+      type="info"
+      :closable="false"
+      title="模型计划已完成安全规范化"
+      :description="repairSummary(plannerRepairs)"
       style="margin-bottom:10px"
     />
     <el-collapse style="margin-bottom:12px">
@@ -144,6 +201,7 @@ function budgetStopLabel(reason: unknown): string {
           </el-table-column>
           <el-table-column label="已检索" width="90"><template #default="scope">{{ scope.row.attempted ? '是' : '否' }}</template></el-table-column>
           <el-table-column label="判断依据" min-width="320" show-overflow-tooltip><template #default="scope">{{ displayText(scope.row.rationale) }}</template></el-table-column>
+          <el-table-column label="实际证据" min-width="320" show-overflow-tooltip><template #default="scope">{{ (scope.row.evidence_ids || []).map(evidenceLabel).join('、') || '—' }}</template></el-table-column>
           <el-table-column label="下一步" min-width="280" show-overflow-tooltip><template #default="scope">{{ displayText(scope.row.next_action) }}</template></el-table-column>
           <el-table-column prop="line_start" label="方法行" width="90" />
         </el-table>
@@ -188,7 +246,15 @@ function budgetStopLabel(reason: unknown): string {
           <el-tag size="small" type="success">检查 {{ round.checks?.length || 0 }}</el-tag>&nbsp;
           <el-tag size="small" type="info">检索 {{ round.search_queries?.length || 0 }}</el-tag>
           &nbsp;<el-tag size="small" type="warning">节点结论 {{ round.fault_tree_assessments?.length || 0 }}</el-tag>
+          &nbsp;<el-tag v-if="round.planner_repairs?.length" size="small" type="info">安全规范化 {{ round.planner_repairs.length }}</el-tag>
         </template>
+        <el-alert
+          v-if="round.planner_repairs?.length"
+          type="info"
+          :closable="false"
+          :title="`本轮后端安全规范化：${repairSummary(round.planner_repairs)}`"
+          style="margin-bottom:10px"
+        />
         <el-table :data="round.method_assessments || []" size="small">
           <el-table-column label="方法文档" min-width="300"><template #default="scope">{{ methodLabel(scope.row.method_document_id) }}</template></el-table-column>
           <el-table-column prop="relevance" label="相关性" width="170" />

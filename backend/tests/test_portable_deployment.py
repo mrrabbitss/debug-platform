@@ -1,3 +1,6 @@
+import importlib.util
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -6,6 +9,16 @@ from fastapi.testclient import TestClient
 
 from app.core.config import PROJECT_ROOT
 from app.services.static_frontend import mount_static_frontend
+
+
+def _load_portable_launcher():
+    path = PROJECT_ROOT / "deploy" / "windows-portable" / "portable_launcher.py"
+    spec = importlib.util.spec_from_file_location("portable_launcher_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_static_frontend_serves_assets_and_vue_routes(tmp_path: Path) -> None:
@@ -58,20 +71,45 @@ def test_portable_build_excludes_native_model_runtime_and_has_real_smoke() -> No
     assert "._pth" in build and '"import site"' in build
     assert '"-B"' in build and '"-s"' in build
     assert "source_dirty" in build
+    assert "agent-skills\\gw-ap-debug" in build
+    assert "install_agent_skill_mcp.ps1" in build
+    assert "install_agent_skill_mcp.bat" in build
+    assert "agent_skill_bundled = $true" in build
+    assert "mcp_installer_bundled = $true" in build
     assert 'file_hash.ps1' in build and "Get-Sha256Hex" in build
     assert "Get-FileHash" not in build
     assert "STATIC_FRONTEND_ROOT" in launcher
     assert "DEBUG_PLATFORM_ENV_FILE" in launcher
     assert "MODEL_DISABLE_IN_PROCESS_LOCAL" in launcher
+    assert "MCP_PUBLIC_BASE_URL" in launcher
     assert "verify_package_manifest" in launcher
     assert "sys.flags.isolated" in launcher
     assert "package-manifest.json" in build
     assert "/api/v1/health/ready" in verify
     assert "/cases/portable-smoke-route" in verify
+    assert "agent-skills\\gw-ap-debug\\SKILL.md" in verify
+    assert "upload-knowledge-markdown.ps1" in verify
+    assert "install_agent_skill_mcp.ps1" in verify
+    assert "install_agent_skill_mcp.bat" in verify
+    assert "Packaged Skill/MCP installer dry-run failed" in verify
+    assert "Packaged Markdown knowledge helper dry-run failed" in verify
     assert "WindowStyle Hidden" in verify
     assert '-B -s "portable_launcher.py"' in verify
     assert "workflow_dispatch" in workflow
     assert 'tags:' in workflow and '"v*"' in workflow
+
+
+def test_portable_launcher_uses_the_actual_listening_port_for_mcp(monkeypatch) -> None:
+    launcher = _load_portable_launcher()
+    monkeypatch.setenv("MCP_PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+
+    public_base_url = launcher.configure_server_environment("127.0.0.1", 18080)
+
+    assert public_base_url == "http://127.0.0.1:18080"
+    assert os.environ["MCP_PUBLIC_BASE_URL"] == public_base_url
+    assert os.environ["CORS_ORIGINS"] == (
+        "http://127.0.0.1:18080,http://localhost:18080"
+    )
 
 
 def test_removed_model_installer_cannot_pollute_platform_environment() -> None:

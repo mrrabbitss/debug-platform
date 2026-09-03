@@ -8,6 +8,7 @@ import type { CaseItem, Principal } from '../types'
 const router = useRouter()
 const cases = ref<CaseItem[]>([])
 const loading = ref(false)
+const demoLoading = ref(false)
 const dialogVisible = ref(false)
 const principal = ref<Principal | null>(null)
 const authError = ref('')
@@ -55,6 +56,29 @@ async function createCase() {
   }
 }
 
+function isDemoCase(item: CaseItem) {
+  return item.id.startsWith('CASE-DEMO-AP-OFFLINE-')
+}
+
+async function importDemoCase() {
+  demoLoading.value = true
+  try {
+    const { data } = await api.post('/demo-cases/ap-frequent-offline')
+    ElMessage.success(
+      data.restored
+        ? '真实 GLM-5.2 演示快照已恢复'
+        : data.created
+          ? '真实 GLM-5.2 历史成功结果已导入；本次导入未再次调用模型'
+          : '真实 GLM-5.2 演示快照已存在，正在打开'
+    )
+    router.push(`/cases/${data.case.id}`)
+  } catch (error: any) {
+    ElMessage.error(errorMessage(error, '演示案例导入失败'))
+  } finally {
+    demoLoading.value = false
+  }
+}
+
 onMounted(async () => {
   await loadIdentity()
   await loadCases()
@@ -66,16 +90,36 @@ onMounted(async () => {
     <div class="toolbar">
       <h1 class="page-title" style="margin-right:auto">故障案例</h1>
       <el-tag v-if="principal" effect="plain">{{ principal.role }}</el-tag>
+      <el-button
+        type="success"
+        plain
+        :disabled="!canCreate"
+        :loading="demoLoading"
+        data-testid="import-ap-offline-demo"
+        @click="importDemoCase"
+      >导入 AP 离线演示</el-button>
       <el-button type="primary" :disabled="!canCreate" @click="dialogVisible = true">新建案例</el-button>
       <el-button @click="loadCases">刷新</el-button>
     </div>
     <el-alert v-if="authError" type="warning" :closable="false" :title="authError" style="margin-bottom:14px" />
     <div v-if="authError" class="toolbar"><el-button type="primary" @click="router.push('/security')">打开安全与审计并配置凭据</el-button></div>
     <el-alert v-else-if="principal?.role === 'VIEWER'" type="info" :closable="false" title="当前账号为只读角色，可以查看获授权案例，但不能新建案例。" style="margin-bottom:14px" />
+    <el-alert
+      v-else
+      type="info"
+      :closable="false"
+      title="内置 AP 频繁离线演示仅含纯合成 GW/AP 日志；一键生成可浏览日志、三层筛查和综合诊断快照，不调用模型，也不包含私有方法正文。"
+      style="margin-bottom:14px"
+    />
     <el-card>
       <el-table :data="cases" v-loading="loading" @row-dblclick="(row: CaseItem) => router.push(`/cases/${row.id}`)">
         <el-table-column prop="id" label="案例编号" width="210" />
-        <el-table-column prop="title" label="问题标题" min-width="220" />
+        <el-table-column prop="title" label="问题标题" min-width="260">
+          <template #default="scope">
+            <el-tag v-if="isDemoCase(scope.row as CaseItem)" size="small" type="success" style="margin-right:8px">真实 GLM 演示</el-tag>
+            {{ scope.row.title }}
+          </template>
+        </el-table-column>
         <el-table-column prop="device_type" label="设备" width="80" />
         <el-table-column prop="device_model" label="型号" width="130" />
         <el-table-column prop="firmware_version" label="固件版本" width="130" />

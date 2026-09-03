@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import unquote
@@ -23,6 +24,7 @@ REQUIRED_PATHS = (
     ".github/pull_request_template.md",
     ".github/workflows/ci.yml",
     ".github/workflows/windows-portable.yml",
+    ".github/workflows/windows-gguf-installer.yml",
     "AGENTS.md",
     "CAPABILITIES.md",
     "HARNESS_ENGINEERING.md",
@@ -38,10 +40,26 @@ REQUIRED_PATHS = (
     "backend/tests/test_model_downloads.py",
     "deploy/windows-portable/portable_launcher.py",
     "deploy/windows-portable/start.bat",
+    "deploy/windows-installer/DebugPlatform.iss",
+    "deploy/windows-installer/Install.bat",
+    "deploy/windows-installer/install_local.ps1",
+    "scripts/model-runtime/model-assets.json",
+    "scripts/model-runtime/model-assets.schema.json",
+    "scripts/model-runtime/prepare_assets.py",
+    "scripts/model-runtime/smoke_runtime.py",
+    "scripts/model-runtime/validate_assets.py",
+    "scripts/build_windows_gguf_installer.bat",
+    "scripts/build_windows_gguf_installer.ps1",
+    "scripts/test_portable_gguf_launcher.py",
     "scripts/build_windows_portable.bat",
     "scripts/build_windows_portable.ps1",
     "scripts/validate_all.bat",
     "scripts/validate_all.ps1",
+    "start_codeagent.bat",
+    "scripts/start_codeagent.ps1",
+    "scripts/codeagent_launcher_support.ps1",
+    "scripts/codeagent_launcher_http.ps1",
+    "backend/tests/test_codeagent_launcher.py",
     "scripts/validate_glm_chat_features.bat",
     "scripts/validate_glm_chat_features.py",
     "scripts/check_architecture.py",
@@ -277,6 +295,132 @@ def check_portable_deployment_contract(checks: HarnessChecks) -> None:
     )
 
 
+def check_full_gguf_installer_contract(checks: HarnessChecks) -> None:
+    workflow_path = ".github/workflows/windows-gguf-installer.yml"
+    workflow = load_yaml(workflow_path, base_loader=True)
+    triggers = workflow.get("on", {}) if isinstance(workflow, dict) else {}
+    trigger_ok = (
+        isinstance(triggers, dict)
+        and set(triggers) == {"workflow_dispatch", "release"}
+        and isinstance(triggers.get("workflow_dispatch"), dict)
+        and isinstance(triggers.get("release"), dict)
+        and triggers["release"].get("types") == ["published"]
+    )
+    checks.check(
+        "gguf-installer-trigger-contract",
+        trigger_ok,
+        "full-GGUF artifacts build only on explicit dispatch or published release",
+    )
+
+    content = (REPO_ROOT / workflow_path).read_text(encoding="utf-8")
+    builder = (REPO_ROOT / "scripts/build_windows_gguf_installer.ps1").read_text(
+        encoding="utf-8"
+    )
+    action_revisions = re.findall(r"(?m)^\s*uses:\s*[^\s@]+@([^\s#]+)", content)
+    pinned_actions = bool(action_revisions) and all(
+        re.fullmatch(r"[0-9a-f]{40}", revision) for revision in action_revisions
+    )
+    checks.check(
+        "gguf-installer-pinned-toolchain",
+        "runs-on: windows-2022" in content
+        and "windows-latest" not in content
+        and "ubuntu-latest" not in content
+        and pinned_actions
+        and "python-version: \"3.12.12\"" in content
+        and "node-version: \"22.22.0\"" in content
+        and "--version=6.7.1" in content,
+        "runner, Actions, Python, Node and Inno Setup are immutable release inputs",
+    )
+    checks.check(
+        "gguf-installer-build-gates",
+        "scripts/model-runtime/prepare_assets.py" in content
+        and '"--all"' in content
+        and "--strict-release" in content
+        and "scripts/build_windows_gguf_installer.ps1" in content
+        and "-RequireSetupExe" in content
+        and "-SkipModelSmoke" not in content
+        and "-SkipSmokeTest" not in content
+        and "actions/upload-artifact@" in content
+        and "windows-x64.zip.sha256" in content
+        and "x64.exe.sha256" in content
+        and "provenance.json.sha256" in content
+        and "model-runtime\\validate_assets.py" in builder
+        and "model-runtime\\smoke_runtime.py" in builder
+        and '"--component-lock", $lockPath' in builder,
+        "release build prepares locked assets, runs real E/R inference plus full app smoke and uploads ZIP/Setup/hash/provenance",
+    )
+
+    validator = subprocess.run(
+        [sys.executable, "scripts/model-runtime/validate_assets.py"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    checks.check(
+        "gguf-model-supply-chain",
+        validator.returncode == 0,
+        "pinned GGUF source/runtime manifest is valid"
+        if validator.returncode == 0
+        else (validator.stdout + validator.stderr).strip(),
+    )
+
+    gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+    tracked_weights = subprocess.run(
+        ["git", "ls-files", "--", "*.gguf", "*.safetensors", "*.bin"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    tracked = [line for line in tracked_weights.stdout.splitlines() if line.strip()]
+    checks.check(
+        "gguf-weight-boundary",
+        tracked_weights.returncode == 0
+        and not tracked
+        and "/artifacts/build-cache/" in gitignore
+        and "/artifacts/installer/" in gitignore
+        and "/models/" in gitignore,
+        "model weights and generated installers remain outside Git"
+        if not tracked
+        else f"tracked weight files: {', '.join(tracked)}",
+    )
+
+    inno = (REPO_ROOT / "deploy/windows-installer/DebugPlatform.iss").read_text(
+        encoding="utf-8"
+    )
+    installer = (
+        REPO_ROOT / "deploy/windows-installer/install_local.ps1"
+    ).read_text(encoding="utf-8")
+    files_section = inno.split("[Files]", maxsplit=1)[1].split(
+        "[Icons]", maxsplit=1
+    )[0]
+    checks.check(
+        "gguf-installer-immutable-app-tree",
+        "UninstallFilesDir={localappdata}\\Programs\\GWAPDebugPlatform-Uninstall" in inno
+        and 'DestDir: "{app}"' not in files_section
+        and 'DestDir: "{tmp}\\GWAPDebugPlatformPayload"' in files_section
+        and "AfterInstall: InstallPayloadAtomically" in files_section
+        and "ewWaitUntilTerminated" in inno
+        and "if ResultCode <> 0 then" in inno
+        and "-NoLaunch -NoShortcuts" in inno
+        and '[switch]$NoShortcuts' in installer
+        and '"Local\\GWAPDebugPlatform.Install"' in installer
+        and "$installMutex.WaitOne(" in installer
+        and "[System.Threading.AbandonedMutexException]" in installer
+        and "$installMutex.ReleaseMutex()" in installer
+        and "function Assert-RestorableBackup" in installer
+        and "$backupCandidates.Count -gt 1" in installer
+        and "$backupCandidates.Count -eq 1" in installer
+        and "Assert-RestorableBackup -Path $recoveryBackup" in installer
+        and 'Type: filesandordirs; Name: "{app}"; Check: IsExpectedAppRoot' in inno
+        and "{localappdata}\\GWAPDebugPlatform" not in inno,
+        "Inno extracts to a temporary tree, serializes and recovers atomic publication, propagates failure and uninstalls only the immutable app tree",
+    )
+
+
 def check_dependabot(checks: HarnessChecks) -> None:
     config = load_yaml(".github/dependabot.yml")
     updates = config.get("updates", []) if isinstance(config, dict) else []
@@ -393,6 +537,7 @@ def main() -> int:
     check_document_index(checks)
     check_ci_contract(checks)
     check_portable_deployment_contract(checks)
+    check_full_gguf_installer_contract(checks)
     check_dependabot(checks)
     check_workflow_contract(checks)
     from check_architecture import check_architecture

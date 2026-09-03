@@ -115,6 +115,43 @@ HTTP 连接本身不再触发白名单校验；是否接受无传输加密的 HT
 - 从故障案例或错误分析 Skill 提炼可追溯的分析方法；
 - 删除正文、分块和对应向量。
 
+### 3.1 一个或多个 Markdown 的智能归类
+
+本轮新增的智能归类与“把多份材料提炼成一个故障案例”是两条独立流程。智能归类只接受
+1–20 个 `.md`/`.markdown` 文件，保留每份文件的原正文，并按文件创建一个独立知识文档和
+一个独立持久任务；它不会把多份文件合并。模型只能从当前活动的叶子分类中选择一个位置，
+`source_type` 随分类语义确定，可同时建议 `GW`、`AP`、`GENERAL`、`OTHER` 设备范围和简短模块。
+
+网页端由管理员在“知识库”点击“AI 智能导入 MD”，选择一个或多个文件、启用的 Chat Profile、
+可信等级和可见级别。API 模型需要显式确认内容外发；原文件先保存在本地，分类请求只发送经过
+敏感信息遮蔽和长度限制的标题/正文片段。服务器为每个文件分别调用选择的 Profile，校验返回
+Schema 和活动叶子分类后再写入知识库。
+
+CLI 不使用平台 Chat Profile 做分类。先用 Skill 中的确定性助手把完整 Markdown 通过 REST
+multipart 数据面上传：
+
+```powershell
+& .\agent-skills\gw-ap-debug\scripts\upload-knowledge-markdown.ps1 `
+  -Path @('D:\knowledge\fault-tree.md', 'D:\knowledge\protocol-notes.markdown')
+```
+
+助手优先使用显式 `-ApiBaseUrl` 或 `DEBUGPLATFORM_API_BASE_URL`；未提供时可从
+`DEBUGPLATFORM_MCP_URL` 去掉 `/mcp` 后推导 `/api/v1`，并等待每个持久任务完成。随后当前
+Claude Code/Codex 会话模型调用 `debug_get_knowledge_routing_context`，读取活动分类以及每个草稿
+的脱敏、限长片段、`expected_lock_version` 和正文 SHA-256，再调用
+`debug_apply_knowledge_routing` 提交逐文件决策。完整 Markdown 不进入 MCP JSON；Host 路径后端
+生成式 Chat 调用固定为零。
+
+两条路径都要求管理员权限，并且每个输入文件最终只得到一个 `active=false`、
+`review_status=DRAFT` 的文档。分类本身不会提交审核或发布；管理员仍需检查标题、分类、设备、
+模块和正文，再按 `DRAFT → IN_REVIEW → ACTIVE` 的既有状态机处理。Host 写回还会校验 lock
+version、正文哈希和叶子分类，文件在分类后被修改时必须刷新上下文重新判断，不能覆盖新版本。
+
+2026-09-03 当前源码验收中，浏览器多文件场景和真实 Codex CLI Host 分类均通过；Codex batch
+`KRBATCH-28b4b098d8984ae2` 分别选择 `history.fault_trees` 与
+`diagnosis.protocol_rules`，两个文档均保持 DRAFT/inactive，后端 Chat 与模型外发均为零。
+当前主机未安装 Claude CLI，OpenCode 按用户要求未测试，这两项不属于上述 Codex 通过结论。
+
 知识文档的“设备类型”是适用范围元数据，不是左侧分类树。可选值为 `GW`、`AP`、
 `通用` 和 `其他`；新建跨产品知识时应选择“通用”。`GENERAL` 通用文档会参与 GW 和 AP
 案例检索，历史 `OTHER` 文档继续按共享知识处理，避免升级后丢失召回。

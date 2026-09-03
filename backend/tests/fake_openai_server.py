@@ -102,6 +102,63 @@ def _structured_user_payload(user_text: str) -> dict[str, Any] | None:
 
 
 def _diagnostic_response(payload: dict[str, Any]) -> str | None:
+    if payload.get("task") == "knowledge_routing":
+        categories = [
+            item for item in payload.get("categories", [])
+            if isinstance(item, dict) and item.get("id")
+        ]
+        documents = [
+            item for item in payload.get("documents", [])
+            if isinstance(item, dict) and item.get("document_key")
+        ]
+        by_code = {
+            str(item.get("code") or ""): item
+            for item in categories
+            if item.get("code")
+        }
+
+        def select_category(text: str) -> dict[str, Any]:
+            rules = (
+                (("故障树", "fault tree", "root cause branch"), "history.fault_trees"),
+                (("解决方案", "solution", "remediation"), "history.solutions"),
+                (("协议", "protocol"), "diagnosis.protocol_rules"),
+                (("安全", "security"), "diagnosis.security_rules"),
+                (("日志规则", "log rule", "error code"), "diagnosis.log_rules"),
+                (("测试规范", "test specification"), "reference.test_specs"),
+                (("分析 skill", "analysis skill"), "methods.analysis_skills"),
+            )
+            folded = text.casefold()
+            for keywords, code in rules:
+                if any(keyword.casefold() in folded for keyword in keywords) and code in by_code:
+                    return by_code[code]
+            for fallback_code in ("reference.product_docs", "diagnosis.log_rules"):
+                if fallback_code in by_code:
+                    return by_code[fallback_code]
+            return categories[0]
+
+        decisions = []
+        for document in documents:
+            text = f"{document.get('title', '')}\n{document.get('excerpt', '')}"
+            category = select_category(text)
+            folded = text.casefold()
+            device_type = (
+                "AP" if " ap " in f" {folded} " or "无线接入点" in folded
+                else "GW" if " gw " in f" {folded} " or "网关" in folded
+                else "GENERAL"
+            )
+            decisions.append({
+                "document_key": str(document["document_key"]),
+                "category_id": str(category["id"]),
+                "device_type": device_type,
+                "module": "WLAN" if "wlan" in folded or "无线" in folded else None,
+                "confidence": 0.94,
+                "rationale": (
+                    "Deterministic synthetic classification selected "
+                    f"{category.get('code') or category.get('name')}."
+                ),
+            })
+        return json.dumps({"decisions": decisions}, ensure_ascii=False)
+
     methods = payload.get("mandatory_method_documents")
     if not isinstance(methods, list):
         methods = []

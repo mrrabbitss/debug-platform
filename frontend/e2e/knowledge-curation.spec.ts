@@ -288,7 +288,7 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
   page.on('pageerror', error => consoleErrors.push(`pageerror: ${error.message}`))
 
   await ensureGoldenModel(request)
-  await publishSyntheticDiagnosticMethod(request)
+  const diagnosticMethodId = await publishSyntheticDiagnosticMethod(request)
   const createdCase = await request.post(`${apiUrl}/cases`, {
     data: {
       title: 'Synthetic E2E authentication failure',
@@ -413,9 +413,13 @@ test('visualizes LLM log planning, multi-round diagnosis and recoverable case ch
   await expect(diagnosisTrace).toContainText(
     /Tokens：[1-9]\d*（输入 [1-9]\d* \/ 输出 [1-9]\d*）/
   )
+  await expect(diagnosisTrace).not.toContainText(diagnosticMethodId)
   await page.getByText('本次调用的文档与方法').click()
   await expect(page.getByTestId('diagnostic-planning-details')).toContainText(
     'Synthetic E2E authentication screening method'
+  )
+  await expect(page.getByTestId('diagnostic-planning-details')).not.toContainText(
+    diagnosticMethodId
   )
   await page.getByText('Agent 预算与停止边界').click()
   await expect(page.getByTestId('diagnostic-planning-details')).toContainText('累计 Token')

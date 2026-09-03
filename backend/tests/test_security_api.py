@@ -1,7 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import Depends, FastAPI
+import pytest
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,7 +12,7 @@ from app.core import security
 from app.core.db import Base, configure_sqlite_engine, get_db
 from app.core.security import verify_api_key
 from app.models import Case, CaseMember, UserAccount
-from app.services.access_control import issue_access_token
+from app.services.access_control import authorize_case_action, issue_access_token
 
 
 def test_rbac_dependency_enforces_token_role_and_case_scope(tmp_path: Path, monkeypatch) -> None:
@@ -174,4 +175,82 @@ def test_rbac_dependency_enforces_token_role_and_case_scope(tmp_path: Path, monk
         assert identity.status_code == 200
         assert identity.json()["username"] == "admin"
 
+    engine.dispose()
+
+
+def test_service_level_case_authorization_for_mcp_tool_arguments(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'mcp-case-auth.db'}")
+    configure_sqlite_engine(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    with session_factory() as db:
+        owner = UserAccount(
+            id="USR-mcp-owner",
+            username="mcp-owner",
+            display_name="MCP owner",
+            role="ENGINEER",
+        )
+        viewer = UserAccount(
+            id="USR-mcp-viewer",
+            username="mcp-viewer",
+            display_name="MCP viewer",
+            role="VIEWER",
+        )
+        outsider = UserAccount(
+            id="USR-mcp-outsider",
+            username="mcp-outsider",
+            display_name="MCP outsider",
+            role="ENGINEER",
+        )
+        db.add_all([owner, viewer, outsider])
+        db.flush()
+        case = Case(
+            id="CASE-mcp-private",
+            title="Private MCP case",
+            description="",
+            owner_id=owner.id,
+        )
+        db.add(case)
+        db.flush()
+        db.add(CaseMember(
+            id="MEM-mcp-viewer",
+            case_id=case.id,
+            user_id=viewer.id,
+            permission="VIEWER",
+        ))
+        db.commit()
+
+        assert authorize_case_action(
+            db,
+            case.id,
+            {"id": owner.id, "role": owner.role},
+            write=True,
+        ).id == case.id
+        assert authorize_case_action(
+            db,
+            case.id,
+            {"id": viewer.id, "role": viewer.role},
+        ).id == case.id
+        with pytest.raises(HTTPException) as read_only:
+            authorize_case_action(
+                db,
+                case.id,
+                {"id": viewer.id, "role": viewer.role},
+                write=True,
+            )
+        assert read_only.value.status_code == 403
+        with pytest.raises(HTTPException) as denied:
+            authorize_case_action(
+                db,
+                case.id,
+                {"id": outsider.id, "role": outsider.role},
+            )
+        assert denied.value.status_code == 403
+        with pytest.raises(HTTPException) as missing:
+            authorize_case_action(
+                db,
+                "CASE-missing",
+                {"id": owner.id, "role": owner.role},
+            )
+        assert missing.value.status_code == 404
     engine.dispose()

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: GW/AP Debug Platform Workflow API
-  version: 0.6.2
+  version: 0.7.0
 servers:
   - url: http://localhost:8000/api/v1
 paths:
@@ -303,6 +303,49 @@ paths:
                 category_id: { type: string }
       responses:
         '202': { description: Knowledge import job accepted }
+  /knowledge-routing/import:
+    post:
+      operationId: importMarkdownForRouting
+      description: >-
+        Accepts one or more Markdown files and creates one independent inactive
+        knowledge DRAFT per file. Web requests use a selected or active platform
+        Chat profile; host_cli requests stage drafts for classification by the
+        current Claude Code or Codex model. This operation never publishes knowledge.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items: { type: string, format: binary }
+                relative_paths_json:
+                  type: string
+                  default: '[]'
+                reasoning_owner:
+                  type: string
+                  enum: [platform_llm, host_cli]
+                  default: platform_llm
+                model_profile_id: { type: string }
+                consent_model_egress: { type: boolean, default: false }
+                trust_level:
+                  type: string
+                  enum: [LOW, MEDIUM, HIGH]
+                  default: MEDIUM
+                confidentiality:
+                  type: string
+                  enum: [PUBLIC, INTERNAL, RESTRICTED]
+                  default: INTERNAL
+      responses:
+        '202': { description: One persistent routing job per Markdown file was accepted; all outputs remain DRAFT }
+        '400': { description: Invalid file count, extension, relative path or metadata }
+        '403': { description: Administrator role required }
+        '409': { description: Model profile or model-egress consent is unavailable }
   /cases/{case_id}/repositories:
     post:
       operationId: uploadSourceRepository

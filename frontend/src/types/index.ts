@@ -245,6 +245,43 @@ export interface KnowledgeDocument {
   updated_at: string
 }
 
+export interface KnowledgeRoutingImportItem {
+  relative_path: string
+  artifact_id: string
+  document_id: string
+  job: Job
+}
+
+export interface KnowledgeRoutingImportResponse {
+  batch_id: string
+  reasoning_owner: 'platform_llm' | 'host_cli'
+  model_profile_id: string | null
+  file_count: number
+  items: KnowledgeRoutingImportItem[]
+  draft_only: boolean
+  human_review_required: boolean
+}
+
+export interface KnowledgeRoutingJobResult {
+  document_id: string
+  artifact_id: string
+  title: string
+  review_status: 'DRAFT'
+  active: false
+  routing_status: string
+  category_id: string | null
+  category_code: string | null
+  category_path: string | null
+  source_type: string
+  device_type: string | null
+  module: string | null
+  confidence: number | null
+  rationale: string | null
+  human_review_required: true
+  expected_lock_version: number
+  content_sha256: string
+}
+
 export interface KnowledgeRevision {
   id: string
   document_id: string

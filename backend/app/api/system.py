@@ -39,6 +39,7 @@ from app.services.knowledge_graph import domain_graph_status
 from app.services.llm import LLMError, get_active_chat_model_info, get_llm_provider
 from app.services.model_profiles import (
     COMPATIBLE_CHAT_PROVIDERS,
+    MANAGED_LOCAL_PROVIDER,
     activate_model_profile,
     get_active_model_profile,
     get_profile_proxy_url,
@@ -445,6 +446,8 @@ def update_model_profile(
     if not profile:
         raise HTTPException(404, "Model profile not found")
     values = payload.model_dump(exclude_unset=True)
+    if profile.provider == MANAGED_LOCAL_PROVIDER or values.get("provider") == MANAGED_LOCAL_PROVIDER:
+        raise HTTPException(409, "Bundled llama.cpp profiles are managed by the launcher")
     api_key = values.pop("api_key", None)
     clear_api_key = bool(values.pop("clear_api_key", False))
     proxy_url_supplied = "proxy_url" in values
@@ -514,7 +517,7 @@ def delete_model_profile(profile_id: str, db: Db) -> dict:
         raise HTTPException(404, "Model profile not found")
     if profile.is_active:
         raise HTTPException(409, "Activate another profile before deleting this one")
-    if json_loads(profile.config_json, {}).get("builtin"):
+    if profile.provider == MANAGED_LOCAL_PROVIDER or json_loads(profile.config_json, {}).get("builtin"):
         raise HTTPException(409, "Built-in model profiles cannot be deleted")
     db.execute(delete(KnowledgeEmbedding).where(
         KnowledgeEmbedding.profile_id == profile.id

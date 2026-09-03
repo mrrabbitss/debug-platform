@@ -46,6 +46,11 @@ SOURCE_TYPE_DEFAULT_CATEGORY = {
     "document": "reference.product_docs",
 }
 
+CATEGORY_CODE_SOURCE_TYPE = {
+    code: source_type
+    for source_type, code in SOURCE_TYPE_DEFAULT_CATEGORY.items()
+}
+
 
 def seed_knowledge_categories(db: Session) -> None:
     for category_id, name, code, parent_id, sort_order, description in DEFAULT_CATEGORIES:
@@ -65,6 +70,19 @@ def seed_knowledge_categories(db: Session) -> None:
 def get_default_category_id(db: Session, source_type: str) -> str | None:
     code = SOURCE_TYPE_DEFAULT_CATEGORY.get(source_type, "reference.product_docs")
     return db.scalar(select(KnowledgeCategory.id).where(KnowledgeCategory.code == code))
+
+
+def source_type_for_category(db: Session, category_id: str) -> str:
+    """Resolve a category to one stable knowledge type through its parent chain."""
+    seen: set[str] = set()
+    current = db.get(KnowledgeCategory, category_id)
+    while current and current.id not in seen:
+        seen.add(current.id)
+        source_type = CATEGORY_CODE_SOURCE_TYPE.get(current.code)
+        if source_type:
+            return source_type
+        current = db.get(KnowledgeCategory, current.parent_id) if current.parent_id else None
+    return "document"
 
 
 def set_document_category(db: Session, document_id: str, category_id: str | None) -> None:

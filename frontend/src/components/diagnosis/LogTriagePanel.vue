@@ -45,6 +45,9 @@ const plannerFailure = computed(() => triage.value?.summary?.planner_failure || 
 const toolCalls = computed(() => triage.value?.plan?.tool_calls || [])
 const planHypotheses = computed(() => triage.value?.plan?.hypotheses || [])
 const screeningSteps = computed(() => triage.value?.plan?.screening_steps || [])
+const isDemoSnapshot = computed(() => Boolean(
+  triage.value?.summary?.demo_snapshot || triage.value?.plan?.demo_snapshot
+))
 const selectedPatternCount = computed(() => Number(
   triage.value?.summary?.selected_pattern_count
   ?? triage.value?.plan?.selected_pattern_ids?.length
@@ -211,7 +214,7 @@ onBeforeUnmount(() => {
 <template>
   <div v-loading="loading" data-testid="log-triage-panel">
     <el-alert
-      v-if="!modelEgressApproved"
+      v-if="!modelEgressApproved && !isDemoSnapshot"
       type="warning"
       :closable="false"
       title="当前案例未授权向模型发送问题描述与方法文档；请先在案例概览开启授权。日志正文始终只在本地扫描。"
@@ -222,7 +225,7 @@ onBeforeUnmount(() => {
         <el-option v-for="item in parsedArtifacts" :key="item.id" :label="item.original_name" :value="item.id" />
       </el-select>
       <el-button type="primary" :disabled="!canEdit || !selectedArtifactId" :loading="submitting" @click="startTriage">
-        {{ triage ? '重新执行 LLM 规划' : '启动 LLM 日志规划' }}
+        {{ isDemoSnapshot ? '使用当前模型重新执行 LLM 规划' : triage ? '重新执行 LLM 规划' : '启动 LLM 日志规划' }}
       </el-button>
       <el-tag v-if="triage" data-testid="log-triage-status" :type="triage.status === 'COMPLETED' ? 'success' : triage.status === 'FAILED' ? 'danger' : 'primary'">{{ triage.status }}</el-tag>
       <span v-if="triage" class="muted">{{ triage.model_name || '确定性回退' }} · {{ triage.plan?.planner_mode || '等待规划' }}</span>
@@ -233,7 +236,16 @@ onBeforeUnmount(() => {
     <template v-else>
       <el-alert v-if="triage.error_message" type="error" :closable="false" :title="triage.error_message" style="margin:12px 0" />
       <el-alert
-        v-if="triage.summary?.planner_fallback"
+        v-if="isDemoSnapshot"
+        type="info"
+        :closable="false"
+        data-testid="demo-triage-snapshot"
+        title="真实 GLM-5.2 历史筛查结果 · 导入时未再次调用模型"
+        description="模型选择的 Pattern、补充关键词、方法阅读状态和真实 Token/耗时来自历史成功运行；命中已在当前合成日志上重新定位。每组默认折叠，展开后所有位置都可跳转原始行。"
+        style="margin:12px 0"
+      />
+      <el-alert
+        v-else-if="triage.summary?.planner_fallback"
         type="warning"
         :closable="false"
         :title="`LLM 规划未通过，已完成确定性回退${plannerFailure?.code ? `（${plannerFailure.code}）` : ''}`"
@@ -298,7 +310,7 @@ onBeforeUnmount(() => {
         :case-id="caseId"
         :run-id="triage.agent_run_id"
         operation="log_triage_planning"
-        title="日志 LLM Planning 轨迹"
+        :title="isDemoSnapshot ? '真实 GLM-5.2 历史日志筛查轨迹（脱敏快照）' : '日志 LLM Planning 轨迹'"
         style="margin-bottom:14px"
       />
 

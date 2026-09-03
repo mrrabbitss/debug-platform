@@ -393,7 +393,10 @@ def summarize_method_usage(
         for document_id in call.get("method_document_ids", []):
             rendered = str(document_id)
             call_counts[rendered] = call_counts.get(rendered, 0) + 1
-            if call.get("tool_name") in {"search_knowledge", "search_log", "get_evidence"}:
+            if call.get("tool_name") in {
+                "search_knowledge", "search_log", "get_evidence",
+                "deterministic_fault_tree_scan",
+            }:
                 hit_counts[rendered] = hit_counts.get(rendered, 0) + int(
                     call.get("returned") or 0
                 )

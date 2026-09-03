@@ -36,9 +36,32 @@ const displayedTotalTokens = computed(() => {
   const direct = Number(run.value?.usage.total_tokens || 0)
   return direct > 0 ? direct : displayedInputTokens.value + displayedOutputTokens.value
 })
+const isRecordedSnapshot = computed(() => (
+  run.value?.execution_mode === 'recorded_llm_snapshot'
+  || run.value?.model_config?.recorded_model_run === true
+))
+
+function displayTraceText(value: unknown): string {
+  return String(value ?? '').replace(
+    /\b(?:EVT|LEM|LEH|LDE|DOC|KCHUNK|LOCALDOC|SYM|COMMIT|MEM|ANL|AREV)-[A-Za-z0-9_.:-]+\b/g,
+    '内部引用已隐藏'
+  )
+}
 
 function eventDescription(event: AgentTraceEvent): string {
   const metadata = event.metadata || {}
+  if (event.stage === 'demo_method_summary') {
+    return '读取合成演示方法摘要 · 不含私有方法正文 · 未调用模型'
+  }
+  if (event.stage.startsWith('demo_planning_round_')) {
+    return `离线重放第 ${metadata.round || '?'} 阶段 · ${metadata.reason || event.tool_name || event.stage}`
+  }
+  if (event.stage === 'demo_log_evidence_scan') {
+    return `扫描合成日志全部命中位置 · ${metadata.candidate_count || event.evidence_ids.length} 条`
+  }
+  if (event.stage === 'demo_diagnostic_snapshot') {
+    return '完成合成诊断快照的证据、文件行号与零外发校验'
+  }
   if (event.stage === 'list_diagnostic_documents') {
     return `建立 GW/AP/通用联合方法目录 · ${metadata.candidate_count || event.evidence_ids.length} 份文档`
   }
@@ -46,7 +69,7 @@ function eventDescription(event: AgentTraceEvent): string {
     return `策略强制读取全部方法正文 · ${event.evidence_ids.length} 份文档`
   }
   if (event.stage === 'read_method_document') {
-    return `${metadata.title || metadata.document_id || '方法文档'} · v${metadata.version || '?'}`
+    return `${metadata.title || '方法文档'} · v${metadata.version || '?'}`
   }
   if (event.stage.startsWith('llm_planning_round_')) {
     const context = (metadata.context_governance || {}) as Record<string, any>
@@ -56,10 +79,10 @@ function eventDescription(event: AgentTraceEvent): string {
     return `第 ${metadata.round || '?'} 轮 · ${metadata.validation_code || metadata.stop_reason || '继续分析'}${metadata.validation_path ? ` · 字段 ${metadata.validation_path}` : ''}${event.retry_count ? ` · 结构纠错 ${event.retry_count} 次` : ''}${contextText}`
   }
   if (event.stage === 'execute_planned_search') {
-    return `按 LLM 规划执行认知检索${metadata.document_id ? ` · 方法 ${metadata.document_id}` : ''}`
+    return `按 LLM 规划执行认知检索${metadata.document_id ? ' · 已绑定方法文档' : ''}`
   }
   if (event.stage === 'execute_agent_tool') {
-    return `第 ${metadata.round || '?'} 轮只读工具调用 · 返回 ${metadata.returned_count || 0} 条${metadata.document_id ? ` · 方法 ${metadata.document_id}` : ''}`
+    return `第 ${metadata.round || '?'} 轮只读工具调用 · 返回 ${metadata.returned_count || 0} 条${metadata.document_id ? ' · 已绑定方法文档' : ''}`
   }
   if (metadata.validation_code) {
     return `${metadata.validation_code}${metadata.upstream_error_type ? ` · 上游 ${metadata.upstream_error_type}` : ''}${metadata.validation_path ? ` · 字段 ${metadata.validation_path}` : ''}${metadata.thinking_mode ? ` · Thinking ${metadata.thinking_mode}` : ''}${metadata.finish_reason ? ` · 模型停止 ${metadata.finish_reason}` : ''}`
@@ -123,6 +146,14 @@ onBeforeUnmount(() => {
     <el-alert v-if="errorMessage" type="error" :closable="false" :title="errorMessage" />
     <el-empty v-else-if="!run" description="尚未创建规划轨迹" :image-size="72" />
     <template v-else>
+      <el-alert
+        v-if="isRecordedSnapshot"
+        type="info"
+        :closable="false"
+        title="历史真实模型运行轨迹"
+        description="阶段、Token、耗时和停止原因来自已成功完成的 GLM-5.2 运行；当前导入没有再次发送日志或方法正文。"
+        style="margin-bottom:12px"
+      />
       <div class="trace-summary">
         <el-tag :type="run.status === 'FAILED' ? 'danger' : run.status === 'COMPLETED' ? 'success' : 'primary'">{{ run.status }}</el-tag>
         <span>停止原因：{{ run.stop_reason }}</span>
@@ -141,7 +172,7 @@ onBeforeUnmount(() => {
         >
           <div class="trace-event">
             <div><strong>{{ event.tool_name || event.stage }}</strong> · {{ event.status }}</div>
-            <div class="muted">{{ eventDescription(event) }}</div>
+            <div class="muted">{{ displayTraceText(eventDescription(event)) }}</div>
             <div class="muted">耗时 {{ event.duration_ms }} ms · 输入/输出 {{ event.input_tokens }}/{{ event.output_tokens }} tokens · 证据 {{ event.evidence_ids.length }}</div>
           </div>
         </el-timeline-item>

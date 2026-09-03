@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 import ipaddress
+import os
 import socket
 from typing import Any
 from urllib.parse import urlsplit
@@ -17,8 +18,18 @@ from app.services.secrets import decrypt_secret, encrypt_secret, secret_hint
 
 PROVIDERS_BY_TASK = {
     "chat": {"mock", "openai_compatible"},
-    "embedding": {"hashing", "sentence_transformers", "openai_compatible"},
-    "reranker": {"disabled", "sentence_transformers", "qwen_rerank_api"},
+    "embedding": {
+        "hashing",
+        "sentence_transformers",
+        "openai_compatible",
+        "llama_cpp_local",
+    },
+    "reranker": {
+        "disabled",
+        "sentence_transformers",
+        "qwen_rerank_api",
+        "llama_cpp_local",
+    },
 }
 
 MODE_BY_PROVIDER = {
@@ -28,7 +39,15 @@ MODE_BY_PROVIDER = {
     "sentence_transformers": "local",
     "openai_compatible": "api",
     "qwen_rerank_api": "api",
+    "llama_cpp_local": "api",
 }
+
+MANAGED_LOCAL_PROVIDER = "llama_cpp_local"
+MANAGED_SIDECAR_API_KEY_ENV = "BUNDLED_GGUF_API_KEY"
+MANAGED_EMBEDDING_URL_ENV = "BUNDLED_GGUF_EMBEDDING_URL"
+MANAGED_RERANKER_URL_ENV = "BUNDLED_GGUF_RERANKER_URL"
+_MIN_MANAGED_TOKEN_LENGTH = 32
+_MANAGED_AUTO_RESTORE_KEY = "launcher_auto_restore_pending"
 
 COMPATIBLE_CHAT_PROVIDERS = (
     "Qwen Model Studio OpenAI-compatible API",
@@ -131,6 +150,43 @@ def validate_model_endpoint(base_url: str) -> None:
         )
 
 
+def validate_managed_sidecar_endpoint(base_url: str) -> None:
+    """Validate an installer-managed llama.cpp endpoint without weakening SSRF policy.
+
+    The bundled launcher owns these profiles and supplies a random bearer token.
+    Requiring a literal loopback address and an explicit port prevents DNS rebinding
+    and keeps this narrow exception from applying to user-configured API gateways.
+    """
+    value = base_url.strip()
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Managed llama.cpp Base URL is invalid") from exc
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("Managed llama.cpp Base URL must use http or https")
+    if not parsed.hostname:
+        raise ValueError("Managed llama.cpp Base URL must include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("Managed llama.cpp Base URL must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError(
+            "Managed llama.cpp Base URL must not contain a query string or fragment"
+        )
+    if port is None:
+        raise ValueError("Managed llama.cpp Base URL must include an explicit port")
+    try:
+        address = ipaddress.ip_address(parsed.hostname.split("%", 1)[0])
+    except ValueError as exc:
+        raise ValueError(
+            "Managed llama.cpp Base URL must use a literal loopback address"
+        ) from exc
+    if not address.is_loopback:
+        raise ValueError(
+            "Managed llama.cpp Base URL must use a literal loopback address"
+        )
+
+
 def validate_model_proxy_url(task_type: str, mode: str, proxy_url: str | None) -> None:
     """Validate an explicitly selected Chat proxy without exposing credentials."""
     value = (proxy_url or "").strip()
@@ -188,11 +244,17 @@ def validate_model_profile(
     model_name: str,
     base_url: str | None,
     proxy_url: str | None = None,
+    *,
+    allow_managed: bool = False,
 ) -> None:
     if task_type not in PROVIDERS_BY_TASK:
         raise ValueError(f"Unsupported model task: {task_type}")
     if provider not in PROVIDERS_BY_TASK[task_type]:
         raise ValueError(f"Provider {provider!r} cannot be used for {task_type}")
+    if provider == MANAGED_LOCAL_PROVIDER and not allow_managed:
+        raise ValueError(
+            "Bundled llama.cpp profiles are created and secured by the launcher"
+        )
     expected_mode = MODE_BY_PROVIDER[provider]
     if mode != expected_mode:
         raise ValueError(f"Provider {provider!r} requires mode {expected_mode!r}")
@@ -201,11 +263,19 @@ def validate_model_profile(
     if mode == "api" and not (base_url or "").strip():
         raise ValueError("Base URL is required for API models")
     if mode == "api":
-        validate_model_endpoint(base_url or "")
+        if provider == MANAGED_LOCAL_PROVIDER:
+            validate_managed_sidecar_endpoint(base_url or "")
+        else:
+            validate_model_endpoint(base_url or "")
     validate_model_proxy_url(task_type, mode, proxy_url)
 
 
 def model_profile_to_dict(profile: ModelProfile) -> dict[str, Any]:
+    managed_key = (
+        _managed_sidecar_api_key()
+        if profile.provider == MANAGED_LOCAL_PROVIDER
+        else ""
+    )
     return {
         "id": profile.id,
         "name": profile.name,
@@ -214,8 +284,11 @@ def model_profile_to_dict(profile: ModelProfile) -> dict[str, Any]:
         "provider": profile.provider,
         "model_name": profile.model_name,
         "base_url": profile.base_url,
-        "api_key_configured": bool(profile.api_key_ciphertext),
-        "api_key_hint": profile.api_key_hint,
+        "api_key_configured": bool(profile.api_key_ciphertext or managed_key),
+        "api_key_hint": (
+            profile.api_key_hint
+            or ("managed by launcher" if managed_key else None)
+        ),
         "proxy_url_configured": bool(profile.proxy_url_ciphertext),
         "proxy_url_hint": profile.proxy_url_hint,
         "certificate_revocation_check_skipped": profile_uses_proxy(profile),
@@ -238,7 +311,21 @@ def profile_uses_proxy(profile: ModelProfile | None) -> bool:
 
 
 def get_profile_api_key(profile: ModelProfile) -> str:
-    return decrypt_secret(profile.api_key_ciphertext, "API key")
+    saved = decrypt_secret(profile.api_key_ciphertext, "API key")
+    if saved:
+        return saved
+    if profile.provider == MANAGED_LOCAL_PROVIDER:
+        return _managed_sidecar_api_key()
+    return ""
+
+
+def _managed_sidecar_api_key() -> str:
+    value = os.environ.get(MANAGED_SIDECAR_API_KEY_ENV, "").strip()
+    return value if len(value) >= _MIN_MANAGED_TOKEN_LENGTH else ""
+
+
+def profile_api_key_available(profile: ModelProfile) -> bool:
+    return bool(get_profile_api_key(profile))
 
 
 def set_profile_api_key(profile: ModelProfile, api_key: str | None) -> None:
@@ -299,9 +386,29 @@ def activate_model_profile(db: Session, profile: ModelProfile) -> None:
         profile.model_name,
         profile.base_url,
         proxy_url,
+        allow_managed=True,
     )
-    if profile.mode == "api" and not profile.api_key_ciphertext:
+    if profile.mode == "api" and not profile_api_key_available(profile):
+        if profile.provider == MANAGED_LOCAL_PROVIDER:
+            raise ValueError(
+                f"The managed llama.cpp sidecar requires a launcher-provided "
+                f"{MANAGED_SIDECAR_API_KEY_ENV} token of at least "
+                f"{_MIN_MANAGED_TOKEN_LENGTH} characters"
+            )
         raise ValueError("An API key is required before this profile can be activated")
+    # A manual activation is an explicit user choice. Clear any launcher-created
+    # recovery marker for this task so a later sidecar restart cannot steal the
+    # selection back from a custom profile or the built-in fallback.
+    managed_profiles = db.scalars(
+        select(ModelProfile).where(
+            ModelProfile.task_type == profile.task_type,
+            ModelProfile.provider == MANAGED_LOCAL_PROVIDER,
+        )
+    ).all()
+    for managed_profile in managed_profiles:
+        config = json_loads(managed_profile.config_json, {})
+        if isinstance(config, dict) and config.pop(_MANAGED_AUTO_RESTORE_KEY, None):
+            managed_profile.config_json = json_dumps(config)
     db.execute(
         update(ModelProfile)
         .where(ModelProfile.task_type == profile.task_type)
@@ -315,6 +422,146 @@ def _add_profiles(db: Session, profiles: Iterable[ModelProfile]) -> None:
     for profile in profiles:
         if not db.get(ModelProfile, profile.id):
             db.add(profile)
+    db.commit()
+
+
+def _sync_bundled_gguf_profiles(db: Session) -> None:
+    """Upsert fixed profiles advertised by a healthy bundled launcher.
+
+    Environment presence is a readiness contract: the launcher must only expose
+    the URLs after both sidecars have passed their health probes. Tokens are never
+    persisted in the database, so copying a database does not copy sidecar access.
+    """
+    token_available = bool(_managed_sidecar_api_key())
+    specs = (
+        {
+            "id": "MODEL-embedding-bundled-gguf",
+            "task_type": "embedding",
+            "name": "内置 BGE GGUF（CPU）",
+            "url": os.environ.get(MANAGED_EMBEDDING_URL_ENV, "").strip(),
+            "model_name": os.environ.get(
+                "BUNDLED_GGUF_EMBEDDING_MODEL",
+                "bge-base-zh-v1.5-gguf",
+            ).strip(),
+            "config": {
+                "builtin": True,
+                "managed_sidecar": True,
+                "dimension": 768,
+                "normalize": True,
+                "query_instruction": "为这个句子生成表示以用于检索相关文章：",
+                "timeout_seconds": 120,
+                "max_retries": 1,
+                "batch_size": 16,
+            },
+        },
+        {
+            "id": "MODEL-reranker-bundled-gguf",
+            "task_type": "reranker",
+            "name": "内置 Qwen3 Reranker GGUF（CPU）",
+            "url": os.environ.get(MANAGED_RERANKER_URL_ENV, "").strip(),
+            "model_name": os.environ.get(
+                "BUNDLED_GGUF_RERANKER_MODEL",
+                "qwen3-reranker-0.6b-gguf",
+            ).strip(),
+            "config": {
+                "builtin": True,
+                "managed_sidecar": True,
+                "endpoint_path": "/v1/rerank",
+                "timeout_seconds": 120,
+                "candidate_count": 30,
+            },
+        },
+    )
+    default_fallback_ids = {
+        "embedding": "MODEL-embedding-hashing",
+        "reranker": "MODEL-reranker-disabled",
+    }
+    for spec in specs:
+        profile = db.get(ModelProfile, spec["id"])
+        url = str(spec["url"])
+        usable = token_available and bool(url)
+        if usable:
+            try:
+                validate_managed_sidecar_endpoint(url)
+            except ValueError:
+                usable = False
+        if not usable:
+            if profile is not None:
+                config = json_loads(profile.config_json, {})
+                if profile.is_active and isinstance(config, dict):
+                    # Only an active managed profile may request automatic
+                    # recovery. An already inactive profile represents a user
+                    # selection and must remain inactive after recovery.
+                    config[_MANAGED_AUTO_RESTORE_KEY] = True
+                    profile.config_json = json_dumps(config)
+                profile.enabled = False
+                profile.is_active = False
+            continue
+
+        active = db.scalars(
+            select(ModelProfile).where(
+                ModelProfile.task_type == spec["task_type"],
+                ModelProfile.is_active.is_(True),
+            ).limit(1)
+        ).first()
+        if profile is None:
+            replace_default = bool(
+                active
+                and active.id == default_fallback_ids[str(spec["task_type"])]
+            )
+            if replace_default:
+                active.is_active = False
+            profile = ModelProfile(
+                id=str(spec["id"]),
+                task_type=str(spec["task_type"]),
+                mode="api",
+                provider=MANAGED_LOCAL_PROVIDER,
+                name=str(spec["name"]),
+                model_name=str(spec["model_name"]),
+                base_url=url,
+                config_json=json_dumps(spec["config"]),
+                enabled=True,
+                is_active=active is None or replace_default,
+            )
+            db.add(profile)
+        else:
+            previous_config = json_loads(profile.config_json, {})
+            restore_pending = bool(
+                isinstance(previous_config, dict)
+                and previous_config.get(_MANAGED_AUTO_RESTORE_KEY)
+            )
+            restore_from_fallback = bool(
+                restore_pending
+                and active is not None
+                and active.id == default_fallback_ids[str(spec["task_type"])]
+            )
+            profile.mode = "api"
+            profile.provider = MANAGED_LOCAL_PROVIDER
+            profile.name = str(spec["name"])
+            profile.model_name = str(spec["model_name"])
+            profile.base_url = url
+            profile.config_json = json_dumps(spec["config"])
+            profile.api_key_ciphertext = None
+            profile.api_key_hint = None
+            profile.proxy_url_ciphertext = None
+            profile.proxy_url_hint = None
+            profile.enabled = True
+            if restore_from_fallback:
+                # The database enforces one active profile per task. Persist the
+                # fallback deactivation before marking the managed profile active
+                # so an autoflush cannot transiently violate that unique index.
+                db.execute(
+                    update(ModelProfile)
+                    .where(ModelProfile.id == active.id)
+                    .values(is_active=False)
+                )
+                db.flush()
+                profile.is_active = True
+            # An existing inactive managed profile records that the user chose
+            # another provider. Only first appearance may replace the built-in
+            # fallback. A launcher-created marker permits one narrow exception:
+            # restore only from the unchanged default fallback after a transient
+            # sidecar outage. Rebuilding config clears that one-shot marker.
     db.commit()
 
 
@@ -378,6 +625,7 @@ def seed_model_profiles(db: Session) -> None:
         set_profile_api_key(env_profile, settings.llm_api_key)
         profiles.append(env_profile)
     _add_profiles(db, profiles)
+    _sync_bundled_gguf_profiles(db)
 
     if settings.model_disable_in_process_local:
         db.execute(

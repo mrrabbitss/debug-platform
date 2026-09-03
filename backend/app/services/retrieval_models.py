@@ -26,9 +26,17 @@ from app.models import (
 )
 from app.services.audit import record_model_egress
 from app.services.model_profiles import (
+    MANAGED_LOCAL_PROVIDER,
     get_active_model_profile,
     get_profile_api_key,
     validate_model_endpoint,
+    validate_managed_sidecar_endpoint,
+)
+from app.services.retrieval_model_contracts import (
+    RetrievalModelError,
+    embedding_inputs,
+    llama_openai_base_url,
+    validated_embedding_vectors,
 )
 
 
@@ -40,10 +48,6 @@ _hashing_vectorizer = HashingVectorizer(
     alternate_sign=False,
     norm="l2",
 )
-
-
-class RetrievalModelError(RuntimeError):
-    pass
 
 
 def resolve_local_model_reference(model_name: str) -> str:
@@ -202,12 +206,11 @@ def _qdrant_scores(
         return {}
 
 
-def _normalize(vector: Sequence[float]) -> list[float]:
-    values = [float(value) for value in vector]
-    norm = math.sqrt(sum(value * value for value in values))
-    if norm == 0:
-        return values
-    return [value / norm for value in values]
+def _validate_profile_endpoint(profile: ModelProfile) -> None:
+    if profile.provider == MANAGED_LOCAL_PROVIDER:
+        validate_managed_sidecar_endpoint(profile.base_url or "")
+    else:
+        validate_model_endpoint(profile.base_url or "")
 
 
 def _local_model_runtime_error(kind: str, model_name: str, exc: Exception) -> RetrievalModelError:
@@ -265,16 +268,27 @@ def embed_texts(
     if not texts:
         return []
     config = json_loads(profile.config_json, {})
+    model_inputs = embedding_inputs(texts, config, purpose)
+    try:
+        expected_dimension = (
+            int(config["dimension"])
+            if config.get("dimension") is not None
+            else None
+        )
+    except (TypeError, ValueError) as exc:
+        raise RetrievalModelError(
+            "Embedding dimension contract must be a positive integer"
+        ) from exc
+    if expected_dimension is not None and expected_dimension <= 0:
+        raise RetrievalModelError(
+            "Embedding dimension contract must be a positive integer"
+        )
     if profile.provider == "hashing":
         return _hashing_vectorizer.transform(texts).toarray().astype(float).tolist()
     if profile.provider == "sentence_transformers":
         device = str(config.get("device") or "cpu")
         model_name = resolve_local_model_reference(profile.model_name)
         model = _load_sentence_transformer(model_name, device)
-        model_inputs = texts
-        query_instruction = str(config.get("query_instruction") or "").strip()
-        if query_instruction and purpose.endswith("_query"):
-            model_inputs = [f"{query_instruction}{text}" for text in texts]
         try:
             vectors = model.encode(
                 model_inputs,
@@ -285,30 +299,70 @@ def embed_texts(
         except Exception as exc:
             raise _local_model_runtime_error("embedding", model_name, exc) from exc
         raw_vectors = vectors.tolist() if hasattr(vectors, "tolist") else vectors
-        return [_normalize(vector) for vector in raw_vectors]
-    if profile.provider == "openai_compatible":
+        return validated_embedding_vectors(
+            raw_vectors,
+            expected_count=len(model_inputs),
+            expected_dimension=expected_dimension,
+        )
+    if profile.provider in {"openai_compatible", MANAGED_LOCAL_PROVIDER}:
         started = perf_counter()
         try:
-            validate_model_endpoint(profile.base_url or "")
+            _validate_profile_endpoint(profile)
+            api_key = get_profile_api_key(profile)
+            if not api_key:
+                raise RetrievalModelError(
+                    "Embedding API key is unavailable; restart through the bundled launcher"
+                    if profile.provider == MANAGED_LOCAL_PROVIDER
+                    else "Embedding API key is not configured"
+                )
+            client_options: dict[str, Any] = {}
+            managed_http_client: httpx.Client | None = None
+            if profile.provider == MANAGED_LOCAL_PROVIDER:
+                managed_http_client = httpx.Client(trust_env=False)
+                client_options["http_client"] = managed_http_client
             client = OpenAI(
-                api_key=get_profile_api_key(profile),
-                base_url=profile.base_url,
+                api_key=api_key,
+                base_url=(
+                    llama_openai_base_url(profile.base_url or "")
+                    if profile.provider == MANAGED_LOCAL_PROVIDER
+                    else profile.base_url
+                ),
                 timeout=float(config.get("timeout_seconds") or 120),
                 max_retries=int(config.get("max_retries") or 2),
+                **client_options,
             )
-            request: dict[str, Any] = {"model": profile.model_name, "input": texts}
-            if config.get("dimension"):
+            request: dict[str, Any] = {
+                "model": profile.model_name,
+                "input": model_inputs,
+                "encoding_format": "float",
+            }
+            if (
+                profile.provider == "openai_compatible"
+                and config.get("dimension")
+            ):
                 request["dimensions"] = int(config["dimension"])
-            response = client.embeddings.create(**request)
+            try:
+                response = client.embeddings.create(**request)
+            finally:
+                if managed_http_client is not None:
+                    managed_http_client.close()
             ordered = sorted(response.data, key=lambda item: item.index)
-            vectors = [_normalize(item.embedding) for item in ordered]
+            if [int(item.index) for item in ordered] != list(range(len(model_inputs))):
+                raise RetrievalModelError(
+                    "Embedding API violated the response index contract"
+                )
+            vectors = validated_embedding_vectors(
+                [item.embedding for item in ordered],
+                expected_count=len(model_inputs),
+                expected_dimension=expected_dimension,
+            )
         except Exception as exc:
             record_model_egress(
                 profile,
                 task_type="embedding",
                 purpose=purpose,
                 request_items=len(texts),
-                request_chars=sum(len(text) for text in texts),
+                request_chars=sum(len(text) for text in model_inputs),
                 duration_ms=int((perf_counter() - started) * 1000),
                 outcome="FAILED",
                 error_type=type(exc).__name__,
@@ -320,7 +374,7 @@ def embed_texts(
             task_type="embedding",
             purpose=purpose,
             request_items=len(texts),
-            request_chars=sum(len(text) for text in texts),
+            request_chars=sum(len(text) for text in model_inputs),
             duration_ms=int((perf_counter() - started) * 1000),
             outcome="SUCCESS",
             usage={
@@ -690,39 +744,95 @@ def rerank_documents(
         except Exception as exc:
             raise _local_model_runtime_error("reranker", model_name, exc) from exc
         return sorted(enumerate(values), key=lambda item: item[1], reverse=True)[:top_n]
-    if profile.provider == "qwen_rerank_api":
+    if profile.provider in {"qwen_rerank_api", MANAGED_LOCAL_PROVIDER}:
         started = perf_counter()
         try:
-            validate_model_endpoint(profile.base_url or "")
+            _validate_profile_endpoint(profile)
         except ValueError as exc:
             raise RetrievalModelError(str(exc)) from exc
         endpoint = (profile.base_url or "").rstrip("/")
-        if not endpoint.endswith("/reranks"):
+        if profile.provider == MANAGED_LOCAL_PROVIDER:
+            allowed_paths = {
+                "/rerank",
+                "/reranking",
+                "/v1/rerank",
+                "/v1/reranking",
+            }
+            endpoint_path = str(
+                config.get("endpoint_path") or "/v1/rerank"
+            ).strip()
+            if endpoint_path not in allowed_paths:
+                raise RetrievalModelError(
+                    "Managed llama.cpp reranker endpoint_path is not an allowed alias"
+                )
+            if not any(endpoint.endswith(path) for path in allowed_paths):
+                endpoint = (
+                    f"{endpoint}/rerank"
+                    if endpoint.endswith("/v1")
+                    else f"{endpoint}{endpoint_path}"
+                )
+        elif not endpoint.endswith("/reranks"):
             endpoint += "/reranks"
         payload = {
             "model": profile.model_name,
             "query": query,
             "documents": documents,
             "top_n": top_n,
-            "instruct": config.get(
+        }
+        if profile.provider == "qwen_rerank_api":
+            payload["instruct"] = config.get(
                 "instruction",
                 "Given a network troubleshooting query, retrieve passages that help diagnose and solve it.",
-            ),
-        }
-        try:
-            response = httpx.post(
-                endpoint,
-                headers={"Authorization": f"Bearer {get_profile_api_key(profile)}"},
-                json=payload,
-                timeout=float(config.get("timeout_seconds") or 120),
             )
+        try:
+            api_key = get_profile_api_key(profile)
+            if not api_key:
+                raise RetrievalModelError(
+                    "Reranker API key is unavailable; restart through the bundled launcher"
+                    if profile.provider == MANAGED_LOCAL_PROVIDER
+                    else "Reranker API key is not configured"
+                )
+            request_options: dict[str, Any] = {
+                "headers": {"Authorization": f"Bearer {api_key}"},
+                "json": payload,
+                "timeout": float(config.get("timeout_seconds") or 120),
+            }
+            if profile.provider == MANAGED_LOCAL_PROVIDER:
+                request_options["trust_env"] = False
+            response = httpx.post(endpoint, **request_options)
             response.raise_for_status()
             data = response.json()
-            results = data.get("results", [])
-            ranking = [
-                (int(item["index"]), float(item.get("relevance_score", item.get("score", 0.0))))
-                for item in results[:top_n]
-            ]
+            results = data.get("results", data.get("data", [])) if isinstance(data, dict) else data
+            if not isinstance(results, list):
+                raise RetrievalModelError(
+                    "Reranker API returned an invalid results collection"
+                )
+            ranking: list[tuple[int, float]] = []
+            seen_indexes: set[int] = set()
+            for item in results:
+                if not isinstance(item, dict) or "index" not in item:
+                    raise RetrievalModelError(
+                        "Reranker API returned an invalid result item"
+                    )
+                index = int(item["index"])
+                score = float(
+                    item.get("relevance_score", item.get("score", 0.0))
+                )
+                if (
+                    index < 0
+                    or index >= len(documents)
+                    or index in seen_indexes
+                    or not math.isfinite(score)
+                ):
+                    raise RetrievalModelError(
+                        "Reranker API violated the index or score contract"
+                    )
+                seen_indexes.add(index)
+                ranking.append((index, score))
+            if not ranking:
+                raise RetrievalModelError("Reranker API returned no ranked documents")
+            ranking.sort(key=lambda item: item[1], reverse=True)
+            ranking = ranking[:top_n]
         except Exception as exc:
             record_model_egress(
                 profile,

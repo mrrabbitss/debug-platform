@@ -41,6 +41,8 @@ $runtimeRoot = Join-Path $packageRoot "runtime\python"
 $sitePackages = Join-Path $runtimeRoot "Lib\site-packages"
 $backendTarget = Join-Path $packageRoot "app\backend"
 $frontendTarget = Join-Path $packageRoot "web"
+$skillTarget = Join-Path $packageRoot "agent-skills\gw-ap-debug"
+$installerTarget = Join-Path $packageRoot "scripts"
 
 function Invoke-NativeChecked {
     param(
@@ -217,6 +219,10 @@ Copy-FilteredTree `
     -Destination (Join-Path $backendTarget "app") `
     -ExcludedDirectories @("__pycache__", "data") `
     -ExcludedExtensions @(".pyc")
+Write-Host "[INFO] Bundling the integrity-pinned synthetic logs and recorded GLM demo..."
+Copy-FilteredTree `
+    -Source (Join-Path $projectRoot "sample_data\demo_ap_frequent_offline") `
+    -Destination (Join-Path $backendTarget "demo_data\ap_frequent_offline")
 Copy-Item `
     -LiteralPath (Join-Path $projectRoot "backend\alembic.ini") `
     -Destination (Join-Path $backendTarget "alembic.ini")
@@ -237,6 +243,19 @@ if (-not (Test-Path -LiteralPath (Join-Path $frontendDist "index.html") -PathTyp
 }
 Write-Host "[INFO] Copying the built frontend..."
 Copy-FilteredTree -Source $frontendDist -Destination $frontendTarget
+
+Write-Host "[INFO] Bundling the canonical GW/AP Skill and local MCP installer..."
+Copy-FilteredTree `
+    -Source (Join-Path $projectRoot "agent-skills\gw-ap-debug") `
+    -Destination $skillTarget `
+    -ExcludedDirectories @("__pycache__") `
+    -ExcludedExtensions @(".pyc")
+New-Item -ItemType Directory -Force -Path $installerTarget | Out-Null
+foreach ($name in @("install_agent_skill_mcp.ps1", "install_agent_skill_mcp.bat")) {
+    Copy-Item `
+        -LiteralPath (Join-Path $projectRoot "scripts\$name") `
+        -Destination (Join-Path $installerTarget $name)
+}
 
 foreach ($name in @("portable_launcher.py", "start.bat", "README.txt")) {
     Copy-Item `
@@ -264,6 +283,10 @@ $buildInfo = [ordered]@{
     local_model_runtime_bundled = $false
     default_embedding = "hashing"
     default_reranker = "disabled"
+    synthetic_demo_bundled = $true
+    synthetic_demo_host_methods_bundled = $true
+    agent_skill_bundled = $true
+    mcp_installer_bundled = $true
 }
 $buildInfo | ConvertTo-Json | Set-Content `
     -LiteralPath (Join-Path $packageRoot "build-info.json") `

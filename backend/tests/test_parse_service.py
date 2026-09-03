@@ -54,6 +54,8 @@ def test_parse_job_marks_artifact_failed_when_no_readable_text_exists(tmp_path: 
         assert case.status == "UPLOADED"
         assert "inspect_log_file.bat" in json_loads(artifact.metadata_json)["parse_error"]
 
+    engine.dispose()
+
 
 def test_parse_job_restores_domain_state_after_unexpected_extract_failure(tmp_path: Path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'extract-failure.db'}")

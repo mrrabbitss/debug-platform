@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
+import MarkdownKnowledgeRoutingDialog from '../components/knowledge/MarkdownKnowledgeRoutingDialog.vue'
 import {
   knowledgeDeviceTypeLabel,
   knowledgeDeviceTypeOptions
@@ -23,6 +24,7 @@ const search = ref('')
 const loading = ref(false)
 const documentDialog = ref(false)
 const uploadDialog = ref(false)
+const knowledgeRoutingDialog = ref(false)
 const categoryDialog = ref(false)
 const revisionDialog = ref(false)
 const editingDocumentId = ref<string | null>(null)
@@ -313,6 +315,10 @@ function openUpload() {
   uploadDialog.value = true
 }
 
+async function onKnowledgeRoutingCompleted() {
+  await load()
+}
+
 async function upload() {
   if (!file.value) return ElMessage.warning('请选择文档')
   saving.value = true
@@ -471,6 +477,7 @@ onMounted(load)
       <el-button type="primary" @click="openCreateDocument">新增知识</el-button>
       <el-button type="success" plain @click="openFaultCaseTemplate">故障案例模板</el-button>
       <el-button type="warning" plain @click="router.push('/knowledge/curation')">AI 文件夹提炼</el-button>
+      <el-button data-testid="knowledge-routing-open" type="primary" plain @click="knowledgeRoutingDialog=true">AI 智能导入 MD</el-button>
       <el-button @click="openUpload">上传文件</el-button>
       <el-button @click="load">刷新</el-button>
     </div>
@@ -671,6 +678,11 @@ onMounted(load)
       </el-form>
       <template #footer><el-button @click="categoryDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="saveCategory">保存</el-button></template>
     </el-dialog>
+
+    <MarkdownKnowledgeRoutingDialog
+      v-model="knowledgeRoutingDialog"
+      @completed="onKnowledgeRoutingCompleted"
+    />
   </div>
 </template>
 

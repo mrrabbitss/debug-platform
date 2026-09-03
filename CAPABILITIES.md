@@ -3,7 +3,7 @@
 > 本文件是项目功能范围的唯一总账（Single Source of Truth）。
 > 新需求、在研能力、已交付能力、约束和冲突处理都必须同步更新本文件，防止跨迭代遗忘或重复建设。
 
-最后更新：2026-08-28
+最后更新：2026-09-03
 
 工程执行、验证、评测和 Agent 护栏的状态与优先级单独维护在
 [Harness Engineering 路线与状态总账](HARNESS_ENGINEERING.md)。本文件只判断业务能力是否
@@ -25,12 +25,16 @@
 
 | 能力 | 状态 | 入口 | 说明 |
 | --- | --- | --- | --- |
-| Win11 自包含便携运行 | `AVAILABLE` | GitHub `Windows Portable Package` / 解压后 `start.bat` | 目标电脑无需 Python、Node、pip、npm 或 Docker；同一 FastAPI 进程托管编译前端，配置/数据默认外置到 `%LOCALAPPDATA%`；解释器禁止读取全局/用户包，文件清单逐项校验 SHA-256，默认 SQLite、Hashing Embedding、Reranker Disabled |
+| Win11 自包含 Core 便携运行 | `AVAILABLE` | GitHub `Windows Portable Package` / 解压后 `start.bat` | 目标电脑无需 Python、Node、pip、npm 或 Docker；同一 FastAPI 进程托管编译前端，配置/数据默认外置到 `%LOCALAPPDATA%`；解释器禁止读取全局/用户包，文件清单逐项校验 SHA-256；该稳定 Core 版不含权重，默认 SQLite、Hashing Embedding、Reranker Disabled |
+| Win11 全 GGUF E/R 组件化离线安装器 | `IN_PROGRESS` | `scripts/build_windows_gguf_installer.bat` / `Windows Full GGUF Installer` | 已实现 Core + 固定 llama.cpp CPU + BGE F16 GGUF + Qwen3 Reranker Q8_0 的组件锁、离线 ZIP/Inno Setup、动态 loopback sidecar、临时令牌、受管 Profile、逐组件回退/恢复、哈希/provenance 与手工/Release 工作流；本地 sidecar 健康检查和平台 E/R 调用强制绕过公司代理，外部模型 Profile 的代理行为不变；Setup 临时解包后复用 staging+backup 原子发布，安装进程由命名互斥体串行化并可保守恢复唯一完整备份；当前 Win11 已完成 clean source build、真实 E/R、ZIP/Setup 首装与覆盖升级、孤儿备份恢复、卸载边界和 Full 回归；仍须代码签名并完成无开发环境 clean Win11 矩阵、上游等价 Golden 和正式 Release，不得标记为 release-ready |
 | 源码双击启动前后端 | `AVAILABLE` | `scripts/start_local.bat` | 面向开发电脑，自动准备 Python/Node 开发依赖并启动 FastAPI、Vite |
+| codeagent 源码一键启动 | `LIMITED` | 根目录 `start_codeagent.bat` | Windows 11 默认查找 `codeagent`，支持保存任意安装位置的 `-CliCommand` 与本地/远程 MCP 地址；自动准备受锁后端依赖、令牌和会话级 MCP，使用当前仓库 Skill，不覆盖全局 CLI/旧 Skill，不改变 Web Chat Profile。`-DryRun` 无副作用，`-Check` 不依赖 CLI 且不调用模型；自建后端随会话/自检退出，已有服务只复用。PowerShell 5.1 原生命令 stderr warning 按实际退出码处理，非零失败仍保留。10 项黑盒验证已通过（68.40 秒），覆盖 warning/退出码 0 与真实失败 17、模拟 Program Files 自动发现、中文/空格 `.ps1`/`.cmd` 路径、二次配置与 DPAPI 复用、真实后端 REST/MCP 握手、端点令牌绑定、仓库迁移、退出清理和既有服务/鉴权保留；客户端为模拟 CLI，当前主机未安装魔改 codeagent，不得宣称其真实模型 E2E 已测或用既有 Codex 结果替代。部署及数据边界见 `docs/agent-skill-mcp-deployment.md`。 |
 | 本地环境检测 | `AVAILABLE` | `scripts/doctor_local.bat` | 检测版本、依赖、端口和服务根路径 |
 | 隔离运行冒烟 | `AVAILABLE` | `scripts/runtime_smoke.bat` | 使用临时数据库和独立端口验证前后端 |
 | 统一仓库验证 | `AVAILABLE` | `scripts/validate_all.bat` | Fast/Full/External 三档，保存 JSON 摘要和逐步日志 |
 | 真实 GLM Chat 功能验证 | `AVAILABLE` | `scripts/validate_glm_chat_features.bat` | `--preflight-only` 无需密钥即可检查私有故障树编译/检索入口；真实验证的密钥仅从当前进程环境读取，使用临时数据库和合成日志覆盖模型网关、日志规划、20 轮故障树 Agent、最终合成、问答、修订、知识提炼和补丁建议，安全报告不保存正文、模型回复或凭据 |
+| AP 频繁离线一键真实 GLM 演示快照 | `AVAILABLE` | 案例列表 → `导入 AP 离线演示` | 仓库源码内置两份纯合成 GW/AP 日志，以及此前通过 `wawapii.com` 成功完成的真实 GLM-5.2 脱敏运行快照；一键幂等创建持久案例、74 条解析事件、两侧三级智能筛查、66 个命中组/149 个逐行位置、真实两轮工具规划、27/27 故障树结论、321,453 Token/146,082 ms 综合诊断轨迹和带“文件名 - 行号”的报告预览。导入时不再次调用模型；API Key、原始 Prompt、记忆正文及私有 `故障树.md`/`日志分析.md` 正文未入包。两份 SHA-256 固定、仅绑定该合成案例的公开方法已通过空知识库自动化和真实 Codex 当前源码 E2E；Core ZIP 已重新构建并通过样本/方法哈希、导入、前后端和安装器 smoke。全 GGUF 新产物及独立干净电脑矩阵仍待构建/验收 |
+| AP 频繁离线真实模型回归 | `AVAILABLE` | `scripts/seed_ap_offline_demo.bat` | 使用同一组纯合成 GW/AP 双侧日志创建可浏览案例；必须显式选择允许模型外发或仅本地模式。创建前预检本机私有方法或知识库已发布等价方法，脚本对每个后台任务设置有界超时，并校验两侧日志规划均有有效且非宽泛的 Pattern/精确关键词、两种方法角色均被读取、模型自行判定相关且在 20 轮内发起有命中的日志检索、后端以独立策略轨迹按搜索 ID 水合证据（策略调用不冒充模型成功）、故障树语义、四类跨设备假设，以及报告只显示文件行号而不泄漏内部证据 ID |
 | 仓库 Harness 契约 | `AVAILABLE` | `scripts/check_repo_harness.py` | 检查文档、CI、依赖治理和 Agent API 合同漂移 |
 | SQLite 备份恢复 | `AVAILABLE` | `scripts/backup_local.bat`、`restore_local.bat` | 带清单、哈希校验和回滚保留 |
 | 前端受管模型权重下载 | `AVAILABLE` | 系统设置 → 本地模型权重下载 | 将原 `A.py` 的文件清单、Range 断点续传和进度能力重构为持久后台任务；支持 BGE Base 与 Qwen3 Reranker、可选显式 HTTP/HTTPS 代理和加密任务凭据。镜像返回的不可变 Commit 用于全部文件请求；同模型任务由线程与跨进程文件锁串行化，每个版本先写独立 staging generation，完整大小/SHA-256 校验后再原子切换活动指针，失败或取消继续使用上一版本。只下载到 `DATA_ROOT/models`（可由 `MODEL_DOWNLOAD_ROOT` 覆盖），不安装 Torch 或推理运行时 |
@@ -49,17 +53,19 @@
 | 事件与时间线 | `AVAILABLE` | 事件分页、级别/模块聚合、时间线数据 |
 | 原子解析版本 | `AVAILABLE` | 新解析失败时保留最后一次成功结果 |
 | 持久化任务 | `AVAILABLE` | 幂等键、原子领取、lease/heartbeat、超时、指数退避、dead-letter、取消、资源预算和多实例安全领取 |
-| LLM 日志规划与三层证据 | `AVAILABLE` | 在案例明确授权后，后端只读工具强制列出并读取 GW/AP/通用联合诊断方法，再由模型规划 Pattern/关键词；该有界 JSON 提取阶段固定关闭 Thinking，避免推理内容耗尽输出预算或撞到企业代理超时，综合诊断仍遵循 Profile 设置；兼容 GLM JSON 根对象包裹/字面量关键词形态，校验失败时有界纠正一次，并区分显示代理、超时、TLS、鉴权、限流、BadRequest、连接、输出截断和无效 JSON 等安全错误码；本地扫描完整提取文本，按“LLM 相关 / 方法必查 / 其他结构化事件”分页展示。重复结果默认折叠，展开后分页列出全部精确命中并逐条跳转；每条规则同时显示从 Skill 表格“含义/说明”等列提取的语义及文档章节来源 |
+| LLM 日志规划与三层证据 | `AVAILABLE` | 在案例明确授权后，后端只读工具强制列出并读取 GW/AP/通用联合诊断方法，再由模型规划 Pattern/关键词；该有界 JSON 提取阶段固定关闭 Thinking，避免推理内容耗尽输出预算或撞到企业代理超时，综合诊断仍遵循 Profile 设置；兼容 GLM JSON 根对象包裹/字面量关键词形态，过滤 `Start`、`FAILED`、`ERROR`、`offline` 等会把无关日志提升到第一层的宽泛补充词，校验失败时有界纠正一次，并区分显示代理、超时、TLS、鉴权、限流、BadRequest、连接、输出截断和无效 JSON 等安全错误码；本地扫描完整提取文本，按“LLM 相关 / 方法必查 / 其他结构化事件”分页展示。重复结果默认折叠，展开后分页列出全部精确命中并逐条跳转；每条规则同时显示从 Skill 表格“含义/说明”等列提取的语义及文档章节来源 |
 
 ### 2.3 诊断、RAG 与模型
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
 | 规则诊断 | `AVAILABLE` | 基于事件码产生事实、假设、行动建议和限制 |
-| 证据约束 LLM 诊断 | `AVAILABLE` | 原生类型化只读工具 Agent 至少两轮、最多二十轮；策略先读取全部联合方法，并把故障树流程、判断点和根因分支编译为稳定节点。每个节点带跨方法 Pattern/检索词入口，必须绑定检查和实际只读检索，并得到“证据支持 / 已排除 / 证据不足”终态后规划才通过；模型每轮最多四次工具调用，工具参数和 GW/AP 双侧方法、Schema、方法/节点/Pattern/evidence ID 均在执行前受门禁约束，单轮最多纠正两次。生产循环累计供应商实际 usage、工具输出估算、墙钟时间、只读工具总数和连续无进展轮次；达到边界时以 `TOKEN_BUDGET`、`TIME_BUDGET`、`TOOL_CALL_BUDGET` 或 `NO_PROGRESS` 显式停止并回退。Token-aware Context Governor 按模型窗口为方法、日志、故障树、历史和工具观察分区，被压缩正文只进入本次运行内存 Spill Store，可经 `get_evidence` 分段续读；句柄不是事实证据且不持久化日志正文。前端可查看预算、上下文占用、压缩和分区指标。证据 ID 只作内部关联与校验，诊断、问答、轨迹和报告统一显示“文件 - 行号”或文档标题，且“已确认事实”固定放在综合诊断和报告末尾 |
+| 证据约束 LLM 诊断 | `AVAILABLE` | 原生类型化只读工具 Agent 至少两轮、最多二十轮；策略先读取全部联合方法，并把故障树流程、判断点和根因分支编译为稳定节点。每个节点带跨方法 Pattern/检索词入口，必须绑定检查和实际只读检索，并得到“证据支持 / 已排除 / 证据不足”终态后规划才通过；模型每轮最多规划四次工具调用，首个有结果的模型日志搜索可追加一次后端策略证据读取，该读取计入总工具预算但不会挤掉模型第 4 个调用。工具参数和 GW/AP 双侧方法、Schema、方法/节点/Pattern/evidence ID 均在执行前受门禁约束，单轮最多纠正两次。结构化工具规划固定关闭 Thinking，最终综合与交互问答仍遵循 Profile 的 Thinking 设置，避免每轮 JSON 控制调用耗尽长思考窗口。模型漏字段或错误引用时只允许保守补齐检查/只读检索并把无案例证据的结论降为证据不足；最终由确定性方法语义与实际日志交叉核验全部节点，无关的当前案例证据也不能维持节点的支持或排除结论。知识、方法和记忆只能指导搜索，不能充当本案例事实证据。本地回退直接使用已解析 GW/AP 事件；心跳超时必须满足 `curTime - lastEventTime > iAdvrTimeOut`，端口恢复或心跳成功不能作为故障证据；UDN 与 AP MAC 的相等性判断只在本机原文中执行，该布尔派生证据不暴露原值，原始日志是否发送模型仍受案例出站授权与端点策略控制。生产循环累计供应商实际 usage、工具输出估算、墙钟时间、只读工具总数和连续无进展轮次；每轮请求前清空供应商观测快照，调用前失败不会重复计入上一轮 Token。达到边界时以 `TOKEN_BUDGET`、`TIME_BUDGET`、`TOOL_CALL_BUDGET` 或 `NO_PROGRESS` 显式停止并回退。Token-aware Context Governor 按模型窗口为方法、日志、故障树、历史和工具观察分区，被压缩正文只进入本次运行内存 Spill Store，可经 `get_evidence` 分段续读；句柄不是事实证据且不持久化日志正文。前端可查看预算、上下文占用、压缩和分区指标。证据 ID 只作内部关联与校验，诊断、问答、轨迹和报告统一显示“文件 - 行号”或文档标题，且“已确认事实”固定放在综合诊断和报告末尾；分析 API 的模型配置快照不返回 Base URL 或代理端点 |
+| Claude Code / Codex Skill + MCP 诊断 | `IN_PROGRESS` | 方案 A 保留现有 Web `/api/v1` 路径，新增 Streamable HTTP `/mcp`，由当前 CLI 会话模型拥有规划与综合推理，后端只提供案例权限、解析/检索、证据和故障树门禁、持久 Host 会话及不可变分析回写。当前 17 个 `debug_*` 业务工具及权限/草稿门禁已通过完整回归；真实 Codex CLI 已在当前源码完成 Markdown Host 模型归类和“AP 频繁离线”综合诊断。最新诊断会话 4 轮完成 27/27 终态（20 支持/3 排除/4 证据不足）、119 条证据和 HTML 报告，后端生成式调用为零；此前全新数据库/空知识库/固定公开方法的 6 轮回归也继续保留。整体仍标记 `IN_PROGRESS` 仅因为当前主机未安装 Claude CLI，且真实远程 HTTPS/RBAC、真实 CLI 负路径和独立干净电脑矩阵尚未验收；这不表示 Codex 路径未完成。契约见 `workflow/mcp-tools.yaml`，部署边界见 `docs/agent-skill-mcp-deployment.md`。 |
+| OpenCode Skill + MCP 客户端 | `PLANNED` | 保留为 Windows 11 辅助客户端方向；当前安装器和配置流程只覆盖 Claude Code/Codex，且按本轮要求未消耗 OpenCode 额度进行真实测试，因此不得宣称已兼容或已通过 E2E |
 | 模型网关 | `AVAILABLE` | 前端管理并切换 Chat、Embedding、Reranker 配置；开发/本地环境兼容 HTTP/HTTPS，HTTP 不再强制要求端点白名单，私网地址可由本机 `MODEL_ALLOW_PRIVATE_ENDPOINTS` 持久开关放行，回环/危险系统地址和生产白名单约束仍保留；Chat API 支持逐 Profile 加密代理，空值直连，代理启用时保留证书链/主机名校验并跳过吊销检查；Thinking 支持“跟随模型默认 / 强制开启 / 强制关闭”，GLM-5.1/5.2 关闭时显式发送 `thinking.type=disabled`；可配置 `max_tokens`、真实上下文窗口及输出预留，新 Profile 默认 300 秒超时 |
-| Embedding | `LIMITED` | 内置 Hashing 和兼容 API 为标准能力；进程内 Sentence Transformers 仅为既有高级源码安装保留，不进入便携包 |
-| Reranker | `LIMITED` | Disabled 和 Qwen Rerank API 为标准能力；进程内 CrossEncoder 仅为既有高级源码安装保留，不进入便携包 |
+| Embedding | `LIMITED` | 内置 Hashing 和兼容 API 为标准能力；包内 `llama_cpp_local` BGE F16 sidecar、查询前缀隔离和有限值/维度/L2 门禁已实现并通过当前 Win11 最小真实语义冒烟，但随包安装交付仍为 `IN_PROGRESS`；进程内 Sentence Transformers 仅为既有高级源码安装保留，不进入标准包 |
+| Reranker | `LIMITED` | Disabled 和 Qwen Rerank API 为标准能力；包内 `llama_cpp_local` Qwen3 Q8_0 sidecar 已实现并通过当前 Win11 `/v1/rerank` 最小真实排序冒烟，但随包安装交付仍为 `IN_PROGRESS`；进程内 CrossEncoder 仅为既有高级源码安装保留，不进入标准包 |
 | 混合检索 | `AVAILABLE` | 有界 BM25 候选、Dense top-K、加权 RRF、模块均衡和单次 Reranker |
 | Qdrant 镜像 | `AVAILABLE` | 数据库向量为权威存储，按 generation 镜像并执行有界 top-K |
 | 检索评测 | `AVAILABLE` | 固定 query/预期证据/根因和模块，输出 Recall@K、Precision@K、MRR、NDCG@K、Root Cause Top-K |
@@ -77,6 +83,7 @@
 | 自动向量索引 | `AVAILABLE` | 文档变更后更新活动 generation；全量重建失败保留上一版 |
 | 故障案例结构化 Markdown | `AVAILABLE` | 错误形式、日志分析、错误定位、解决方案、验证结果 |
 | 大模型文件夹案例提炼 | `AVAILABLE` | 文本、HTML、DOCX 和文本层 PDF 在本地提取；脱敏限长后生成带行号引用的 Markdown，支持多轮对话、人工编辑、版本恢复和确认后入草稿 |
+| Markdown 知识智能归类 | `AVAILABLE` | 网页“AI 智能导入 MD”与 Skill 的 CLI 上传助手均支持一次提交 1–20 个 `.md`/`.markdown`；服务按文件建立独立持久任务和独立非活动 `DRAFT`。Web 使用选择或当前激活的平台 Chat Profile 对脱敏、限长片段分类；CLI 先经 REST multipart 上传，再由当前 Claude Code/Codex 会话模型读取 `debug_get_knowledge_routing_context` 并提交 `debug_apply_knowledge_routing`，该 Host 路径后端生成式调用为零。活动叶子分类、lock version、正文哈希、管理员权限和禁止自动发布均受回归覆盖；浏览器多文件 E2E 与真实 Codex batch `KRBATCH-28b4b098d8984ae2` 已分别通过，后者正确归入故障树/协议诊断规则且两文档均保持 DRAFT/inactive。Claude CLI 当前主机未安装，OpenCode 按用户要求未测试。 |
 | 错误分析 Skill | `AVAILABLE` | 以 Markdown 保存可复用的错误分析技能 |
 | 分析方法提炼 | `AVAILABLE` | 从故障案例或错误分析 Skill 提取输入信号、步骤、决策点和验证方法 |
 | 知识版本与审核 | `AVAILABLE` | DRAFT/IN_REVIEW/ACTIVE/REJECTED/ARCHIVED、不可变快照、回滚和数据库乐观锁 |
@@ -222,10 +229,12 @@
 | 评测污染在线记忆 | 评测固定 `record_memory=false`，不新增、不强化、不增加复用次数 |
 | 人工反馈自动学习敏感内容 | 反馈审核通过后也只能生成知识草稿，仍需第二次审核发布 |
 | 模型生成案例污染知识库 | 提炼会话与知识文档隔离；章节和来源行号校验通过并人工确认后才创建 `DRAFT`，仍需原有审核发布 |
+| 知识归类越权或误发布 | Markdown 路由要求管理员权限，只能选择活动叶子分类；每个文件只创建或更新一个非活动 `DRAFT`，后续仍须人工提交审核并批准，模型决策不能直接变成 `ACTIVE` |
 | 文件夹原文直接外发 | 原始文件只进本地 Storage；DOCX/PDF/HTML 也先在本地提取，管理员明确授权后仅发送脱敏、限长、带行号的文本证据 |
 | 多窗口同时纠错覆盖内容 | 每轮携带 `expected_draft_version`，条件更新失败返回冲突；所有人工/模型修改保存不可变版本 |
 | 不同案例之间的数据隔离 | 代码仓、Commit 和情景记忆继承案例访问控制；全局程序记忆只保存脱敏方法 |
 | 外部模型数据出站 | 沿用模型网关、端点校验和内容无关审计；无 API 时必须有本地确定性回退 |
+| CLI 模型与后端模型职责冲突 | Web 诊断与 Markdown 归类继续使用平台 Profile；MCP `host_cli` 诊断及知识归类由 Claude Code/Codex 当前会话模型推理，后端该路径生成式模型调用固定为零。Embedding/Reranker 仍属于后端有界检索，不得把 MCP transport session 当作持久诊断状态。 |
 | 私有筛查方法被误提交或复制 | 根目录可选 `故障树.md`、`日志分析.md` 被 Git 明确忽略，只在运行时读取；推荐把需长期治理的方法发布到知识库；分析快照仅保存方法 ID、版本和哈希，不复制方法正文 |
 | 日志正文外发与关键词遗漏 | LLM 只接收案例描述和经授权的方法文档，不接收完整原始日志；模型规划关键词后由本地逐行扫描，且所有方法关键词无论是否被模型选中都必须检查 |
 | SQLite 与 PostgreSQL 差异 | 所有新表通过 Alembic 建立，查询不依赖数据库专有 JSON 运算 |
@@ -292,6 +301,59 @@
 - [x] 将本机 `A.py` 的安全子集重构为前端可操作的受管权重下载任务；支持显式代理但不复制硬编码路径、全局 `verify=False` 或运行时安装；
 - [x] `A.py` 和根目录 RAR 加入 Git 忽略，内网地址与本机制品不会进入仓库；
 - [x] GitHub 手工构建 Artifact，`v*` 标签生成带 SHA-256 的 Release。
+
+本轮全 GGUF E/R 离线交付（2026-09-02，`IN_PROGRESS`）：
+
+- [x] 固定 llama.cpp b10729、BGE Base Chinese v1.5 F16 GGUF 和 Qwen3
+  Reranker 0.6B Q8_0 的来源 revision、下载大小、SHA-256、许可证与转换配方；
+- [x] 模型权重、构建缓存和安装器产物保持 Git 忽略；组件锁必须重新绑定固定资产清单，
+  并完整锁定每个 CPU runtime DLL；
+- [x] 从微软官方不可变 VSIX 精确提取并逐文件锁定 VC143 x64 release CRT；拒绝
+  `debug_nonredist`，构建时校验 Microsoft Authenticode，运行时确认核心 CRT 从包内
+  `runtime/llama` 实际加载，目标机无需预装 VC++ Redistributable；微软许可仍由发布者遵守；
+- [x] 平台 Python 继续排除 Torch/Sentence Transformers；启动器用两个动态 loopback
+  llama.cpp sidecar、临时 key 文件、Win11 Job Object 和逐组件回退提供受管 Profile；
+- [x] 本地 sidecar 健康检查使用禁代理 HTTP opener，子进程补齐
+  `NO_PROXY/no_proxy=127.0.0.1,localhost`；平台只对受管 GGUF E/R 强制
+  `trust_env=False`，不改变外部 Chat/Embedding/Reranker Profile 的代理行为；
+- [x] 当前 Win11 真实运行时语义冒烟：BGE 返回 3 个有限、L2 归一化的 768 维向量，
+  诊断相关相似度 `0.5609 > 0.1655`；Qwen `/v1/rerank` 返回
+  `0.9997 > 0.0001`；
+- [x] 增加固定 runner/Action/Python/Node/Inno Setup 的手工或 Release 构建工作流，输出
+  ZIP、Setup.exe、哈希和 provenance；Release 事件在质量状态未提升时严格阻断；
+- [x] 组装后实验 ZIP 通过 self-check、临时全新 data root、受管 Profile 自动激活和
+  真实平台 API；Embedding 返回 `2 x 768`，Reranker 首项为 `index=0`；ZIP 为
+  934,065,370 bytes，SHA-256
+  `3cbb5fd72f80bfeed429fd05abf2cdb252535abb266ca62df3839075fb5b15f6`；
+- [x] 使用固定 Inno Setup 6.7.1 portable compiler 在 213.469 秒内生成单文件安装器；
+  未签名候选为 899,941,808 bytes，SHA-256
+  `08499a54aabc7bf7e7e4f0e5b0256b1b79d3d60126e70bcfd7341b62c669fb1a`，
+  `FileVersion=0.1.0`、`ProductName=GWAP Debug Platform`；用于获取编译器的固定 GitHub
+  Release 下载器 Authenticode 状态为 `Valid`，签名者为 `Pyrsys B.V.`；
+- [x] 修复 Inno 直接合并 `{app}` 的升级风险：完整 payload 仅解到 Setup 私有临时树，
+  `package-manifest.json` 最后触发 `install_local.ps1` 的 staging+backup 原子发布；非零退出
+  在 `[Files]` 阶段使安装失败，快捷方式由 Inno 管理，卸载只删除精确受管 app tree；
+  Inno 6.7.1 小型合同包已成功编译；
+- [x] 原子发布增加 PowerShell 5.1 命名互斥体、120 秒清晰超时和 abandoned mutex 恢复；
+  目标缺失时仅恢复唯一且通过 manifest/runtime 基本检查的受管 backup，多个候选不猜测；
+- [x] 用此前第三方端点成功运行的真实 GLM-5.2 脱敏快照重建并复验 Core、完整 GGUF staging
+  与真实 Setup：固定 2 个制品/74 条事件、66 个命中组/149 个逐行位置、源行跳转、两轮规划、
+  27/27 故障树结论、321,453 Token/146,082 ms 轨迹和诊断报告；ZIP 为 937,032,215 bytes，
+  SHA-256 `3fd4ab0699ea8778f01816133f98b728391d04e064ceed9bed87e129200f028e`；Setup 为
+  902,853,773 bytes，SHA-256
+  `d6736ce0d2943b378f253d92e4c75b643cdf2453802664e8dadeb3783d23ddaa`；实际安装树已复验本地
+  BGE/Qwen、受管 Profile、前后端 API、演示导入、真实 usage/诊断和源行跳转，并完成精确卸载；
+- [x] 当前 Win11 已真实验证 ZIP 首装/覆盖升级、Setup 首装/覆盖升级、目标缺失时恢复唯一
+  backup 后继续升级、安装后双 GGUF 平台冒烟，以及卸载仅删除 app tree/卸载器；
+- [ ] 完成包内 Profile 的知识全量索引、混合 RAG 质量与逐组件故障注入验证；
+- [ ] 对项目 `Setup.exe` 做发布代码签名并验证签名信任；当前候选 Authenticode 状态为
+  `NotSigned`；
+- [ ] 在无开发环境/无缓存的全新 Win11 上验证安装、冷启动、升级、回退和卸载；
+- [ ] 完成 BGE 上游余弦/Recall 与 Qwen 上游排序/NDCG Golden 等价门禁，记录正式 BGE
+  构建哈希并提升 `experimental_unverified` 状态；
+- [ ] GitHub 手工构建与正式 Release 工作流实际全绿后，才把该交付形态标为
+  `AVAILABLE`。详见
+  [Windows 11 全 GGUF E/R 离线安装器](docs/windows-offline-gguf-installer.md)。
 
 ## 6. 后续候选
 
@@ -385,7 +447,7 @@ P2 有界 Agent、任务隔离、多实例 lease 和文档进程沙箱见
 - [x] 模型相关、方法必查、其他结构化事件三层分页展示；重复日志保留聚类摘要，同时持久化全部实际命中，默认折叠并可分页展开、逐条精确跳转；
 - [x] 日志 Skill 的表格“含义/说明/判断”等语义随 Pattern 编译并展示；未单独说明的规则明确标为所属文档章节用途，不伪造含义；
 - [x] GW/AP 联合诊断不按单一案例设备排除另一侧知识；上传日志可标记 GW/AP 与主从角色，规划与最终证据保留来源；
-- [x] 综合诊断使用原生类型化只读工具 Agent，至少两轮、最多二十轮；每轮最多四次动态工具调用，支持方法目录/全文、混合知识、全部持久化日志筛查证据和 evidence ID 读取，重复调用复用已有结果；
+- [x] 综合诊断使用原生类型化只读工具 Agent，至少两轮、最多二十轮；每轮最多四次模型规划调用，首个非空日志搜索的独立策略证据读取计入总预算但不占模型调用槽位；支持方法目录/全文、混合知识、全部持久化日志筛查证据和 evidence ID 读取，重复调用复用已有结果；
 - [x] 故障树流程步骤、子步骤、判断表和根因场景编译为稳定覆盖节点；每个节点必须实际检索并形成“支持 / 排除 / 证据不足”结论，覆盖不完整时规划与最终合成均不得标记为通过；
 - [x] 工具输入输出、方法/Pattern/evidence ID 均校验；模型失败或 Schema/证据校验失败时保留确定性基线，并显示稳定错误码、字段路径、重试次数和模型停止原因；
 - [x] 规划轮次、方法读取、实际工具调用和最终合成在案例页增量显示；诊断页和日志筛查页可查看本次调用的文档/方法，轨迹只保存哈希和安全元数据；

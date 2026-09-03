@@ -7,6 +7,7 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.db import Base
 from app.models import Job, KnowledgeCategory, KnowledgeDocument, KnowledgeEmbedding, ModelProfile
@@ -26,14 +27,19 @@ from app.services.model_profiles import (
     seed_model_profiles,
     set_profile_api_key,
     set_profile_proxy_url,
+    validate_managed_sidecar_endpoint,
     validate_model_endpoint,
+    validate_model_profile,
     validate_model_proxy_url,
 )
 from app.services.retrieval_models import rerank_documents
 
 
 def create_test_session(tmp_path: Path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'models.db'}")
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'models.db'}",
+        poolclass=NullPool,
+    )
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine, expire_on_commit=False)()
 
@@ -217,6 +223,158 @@ def test_local_embedding_resolves_project_path_and_prefixes_only_queries(tmp_pat
     assert calls[1][1]["batch_size"] == 100
 
 
+def test_managed_llama_embedding_applies_instruction_only_to_queries_and_enforces_contract(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {"requests": []}
+
+    class FakeEmbeddings:
+        def create(self, **request):
+            captured["requests"].append(request)
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(index=index, embedding=[3.0, 4.0, 0.0])
+                    for index, _text in enumerate(request["input"])
+                ],
+                usage=SimpleNamespace(prompt_tokens=4, total_tokens=4),
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured["client"] = kwargs
+            self.embeddings = FakeEmbeddings()
+
+    class FakeHttpClient:
+        def close(self):
+            captured["http_client_closed"] = True
+
+    def fake_http_client(**kwargs):
+        captured["http_client_options"] = kwargs
+        return FakeHttpClient()
+
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "t" * 48)
+    monkeypatch.setattr(retrieval_models, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(retrieval_models.httpx, "Client", fake_http_client)
+    monkeypatch.setattr(
+        retrieval_models,
+        "record_model_egress",
+        lambda profile, **details: captured.update({"audit": details}),
+    )
+    profile = ModelProfile(
+        id="MODEL-managed-embedding",
+        name="Managed BGE GGUF",
+        task_type="embedding",
+        mode="api",
+        provider="llama_cpp_local",
+        model_name="bge-base-zh-v1.5",
+        base_url="http://127.0.0.1:19001",
+        config_json=json.dumps({
+            "dimension": 3,
+            "normalize": True,
+            "query_instruction": "检索：",
+        }),
+    )
+
+    document_vector = retrieval_models.embed_texts(
+        profile,
+        ["知识正文"],
+        purpose="knowledge_index",
+    )[0]
+    query_vector = retrieval_models.embed_texts(
+        profile,
+        ["AP 无法上线"],
+        purpose="case_retrieval_query",
+    )[0]
+
+    requests = captured["requests"]
+    assert requests[0]["input"] == ["知识正文"]
+    assert requests[1]["input"] == ["检索：AP 无法上线"]
+    assert "dimensions" not in requests[0]
+    assert requests[0]["encoding_format"] == "float"
+    assert captured["client"]["base_url"] == "http://127.0.0.1:19001/v1"
+    assert captured["http_client_options"] == {"trust_env": False}
+    assert captured["http_client_closed"] is True
+    assert document_vector == pytest.approx([0.6, 0.8, 0.0])
+    assert query_vector == pytest.approx([0.6, 0.8, 0.0])
+    assert sum(value * value for value in query_vector) == pytest.approx(1.0)
+
+
+def test_managed_llama_embedding_rejects_dimension_drift(monkeypatch) -> None:
+    class FakeEmbeddings:
+        def create(self, **_request):
+            return SimpleNamespace(
+                data=[SimpleNamespace(index=0, embedding=[1.0, 2.0])],
+                usage=None,
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.embeddings = FakeEmbeddings()
+
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "t" * 48)
+    monkeypatch.setattr(retrieval_models, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(retrieval_models, "record_model_egress", lambda *_args, **_kwargs: None)
+    profile = ModelProfile(
+        id="MODEL-managed-embedding-drift",
+        name="Managed BGE GGUF",
+        task_type="embedding",
+        mode="api",
+        provider="llama_cpp_local",
+        model_name="bge-base-zh-v1.5",
+        base_url="http://127.0.0.1:19002/v1",
+        config_json='{"dimension":3,"normalize":true}',
+    )
+
+    with pytest.raises(
+        retrieval_models.RetrievalModelError,
+        match="expected 3, received 2",
+    ):
+        retrieval_models.embed_texts(profile, ["AP offline"])
+
+
+def test_external_embedding_keeps_default_environment_proxy_behavior(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeEmbeddings:
+        def create(self, **_request):
+            return SimpleNamespace(
+                data=[SimpleNamespace(index=0, embedding=[1.0, 0.0])],
+                usage=None,
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.embeddings = FakeEmbeddings()
+
+    monkeypatch.setattr(retrieval_models, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(
+        retrieval_models,
+        "get_profile_api_key",
+        lambda _profile: "sk-test",
+    )
+    monkeypatch.setattr(
+        retrieval_models,
+        "record_model_egress",
+        lambda *_args, **_kwargs: None,
+    )
+    profile = ModelProfile(
+        id="MODEL-external-embedding",
+        name="External embedding",
+        task_type="embedding",
+        mode="api",
+        provider="openai_compatible",
+        model_name="external-embedding",
+        base_url="https://example.invalid/v1",
+        config_json='{"dimension":2}',
+    )
+
+    assert retrieval_models.embed_texts(profile, ["AP offline"]) == [
+        [1.0, 0.0]
+    ]
+    assert "http_client" not in captured
+
+
 def test_api_keys_are_encrypted_and_never_returned(monkeypatch):
     fernet = Fernet(Fernet.generate_key())
     monkeypatch.setattr(secrets, "_get_fernet", lambda: fernet)
@@ -336,9 +494,102 @@ def test_qwen_reranker_api_uses_compatible_reranks_endpoint(monkeypatch):
     assert captured["url"] == "https://example.invalid/compatible-api/v1/reranks"
     assert captured["json"]["model"] == "qwen3-rerank"
     assert captured["headers"]["Authorization"] == "Bearer sk-test"
+    assert "trust_env" not in captured
     assert captured["audit"]["outcome"] == "SUCCESS"
     assert captured["audit"]["request_items"] == 3
     assert captured["audit"]["request_chars"] == len("authentication failurecolorcheck EAP logs")
+
+
+def test_managed_llama_reranker_uses_v1_rerank_and_validates_results(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [
+                    {"index": 0, "relevance_score": 0.12},
+                    {"index": 1, "score": 0.91},
+                ]
+            }
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "r" * 48)
+    monkeypatch.setattr(retrieval_models.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        retrieval_models,
+        "record_model_egress",
+        lambda profile, **details: captured.update({"audit": details}),
+    )
+    profile = ModelProfile(
+        id="MODEL-rerank-managed",
+        name="Managed Qwen3 Reranker GGUF",
+        task_type="reranker",
+        mode="api",
+        provider="llama_cpp_local",
+        model_name="qwen3-reranker-0.6b",
+        base_url="http://127.0.0.1:19003/v1",
+        config_json='{"endpoint_path":"/v1/rerank"}',
+    )
+
+    ranking = rerank_documents(
+        "authentication failure",
+        ["color", "check EAP logs"],
+        2,
+        profile,
+    )
+
+    assert ranking == [(1, 0.91), (0, 0.12)]
+    assert captured["url"] == "http://127.0.0.1:19003/v1/rerank"
+    assert captured["headers"]["Authorization"] == f"Bearer {'r' * 48}"
+    assert captured["trust_env"] is False
+    assert "instruct" not in captured["json"]
+    assert captured["audit"]["outcome"] == "SUCCESS"
+
+
+def test_managed_llama_reranker_rejects_duplicate_or_out_of_range_indexes(
+    monkeypatch,
+) -> None:
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [
+                    {"index": 0, "relevance_score": 0.9},
+                    {"index": 0, "relevance_score": 0.8},
+                ]
+            }
+
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "r" * 48)
+    monkeypatch.setattr(
+        retrieval_models.httpx,
+        "post",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    monkeypatch.setattr(retrieval_models, "record_model_egress", lambda *_args, **_kwargs: None)
+    profile = ModelProfile(
+        id="MODEL-rerank-managed-invalid",
+        name="Managed Qwen3 Reranker GGUF",
+        task_type="reranker",
+        mode="api",
+        provider="llama_cpp_local",
+        model_name="qwen3-reranker-0.6b",
+        base_url="http://127.0.0.1:19004",
+    )
+
+    with pytest.raises(
+        retrieval_models.RetrievalModelError,
+        match="index or score contract",
+    ):
+        rerank_documents("failure", ["first", "second"], 2, profile)
 
 
 def test_local_qwen_reranker_uses_instruction_and_bounded_batch(monkeypatch):
@@ -589,3 +840,264 @@ def test_production_model_endpoint_requires_allowlist(monkeypatch):
     )
     with pytest.raises(ValueError, match="Production"):
         validate_model_endpoint("https://api.example.com/v1")
+
+
+def test_managed_llama_endpoint_exception_is_literal_loopback_only(monkeypatch):
+    monkeypatch.setattr(
+        model_profiles,
+        "get_settings",
+        lambda: _endpoint_settings(app_env="prod"),
+    )
+
+    validate_managed_sidecar_endpoint("http://127.0.0.1:19001/v1")
+    validate_model_profile(
+        "embedding",
+        "api",
+        "llama_cpp_local",
+        "bge-base-zh-v1.5",
+        "http://[::1]:19001/v1",
+        allow_managed=True,
+    )
+    with pytest.raises(ValueError, match="literal loopback"):
+        validate_model_profile(
+            "embedding",
+            "api",
+            "llama_cpp_local",
+            "bge-base-zh-v1.5",
+            "http://localhost:19001/v1",
+            allow_managed=True,
+        )
+    with pytest.raises(ValueError, match="literal loopback"):
+        validate_model_profile(
+            "reranker",
+            "api",
+            "llama_cpp_local",
+            "qwen3-reranker-0.6b",
+            "http://10.20.30.40:19002/v1",
+            allow_managed=True,
+        )
+    with pytest.raises(ValueError, match="explicit port"):
+        validate_managed_sidecar_endpoint("http://127.0.0.1/v1")
+
+
+def test_bundled_gguf_profiles_are_seeded_without_persisting_launcher_token(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "s" * 48)
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_EMBEDDING_URL",
+        "http://127.0.0.1:19101/v1",
+    )
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_RERANKER_URL",
+        "http://127.0.0.1:19102",
+    )
+    db = create_test_session(tmp_path)
+
+    seed_model_profiles(db)
+
+    embedding = db.get(ModelProfile, "MODEL-embedding-bundled-gguf")
+    reranker = db.get(ModelProfile, "MODEL-reranker-bundled-gguf")
+    assert embedding is not None and embedding.is_active is True
+    assert reranker is not None and reranker.is_active is True
+    assert embedding.provider == reranker.provider == "llama_cpp_local"
+    assert embedding.api_key_ciphertext is None
+    assert reranker.api_key_ciphertext is None
+    assert model_profile_to_dict(embedding)["api_key_hint"] == "managed by launcher"
+    assert json.loads(embedding.config_json)["dimension"] == 768
+
+    monkeypatch.delenv("BUNDLED_GGUF_API_KEY")
+    monkeypatch.delenv("BUNDLED_GGUF_EMBEDDING_URL")
+    monkeypatch.delenv("BUNDLED_GGUF_RERANKER_URL")
+    seed_model_profiles(db)
+
+    assert db.get(ModelProfile, embedding.id).enabled is False
+    assert db.get(ModelProfile, reranker.id).enabled is False
+    assert get_active_model_profile("embedding", db).provider == "hashing"
+    assert get_active_model_profile("reranker", db).provider == "disabled"
+    assert json.loads(db.get(ModelProfile, embedding.id).config_json)[
+        "launcher_auto_restore_pending"
+    ] is True
+    assert json.loads(db.get(ModelProfile, reranker.id).config_json)[
+        "launcher_auto_restore_pending"
+    ] is True
+
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "s" * 48)
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_EMBEDDING_URL",
+        "http://127.0.0.1:19101/v1",
+    )
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_RERANKER_URL",
+        "http://127.0.0.1:19102",
+    )
+    seed_model_profiles(db)
+
+    assert get_active_model_profile("embedding", db).id == embedding.id
+    assert get_active_model_profile("reranker", db).id == reranker.id
+    assert "launcher_auto_restore_pending" not in json.loads(
+        db.get(ModelProfile, embedding.id).config_json
+    )
+    assert "launcher_auto_restore_pending" not in json.loads(
+        db.get(ModelProfile, reranker.id).config_json
+    )
+    db.close()
+
+
+def test_manual_fallback_selection_cancels_bundled_profile_auto_restore(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "s" * 48)
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_EMBEDDING_URL",
+        "http://127.0.0.1:19201/v1",
+    )
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_RERANKER_URL",
+        "http://127.0.0.1:19202/v1",
+    )
+    db = create_test_session(tmp_path)
+    seed_model_profiles(db)
+
+    monkeypatch.delenv("BUNDLED_GGUF_API_KEY")
+    monkeypatch.delenv("BUNDLED_GGUF_EMBEDDING_URL")
+    monkeypatch.delenv("BUNDLED_GGUF_RERANKER_URL")
+    seed_model_profiles(db)
+    embedding = db.get(ModelProfile, "MODEL-embedding-bundled-gguf")
+    reranker = db.get(ModelProfile, "MODEL-reranker-bundled-gguf")
+    assert json.loads(embedding.config_json)["launcher_auto_restore_pending"] is True
+    assert json.loads(reranker.config_json)["launcher_auto_restore_pending"] is True
+
+    activate_model_profile(db, db.get(ModelProfile, "MODEL-embedding-hashing"))
+    activate_model_profile(db, db.get(ModelProfile, "MODEL-reranker-disabled"))
+    assert "launcher_auto_restore_pending" not in json.loads(embedding.config_json)
+    assert "launcher_auto_restore_pending" not in json.loads(reranker.config_json)
+
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "s" * 48)
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_EMBEDDING_URL",
+        "http://127.0.0.1:19201/v1",
+    )
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_RERANKER_URL",
+        "http://127.0.0.1:19202/v1",
+    )
+    seed_model_profiles(db)
+
+    assert get_active_model_profile("embedding", db).id == "MODEL-embedding-hashing"
+    assert get_active_model_profile("reranker", db).id == "MODEL-reranker-disabled"
+    assert embedding.enabled is True and embedding.is_active is False
+    assert reranker.enabled is True and reranker.is_active is False
+    db.close()
+
+
+def test_bundled_gguf_first_install_replaces_only_default_fallbacks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("BUNDLED_GGUF_API_KEY", raising=False)
+    monkeypatch.delenv("BUNDLED_GGUF_EMBEDDING_URL", raising=False)
+    monkeypatch.delenv("BUNDLED_GGUF_RERANKER_URL", raising=False)
+    db = create_test_session(tmp_path)
+    seed_model_profiles(db)
+    assert get_active_model_profile("embedding", db).id == "MODEL-embedding-hashing"
+    assert get_active_model_profile("reranker", db).id == "MODEL-reranker-disabled"
+
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "s" * 48)
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_EMBEDDING_URL",
+        "http://127.0.0.1:19301/v1",
+    )
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_RERANKER_URL",
+        "http://127.0.0.1:19302/v1",
+    )
+    seed_model_profiles(db)
+
+    embedding = db.get(ModelProfile, "MODEL-embedding-bundled-gguf")
+    reranker = db.get(ModelProfile, "MODEL-reranker-bundled-gguf")
+    assert get_active_model_profile("embedding", db).id == embedding.id
+    assert get_active_model_profile("reranker", db).id == reranker.id
+
+    activate_model_profile(db, db.get(ModelProfile, "MODEL-embedding-hashing"))
+    activate_model_profile(db, db.get(ModelProfile, "MODEL-reranker-disabled"))
+    seed_model_profiles(db)
+
+    assert get_active_model_profile("embedding", db).id == "MODEL-embedding-hashing"
+    assert get_active_model_profile("reranker", db).id == "MODEL-reranker-disabled"
+    assert db.get(ModelProfile, embedding.id).is_active is False
+    assert db.get(ModelProfile, reranker.id).is_active is False
+    db.close()
+
+
+def test_bundled_gguf_seed_preserves_non_default_custom_profiles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("BUNDLED_GGUF_API_KEY", raising=False)
+    monkeypatch.delenv("BUNDLED_GGUF_EMBEDDING_URL", raising=False)
+    monkeypatch.delenv("BUNDLED_GGUF_RERANKER_URL", raising=False)
+    db = create_test_session(tmp_path)
+    seed_model_profiles(db)
+    custom_embedding = ModelProfile(
+        id="MODEL-custom-embedding",
+        name="Custom embedding",
+        task_type="embedding",
+        mode="builtin",
+        provider="hashing",
+        model_name="custom-hashing",
+    )
+    custom_reranker = ModelProfile(
+        id="MODEL-custom-reranker",
+        name="Custom disabled reranker",
+        task_type="reranker",
+        mode="builtin",
+        provider="disabled",
+        model_name="custom-disabled",
+    )
+    db.add_all([custom_embedding, custom_reranker])
+    db.commit()
+    activate_model_profile(db, custom_embedding)
+    activate_model_profile(db, custom_reranker)
+
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "s" * 48)
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_EMBEDDING_URL",
+        "http://127.0.0.1:19401/v1",
+    )
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_RERANKER_URL",
+        "http://127.0.0.1:19402/v1",
+    )
+    seed_model_profiles(db)
+
+    assert get_active_model_profile("embedding", db).id == custom_embedding.id
+    assert get_active_model_profile("reranker", db).id == custom_reranker.id
+    assert db.get(ModelProfile, "MODEL-embedding-bundled-gguf").is_active is False
+    assert db.get(ModelProfile, "MODEL-reranker-bundled-gguf").is_active is False
+    db.close()
+
+
+def test_managed_llama_activation_requires_launcher_token(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("BUNDLED_GGUF_API_KEY", raising=False)
+    db = create_test_session(tmp_path)
+    profile = ModelProfile(
+        id="MODEL-managed-no-token",
+        name="Managed BGE",
+        task_type="embedding",
+        mode="api",
+        provider="llama_cpp_local",
+        model_name="bge",
+        base_url="http://127.0.0.1:19001/v1",
+    )
+    db.add(profile)
+    db.commit()
+
+    with pytest.raises(ValueError, match="BUNDLED_GGUF_API_KEY"):
+        activate_model_profile(db, profile)
+    db.close()

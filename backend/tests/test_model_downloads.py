@@ -357,6 +357,28 @@ def test_model_download_catalog_reports_only_complete_manifests(
     assert ready["status"] == "READY"
 
 
+def test_model_download_catalog_reports_healthy_bundled_gguf_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = download_settings(tmp_path)
+    monkeypatch.setattr(model_downloads, "get_settings", lambda: settings)
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "k" * 48)
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_EMBEDDING_URL",
+        "http://127.0.0.1:19001/v1",
+    )
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_RERANKER_URL",
+        "http://127.0.0.1:19002/v1",
+    )
+
+    assert model_downloads.model_download_catalog()["runtime_installed"] is True
+
+    monkeypatch.delenv("BUNDLED_GGUF_RERANKER_URL")
+    assert model_downloads.model_download_catalog()["runtime_installed"] is False
+
+
 def test_failed_update_preserves_the_previous_active_generation(
     tmp_path: Path,
     monkeypatch,

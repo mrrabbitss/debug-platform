@@ -8,9 +8,36 @@ Recommended startup
 3. The browser opens http://127.0.0.1:8080/ after the backend is ready.
 4. Keep the console window open. Press Ctrl+C to stop the platform.
 
+Built-in offline demo
+---------------------
+Open Cases and click "Import AP offline demo". The action idempotently creates
+a persistent synthetic GW/AP case with 74 parsed events, three-tier triage,
+expandable repeated hits, exact source-line jumps, fault-tree coverage and a
+report preview. The displayed screening plans, diagnosis, 321,453-token usage
+and trace come from a previously successful real GLM-5.2 run through
+wawapii.com. Importing the snapshot sends no content to a model. Credentials,
+raw prompts and private method-document bodies are not included.
+
 This package already contains a Python runtime, backend dependencies and the
 built Vue frontend. The target computer does not need Python, Node.js, pip,
 npm or Docker, and therefore does not need pip/npm proxy configuration.
+
+Claude Code / Codex Skill + MCP
+-------------------------------
+The canonical gw-ap-debug Skill and its installer are included under
+agent-skills\gw-ap-debug and scripts\. The launcher publishes MCP on the same
+loopback port as the Web application, so start.bat --port 18080 uses
+http://127.0.0.1:18080/mcp.
+
+Set MCP_BEARER_TOKEN in %LOCALAPPDATA%\GWAPDebugPlatform\.env, restart the
+platform, then set DEBUGPLATFORM_MCP_TOKEN to the same value in PowerShell and
+run:
+
+scripts\install_agent_skill_mcp.ps1 -Client All -McpUrl http://127.0.0.1:8080/mcp
+
+Use -Client Claude or -Client Codex to install only one client. If the platform
+uses --port, put that same port in -McpUrl. The CLI model performs reasoning;
+the local backend supplies scoped evidence and stores the validated result.
 
 Useful commands
 ---------------
@@ -37,13 +64,26 @@ Data and upgrades
 Model boundary
 --------------
 The portable platform deliberately excludes Torch, sentence-transformers and
-model weights. It starts with the built-in Hashing Embedding and a disabled
-Reranker, avoiding native model DLL failures such as WinError 1114.
+all in-process native model packages, avoiding DLL failures such as WinError
+1114. A Core-only build starts with the built-in Hashing Embedding and a
+disabled Reranker.
+
+The Offline GGUF edition additionally contains BGE Embedding and Qwen3
+Reranker model components. It launches each model through an isolated
+llama.cpp sidecar on a dynamic 127.0.0.1 port, waits for /health, and then
+starts FastAPI. A new random sidecar API key is generated for each run. If a
+sidecar fails, the platform remains available and falls back for that task.
+
+Useful GGUF diagnostics:
+start.bat --check --check-models
+    Verify package integrity and require both GGUF sidecars to load.
+
+start.bat --no-local-retrieval
+    Temporarily use the Core retrieval fallbacks without starting sidecars.
 
 Configure approved Chat, Embedding or Reranker API endpoints in System
-Settings. If local BGE/Qwen weights are required, run them in a separately
-managed model service and connect through an API profile. Model downloads and
-native inference runtimes are not installed into this platform process.
+Settings. GGUF sidecars are managed by the launcher and are never imported into
+the platform Python process.
 
 System Settings also provides a managed weight downloader for BGE Base and
 Qwen3 Reranker. It supports an optional explicit proxy and stores completed

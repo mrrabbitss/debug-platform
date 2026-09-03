@@ -70,6 +70,10 @@ const form = reactive({
 })
 
 const taskProfiles = computed(() => profiles.value.filter(item => item.task_type === activeTask.value))
+const bundledRetrievalProfiles = computed(() => profiles.value.filter(
+  item => item.provider === 'llama_cpp_local' && item.config?.managed_sidecar
+))
+const bundledRetrievalActive = computed(() => bundledRetrievalProfiles.value.filter(item => item.is_active))
 const dialogTitle = computed(() => editingId.value ? '修改模型配置' : '添加模型配置')
 const editingProfile = computed(() => profiles.value.find(item => item.id === editingId.value))
 
@@ -85,7 +89,8 @@ const providerLabels: Record<string, string> = {
   hashing: '内置字符向量',
   sentence_transformers: '高级：进程内 Sentence Transformers',
   disabled: '不使用 Reranker',
-  qwen_rerank_api: 'Qwen Rerank API'
+  qwen_rerank_api: 'Qwen Rerank API',
+  llama_cpp_local: '随包本地 llama.cpp / GGUF'
 }
 
 function errorText(error: any) {
@@ -347,7 +352,7 @@ function modelConfig() {
       batch_size: form.batch_size,
       device: form.device,
       normalize: true,
-      query_instruction: form.mode === 'local' ? form.query_instruction.trim() : undefined,
+      query_instruction: form.mode === 'builtin' ? undefined : form.query_instruction.trim(),
       timeout_seconds: form.timeout_seconds,
       max_retries: form.max_retries
     }
@@ -502,6 +507,17 @@ onMounted(load)
       <template #title>模型密钥和含凭据的代理地址由后端加密保存，页面不会回显完整值。切换诊断模型和 Reranker 立即生效；切换 Embedding 后需要重建向量索引。</template>
     </el-alert>
 
+    <el-alert
+      v-if="bundledRetrievalProfiles.length"
+      :type="bundledRetrievalActive.length === bundledRetrievalProfiles.length ? 'success' : 'warning'"
+      :closable="false"
+      show-icon
+      style="margin-bottom:16px"
+      :title="bundledRetrievalActive.length === bundledRetrievalProfiles.length
+        ? '随包 GGUF Embedding 与 Reranker 已由启动器托管并启用；无需填写地址或 API Key。'
+        : '检测到随包 GGUF 检索组件，但部分组件当前未启用。可测试对应配置，并查看本地模型日志确认自动回退原因。'"
+    />
+
     <el-card>
       <el-tabs v-model="activeTask">
         <el-tab-pane v-for="task in (['chat', 'embedding', 'reranker'] as ModelTask[])" :key="task" :label="taskLabels[task]" :name="task" />
@@ -517,10 +533,10 @@ onMounted(load)
           <template #default="scope"><el-tag v-if="scope.row.is_active" type="success">当前使用</el-tag><el-tag v-else type="info">备用</el-tag></template>
         </el-table-column>
         <el-table-column prop="name" label="配置名称" min-width="190" />
-        <el-table-column label="运行方式" width="100"><template #default="scope">{{ { builtin: '内置', local: '本地', api: 'API' }[scope.row.mode as ModelMode] }}</template></el-table-column>
+        <el-table-column label="运行方式" width="110"><template #default="scope">{{ scope.row.provider === 'llama_cpp_local' ? '随包本地' : { builtin: '内置', local: '本地', api: 'API' }[scope.row.mode as ModelMode] }}</template></el-table-column>
         <el-table-column label="适配器" min-width="180"><template #default="scope">{{ providerLabels[scope.row.provider] || scope.row.provider }}</template></el-table-column>
         <el-table-column prop="model_name" label="模型名/本地路径" min-width="220" show-overflow-tooltip />
-        <el-table-column label="API Key" width="110"><template #default="scope">{{ scope.row.api_key_configured ? scope.row.api_key_hint || '已配置' : '—' }}</template></el-table-column>
+        <el-table-column label="API Key" width="120"><template #default="scope">{{ scope.row.provider === 'llama_cpp_local' ? '启动器托管' : scope.row.api_key_configured ? scope.row.api_key_hint || '已配置' : '—' }}</template></el-table-column>
         <el-table-column v-if="activeTask === 'chat'" label="模型代理" min-width="190" show-overflow-tooltip>
           <template #default="scope">{{ scope.row.mode === 'api' && scope.row.proxy_url_configured ? scope.row.proxy_url_hint || '已配置' : '直连' }}</template>
         </el-table-column>
@@ -528,20 +544,22 @@ onMounted(load)
           <template #default="scope">
             <el-button v-if="!scope.row.is_active" link type="primary" @click="activate(scope.row as ModelProfile)">切换使用</el-button>
             <el-button link :loading="testingId === scope.row.id" @click="testProfile(scope.row as ModelProfile)">测试</el-button>
-            <el-button link @click="openEdit(scope.row as ModelProfile)">修改</el-button>
-            <el-button v-if="!scope.row.is_active && !scope.row.config?.builtin" link type="danger" @click="removeProfile(scope.row as ModelProfile)">删除</el-button>
+            <el-button v-if="!scope.row.config?.managed_sidecar" link @click="openEdit(scope.row as ModelProfile)">修改</el-button>
+            <el-button v-if="!scope.row.is_active && !scope.row.config?.builtin && !scope.row.config?.managed_sidecar" link type="danger" @click="removeProfile(scope.row as ModelProfile)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
     <el-card data-testid="model-download-card" style="margin-top:16px">
-      <template #header>本地模型权重下载</template>
+      <template #header>本地模型资产</template>
       <el-alert
-        type="info"
+        :type="modelDownloads.runtime_installed ? 'success' : 'info'"
         :closable="false"
         show-icon
-        title="该功能来自原 A.py 的文件清单、断点续传和进度逻辑；只下载权重到平台管理目录，不安装 Torch、Sentence Transformers，也不会在 FastAPI 进程中加载模型。"
+        :title="modelDownloads.runtime_installed
+          ? '随包 GGUF Embedding/Reranker 运行时已就绪。下表下载的是供其他独立模型服务使用的官方原始权重，不会替换随包 GGUF。'
+          : '该下载器只准备官方原始权重，不安装 Torch、Sentence Transformers，也不会在 FastAPI 进程中加载模型。'"
         style="margin-bottom:16px"
       />
       <el-form inline>
@@ -613,7 +631,8 @@ onMounted(load)
 
     <el-card style="margin-top:16px">
       <template #header>本地模型说明</template>
-      <p class="muted">标准源码环境和 Win11 便携包仍不包含 Torch 或 Sentence Transformers。上方下载器只准备可供独立模型服务使用的 BGE/Qwen 权重；下载完成不等于平台已经安装推理能力。默认继续使用内置 Hashing Embedding并关闭 Reranker，需要这些权重时应由独立模型服务加载，再在模型网关中配置 API。标记为“高级”的本地配置只为既有、人工维护的源码环境保留。</p>
+      <p class="muted" v-if="bundledRetrievalProfiles.length">当前版本随包携带隔离的 llama.cpp CPU Runtime、BGE GGUF Embedding 和 Qwen3 GGUF Reranker。它们运行在独立回环进程中，不向 FastAPI 注入 Torch；启动器使用临时令牌连接，组件故障时平台仍可回退到 Hashing Embedding / Disabled Reranker。本地模型日志位于平台数据目录的 logs/local-models。</p>
+      <p class="muted" v-else>标准源码环境和 Core 便携包不包含 Torch 或 Sentence Transformers。上方下载器只准备可供独立模型服务使用的 BGE/Qwen 原始权重；下载完成不等于平台已经安装推理能力。默认继续使用内置 Hashing Embedding并关闭 Reranker，需要这些权重时应由独立模型服务加载，再在模型网关中配置 API。标记为“高级”的本地配置只为既有、人工维护的源码环境保留。</p>
       <p class="muted">
         当前知识存储：{{ retrieval.knowledge_storage || '加载中' }}；
         方法派生关系 {{ retrieval.knowledge_graph?.derivations || 0 }}；
@@ -706,7 +725,7 @@ onMounted(load)
           <el-form-item v-if="form.mode === 'api'" label="向量维度"><el-input-number v-model="form.dimension" :min="1" placeholder="留空使用模型默认值" /></el-form-item>
           <el-form-item v-if="form.mode === 'local'" label="运行设备"><el-select v-model="form.device"><el-option label="CPU" value="cpu"/><el-option label="CUDA" value="cuda"/></el-select></el-form-item>
           <el-form-item label="批量大小"><el-input-number v-model="form.batch_size" :min="1" :max="100" /></el-form-item>
-          <el-form-item v-if="form.mode === 'local'" label="检索查询指令"><el-input v-model="form.query_instruction" type="textarea" :rows="2" /></el-form-item>
+          <el-form-item v-if="form.mode !== 'builtin'" label="检索查询指令"><el-input v-model="form.query_instruction" type="textarea" :rows="2" /></el-form-item>
         </template>
         <template v-if="form.task_type === 'reranker'">
           <el-form-item v-if="form.mode === 'local'" label="运行设备"><el-select v-model="form.device"><el-option label="CPU" value="cpu"/><el-option label="CUDA" value="cuda"/></el-select></el-form-item>

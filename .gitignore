@@ -24,6 +24,10 @@ hf_model_access_report*.txt
 /artifacts/validation/
 /artifacts/e2e/
 /artifacts/portable/
+/artifacts/build-cache/
+/artifacts/build-tools/
+/artifacts/installer/
+/artifacts/model-runtime-research/
 .agent-runtime/
 .DS_Store
 /故障树.md

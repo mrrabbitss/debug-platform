@@ -2,6 +2,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,6 +31,18 @@ class Settings(BaseSettings):
     api_key: str | None = None
     auth_mode: Literal["local", "api_key", "rbac"] = "local"
     auth_allow_legacy_admin: bool = True
+    mcp_enabled: bool = True
+    mcp_bearer_token: str = ""
+    mcp_allowed_hosts: str = "127.0.0.1:*,localhost:*,[::1]:*"
+    mcp_allowed_origins: str = (
+        "http://127.0.0.1:*,http://localhost:*,http://[::1]:*"
+    )
+    mcp_public_base_url: str = "http://127.0.0.1:8000"
+    mcp_max_request_body_bytes: int = Field(
+        default=4 * 1024 * 1024,
+        ge=64 * 1024,
+        le=16 * 1024 * 1024,
+    )
 
     max_upload_bytes: int = 2 * 1024 * 1024 * 1024
     max_extracted_bytes: int = 8 * 1024 * 1024 * 1024
@@ -169,6 +182,15 @@ class Settings(BaseSettings):
             raise ValueError("AUTH_MODE=local is not allowed in APP_ENV=prod")
         if self.auth_mode == "api_key" and not self.api_key:
             raise ValueError("API_KEY is required when AUTH_MODE=api_key")
+        self.mcp_public_base_url = self.mcp_public_base_url.strip().rstrip("/")
+        if self.mcp_enabled and not self.mcp_public_base_url:
+            raise ValueError("MCP_PUBLIC_BASE_URL is required when MCP_ENABLED=true")
+        if self.mcp_enabled:
+            parsed_mcp_url = urlsplit(self.mcp_public_base_url)
+            if parsed_mcp_url.scheme not in {"http", "https"} or not parsed_mcp_url.netloc:
+                raise ValueError("MCP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL")
+        if self.mcp_enabled and not self.mcp_allowed_host_list:
+            raise ValueError("MCP_ALLOWED_HOSTS is required when MCP_ENABLED=true")
         if (
             self.diagnostic_context_reserved_output_tokens
             + self.diagnostic_context_safety_margin_tokens
@@ -190,6 +212,14 @@ class Settings(BaseSettings):
     @property
     def model_endpoint_allowlist_entries(self) -> list[str]:
         return [x.strip().lower() for x in self.model_endpoint_allowlist.split(",") if x.strip()]
+
+    @property
+    def mcp_allowed_host_list(self) -> list[str]:
+        return [x.strip() for x in self.mcp_allowed_hosts.split(",") if x.strip()]
+
+    @property
+    def mcp_allowed_origin_list(self) -> list[str]:
+        return [x.strip() for x in self.mcp_allowed_origins.split(",") if x.strip()]
 
     @property
     def model_download_mirror_entries(self) -> list[str]:

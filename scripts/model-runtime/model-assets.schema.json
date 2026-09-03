@@ -1,0 +1,375 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://debug-platform.local/schemas/model-assets.schema.json",
+  "title": "Debug Platform GGUF retrieval asset manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "bundle_id",
+    "bundle_status",
+    "target",
+    "runtime",
+    "native_dependencies",
+    "models",
+    "licenses",
+    "release_gates"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schema_version": { "const": 1 },
+    "bundle_id": { "$ref": "#/$defs/nonempty" },
+    "bundle_status": {
+      "enum": ["experimental_unverified", "release_candidate", "released"]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "backend"],
+      "properties": {
+        "os": { "const": "windows" },
+        "architecture": { "const": "x86_64" },
+        "backend": { "const": "cpu" }
+      }
+    },
+    "runtime": { "$ref": "#/$defs/runtime" },
+    "native_dependencies": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": { "$ref": "#/$defs/nativeDependency" }
+    },
+    "models": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "$ref": "#/$defs/model" }
+    },
+    "licenses": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "$ref": "#/$defs/licenseAsset" }
+    },
+    "release_gates": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/nonempty" },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "nonempty": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "download": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "relative_path", "size_bytes", "sha256"],
+      "properties": {
+        "url": { "type": "string", "pattern": "^https://" },
+        "relative_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?![A-Za-z]:)(?![/\\\\])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+        },
+        "size_bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx", "source_url", "notice_required"],
+      "properties": {
+        "spdx": { "enum": ["MIT", "Apache-2.0"] },
+        "source_url": { "type": "string", "pattern": "^https://" },
+        "notice_required": { "type": "boolean" }
+      }
+    },
+    "nativeLicense": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source_url", "redistribution", "notice_required"],
+      "properties": {
+        "id": { "const": "LicenseRef-Microsoft-Visual-Studio-2022-Redistributable" },
+        "source_url": {
+          "const": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution"
+        },
+        "redistribution": { "const": "app_local_unmodified" },
+        "notice_required": { "const": true }
+      }
+    },
+    "nativeFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "archive_path",
+        "cache_path",
+        "install_path",
+        "size_bytes",
+        "sha256"
+      ],
+      "properties": {
+        "archive_path": {
+          "type": "string",
+          "pattern": "^Contents/VC/Redist/MSVC/14\\.44\\.35112/x64/Microsoft\\.VC143\\.CRT/[A-Za-z0-9_]+\\.dll$"
+        },
+        "cache_path": {
+          "type": "string",
+          "pattern": "^llama/[A-Za-z0-9_]+\\.dll$"
+        },
+        "install_path": {
+          "type": "string",
+          "pattern": "^runtime/llama/[A-Za-z0-9_]+\\.dll$"
+        },
+        "size_bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "nativeDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "source_package",
+        "license",
+        "signer_subject_contains",
+        "files"
+      ],
+      "properties": {
+        "id": { "const": "microsoft-vc143-crt-x64-app-local" },
+        "version": { "const": "14.44.35211.0" },
+        "source_package": { "$ref": "#/$defs/download" },
+        "license": { "$ref": "#/$defs/nativeLicense" },
+        "signer_subject_contains": {
+          "const": "Microsoft Windows Software Compatibility Publisher"
+        },
+        "files": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/nativeFile" }
+        }
+      }
+    },
+    "licenseAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx", "url", "relative_path", "size_bytes", "sha256"],
+      "properties": {
+        "spdx": { "enum": ["MIT", "Apache-2.0"] },
+        "url": { "type": "string", "pattern": "^https://" },
+        "relative_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?![A-Za-z]:)(?![/\\\\])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+        },
+        "size_bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "repository",
+        "tag",
+        "revision",
+        "license",
+        "windows_archive",
+        "archive_include"
+      ],
+      "properties": {
+        "id": { "const": "llama.cpp" },
+        "repository": { "const": "https://github.com/ggml-org/llama.cpp.git" },
+        "tag": { "$ref": "#/$defs/nonempty" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "license": { "$ref": "#/$defs/license" },
+        "windows_archive": { "$ref": "#/$defs/download" },
+        "archive_include": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonempty" }
+        }
+      }
+    },
+    "upstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "revision", "license"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^https://huggingface.co/" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "license": { "$ref": "#/$defs/license" }
+      }
+    },
+    "generatedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relative_path",
+        "format",
+        "quantization",
+        "expected_size_bytes",
+        "sha256",
+        "verification_status"
+      ],
+      "properties": {
+        "relative_path": { "$ref": "#/$defs/nonempty" },
+        "format": { "const": "gguf" },
+        "quantization": { "enum": ["F16", "Q8_0"] },
+        "expected_size_bytes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimum", "maximum"],
+          "properties": {
+            "minimum": { "type": "integer", "minimum": 1 },
+            "maximum": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "verification_status": {
+          "enum": ["pending_first_build", "hash_locked", "quality_verified"]
+        }
+      }
+    },
+    "conversion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_revision",
+        "python_version",
+        "requirements_path",
+        "command",
+        "pooling",
+        "normalization",
+        "query_prefix",
+        "apply_query_prefix_to_documents"
+      ],
+      "properties": {
+        "tool_revision": { "$ref": "#/$defs/revision" },
+        "python_version": { "const": "3.12" },
+        "requirements_path": { "$ref": "#/$defs/nonempty" },
+        "command": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/nonempty" }
+        },
+        "pooling": { "enum": ["cls", "rank"] },
+        "normalization": { "enum": ["l2", "none"] },
+        "query_prefix": { "type": "string" },
+        "apply_query_prefix_to_documents": { "const": false }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint", "arguments"],
+      "properties": {
+        "endpoint": { "type": "string", "pattern": "^/v1/" },
+        "arguments": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/nonempty" }
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "task_type",
+        "upstream",
+        "distribution",
+        "source_files",
+        "artifact",
+        "conversion",
+        "server",
+        "quality_status"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonempty" },
+        "task_type": { "enum": ["embedding", "reranker"] },
+        "upstream": { "$ref": "#/$defs/upstream" },
+        "distribution": { "enum": ["build_from_source", "trusted_prebuilt"] },
+        "source_files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/download" }
+        },
+        "artifact": {
+          "oneOf": [
+            { "$ref": "#/$defs/download" },
+            { "$ref": "#/$defs/generatedArtifact" }
+          ]
+        },
+        "conversion": {
+          "oneOf": [
+            { "$ref": "#/$defs/conversion" },
+            { "type": "null" }
+          ]
+        },
+        "fallback_build": {
+          "oneOf": [
+            { "$ref": "#/$defs/fallbackBuild" },
+            { "type": "null" }
+          ]
+        },
+        "server": { "$ref": "#/$defs/server" },
+        "quality_status": {
+          "enum": ["pending", "verified"]
+        }
+      }
+    },
+    "fallbackBuild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_files",
+        "tool_revision",
+        "python_version",
+        "requirements_path",
+        "convert_command",
+        "quantize_command",
+        "artifact"
+      ],
+      "properties": {
+        "source_files": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/download" }
+        },
+        "tool_revision": { "$ref": "#/$defs/revision" },
+        "python_version": { "const": "3.12" },
+        "requirements_path": { "$ref": "#/$defs/nonempty" },
+        "convert_command": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/nonempty" }
+        },
+        "quantize_command": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/nonempty" }
+        },
+        "artifact": { "$ref": "#/$defs/generatedArtifact" }
+      }
+    }
+  }
+}

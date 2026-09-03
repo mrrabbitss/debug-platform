@@ -1,6 +1,6 @@
 # GW/AP 智能调试平台：架构、技术栈与迭代说明
 
-> 文档状态：2026-08-26，随仓库版本维护。
+> 文档状态：2026-09-03，随仓库版本维护。
 > 适用范围：当前 `debug-platform` 单体仓库，包括 Web 前端、后端 API、后台任务、VS Code 扩展、源码部署、便携部署和模型服务接入。
 
 ## 1. 项目定位
@@ -23,12 +23,17 @@
 flowchart TB
     User["工程师 / 管理员"] --> Web["Vue 3 Web 前端"]
     User --> VSCode["VS Code 扩展"]
+    User --> CLI["Claude Code / Codex CLI"]
+    Skill["gw-ap-debug Skill"] -.诊断编排.-> CLI
     Web --> API["FastAPI /api/v1"]
     VSCode --> API
+    CLI --> MCP["Streamable HTTP /mcp"]
 
     API --> Auth["鉴权、RBAC、案例权限、审计"]
     API --> Domain["案例 / 日志 / 知识治理 / 模型 / 报告服务"]
     API --> Jobs["数据库持久化任务 + ThreadPoolExecutor"]
+    MCP --> Auth
+    MCP --> Domain
 
     Jobs --> Parse["安全解压、文本识别、Parser Registry"]
     Jobs --> Diagnose["规则诊断、RAG、LLM 证据校验"]
@@ -58,6 +63,19 @@ flowchart TB
 - 大文件保存在文件系统，数据库保存路径、哈希、状态和结构化结果；
 - Qdrant 是可选向量镜像，关系库中的 Embedding 仍是可回退的数据源；
 - Docker Compose 将前端、后端、PostgreSQL 和 Qdrant 分为独立容器。
+
+方案 A 的 Skill + MCP 路径当前为 `IN_PROGRESS`。它复用同一后端领域服务、数据库、任务和
+Web 报告，不复制 backend runtime，也不通过全局开关改变网页行为。`host_cli` 运行中，规划、
+假设和最终综合由 Claude Code/Codex 当前会话模型完成；后端只执行解析、受案例权限约束的有界
+检索、方法/故障树/证据门禁、持久会话状态和不可变分析回写，该路径生成式模型调用必须为零。
+标准 MCP transport、主应用装配和当前 17 个业务工具已落地；Bearer/API Key/Personal Token
+解析、案例作用域、HostAgentSession、finalization 及新增 2 个 Markdown 知识路由工具均通过
+当前源码完整回归。真实 Codex CLI 已完成 Host 模型 Markdown 分类和 27/27 节点综合诊断，
+两条路径的后端生成式模型调用均为零。实际 HTTPS/令牌部署及 Claude Code 真机端到端仍待
+完成，因此组合部署路径尚未整体标为可用，但 Codex 当前源码能力已经验证。冻结的工具清单见
+[`workflow/mcp-tools.yaml`](../workflow/mcp-tools.yaml)，客户端部署见
+[Skill + MCP 部署](agent-skill-mcp-deployment.md)。原始归档继续通过 `/api/v1` multipart 上传，
+不进入 MCP JSON 或模型上下文。
 
 这种结构适合单机和小团队部署，开发和排错成本较低；如果未来需要多后端实例、高并发或跨部门共享，则应把任务执行、对象存储和向量索引进一步服务化。
 
@@ -141,6 +159,7 @@ debugplatform/
 ├─ backend/
 │  ├─ app/
 │  │  ├─ api/                 # REST 路由
+│  │  ├─ mcp/                 # Streamable HTTP transport 与类型化 MCP registry
 │  │  ├─ core/                # 配置、数据库、迁移、鉴权、通用工具
 │  │  ├─ migrations/          # Alembic 迁移
 │  │  ├─ seed_knowledge/      # 内置诊断知识
@@ -159,9 +178,12 @@ debugplatform/
 │  └─ package.json
 ├─ vscode-extension/          # VS Code 客户端
 ├─ deploy/windows-portable/   # 单进程便携启动器与随包说明
+├─ agent-skills/gw-ap-debug/  # Claude Code/Codex 共用的薄 Skill 标准源
+├─ .agents/skills/            # Codex 的非符号链接同步镜像
+├─ .claude/skills/            # Claude Code 的非符号链接同步镜像
 ├─ scripts/                   # 源码启动、体检、构建、冒烟、备份和用户脚本
 ├─ docs/                      # 专题文档
-├─ workflow/                  # Agent allowlist 与配套 OpenAPI 合同
+├─ workflow/                  # REST allowlist、OpenAPI 与 MCP 工具合同
 ├─ models/                    # 本地模型，Git 忽略
 ├─ docker-compose.yml
 ├─ .env.example
@@ -425,7 +447,9 @@ erDiagram
 12. `0012` 后台任务幂等、租约、心跳、超时、资源和 dead-letter 字段；
 13. `0013` Chat 模型逐 Profile 加密代理配置；
 14. `0014` 持久化 LLM 日志规划、综合诊断规划和交互问答状态；
-15. `0015` GW/AP 日志来源设备/角色溯源，以及需人工审批的诊断与报告修订草稿。
+15. `0015` GW/AP 日志来源设备/角色溯源，以及需人工审批的诊断与报告修订草稿；
+16. `0016` 日志筛查命中与逐次位置证据；
+17. `0017` 持久 HostAgentSession、快照/CAS、预算、覆盖和工具回执。
 
 后端启动时会自动执行迁移。生产升级前仍应先备份，并禁止手工修改 `alembic_version`。
 
@@ -478,6 +502,16 @@ BM25 / 图多跳 / RRF / Embedding / 可选 Reranker
 分析快照、问答引用和报告
 ```
 
+方案 A 在同一确定性证据链上增加另一种推理所有者：CLI 先通过 Skill 调用 `/mcp` 建立
+持久 HostAgentSession，读取方法并在本地形成有界检查计划；证据工具先执行并生成
+`call_id` 与归一化 `accepted_arguments` 回执，CLI 再原样引用这些回执提交该轮结构化规划，
+最后提交诊断。后端校验
+`session_id`、乐观 `expected_version`、快照哈希、evidence allowlist 和故障树覆盖，通过后写入现有
+`AnalysisRun`，因此网页仍可显示同一分析和报告。MCP 连接断开不等于运行丢失；恢复必须读取
+持久 run，而不是依赖 transport session。当前 transport、17 工具、主应用装配、身份解析与
+Host 运行均已有实现和完整回归；Web 多 Markdown 路由、真实 Codex Host 分类及 Codex 合成
+案例综合诊断均已通过。当前主机未安装 Claude CLI，远程部署和真实 CLI 负路径仍是在研边界。
+
 ### 7.3 知识编辑与索引
 
 知识库支持：
@@ -496,6 +530,14 @@ BM25 / 图多跳 / RRF / Embedding / 可选 Reranker
 - 切换 Embedding 后异步重建全量向量。
 
 新建、上传、编辑和回滚均进入 `DRAFT`，经过 `IN_REVIEW` 后才能发布为 `ACTIVE`。
+
+一个或多个 Markdown 的智能归类使用单独的 `/api/v1/knowledge-routing/import` multipart
+入口。每个 `.md`/`.markdown` 都有独立 artifact、持久任务和知识文档，不进行跨文件合并。
+Web 由选择或激活的平台 Chat Profile 对脱敏、限长片段分类；CLI 的完整文件也先经 REST 上传，
+但分类由当前 Claude Code/Codex 会话模型通过 `debug_get_knowledge_routing_context` 和
+`debug_apply_knowledge_routing` 完成，后端在该 Host 路径不调用生成式模型。两条路径都只能
+选择当前活动叶子分类，均只产生 `active=false` 的 `DRAFT`；自动提交审核和自动发布被禁止。
+Host 写回使用 lock version、正文 SHA-256 和分类 allowlist 阻止陈旧或越权决定。
 每次内容版本保存不可变快照和 SHA-256；数据库使用 `lock_version` 拒绝并发覆盖。
 编辑已发布文档时先切换为不可检索草稿，再提交新的分块/向量。
 
@@ -734,6 +776,8 @@ Docker Compose 包含：
 | 2026-08-14 | 本次修改 | 原生诊断工具 Agent 与可观测性 | Thinking 三态、两至二十轮只读工具调用、故障树逐节点覆盖与结论门禁、全量持久化筛查证据检索、回退诊断、文档/方法可视化、日志级别文案和精确源行跳转 |
 | 2026-08-21 | 本次修改 | Agent Context 与可度量运行时 | token-aware Context Governor、临时 Spill Handle、供应商实际 usage/工具输出预算、真实依赖深度、36 场景 Golden 分布契约和前端上下文可视化 |
 | 2026-08-26 | 本次修改 | Win11 便携发布与模型隔离 | 单 ZIP 同源启动、外置数据/配置、解释器与文件完整性门禁、真实便携冒烟；删除会污染主 `.venv` 的模型安装链 |
+| 2026-09-02 | 本次修改 | Skill + MCP 方案 A 基础 | 共享薄 Skill、Streamable HTTP transport、15 工具业务 registry 与主应用装配、身份解析、持久 HostAgentSession 和零后端生成式模型 finalization 已通过本地聚焦测试；真实远程 Claude Code/Codex E2E 尚待完成，状态保持 `IN_PROGRESS` |
+| 2026-09-03 | 本次修改 | Web/CLI Markdown 知识智能归类 | 一次上传 1–20 个 Markdown、每文件独立任务与 DRAFT；Web 使用平台 Chat Profile，CLI 使用当前 Host 模型和新增 2 个 MCP 工具，按活动叶子分类、lock version、正文哈希与人工发布门禁写回；Full 的 330 项后端回归、5 个浏览器 E2E 与真实 Codex 路由/综合诊断均已通过 |
 
 这段迭代体现了项目从“功能原型”逐步转向“可在多台 Win11 电脑复现、可诊断、可回滚、可审计”的工程化过程。
 

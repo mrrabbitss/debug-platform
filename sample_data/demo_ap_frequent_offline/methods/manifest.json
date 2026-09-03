@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "bundle_version": "ap-frequent-offline-host-methods-v1",
+  "dataset_version": "ap-frequent-offline-glm52-v1",
+  "scope": "bundled_demo_case_only",
+  "expected_fault_tree_items": 27,
+  "required_root_labels": [
+    "场景1",
+    "场景2",
+    "场景3"
+  ],
+  "documents": [
+    {
+      "id": "DEMO-HOST-METHOD-LOG-ANALYSIS-V1",
+      "filename": "methods/ap-offline-log-analysis.md",
+      "title": "AP 频繁离线演示日志分析（公开合成）",
+      "source_type": "analysis_skill",
+      "role": "LOG_ANALYSIS_METHOD",
+      "version": 1,
+      "device_type": "GENERAL",
+      "module": "demo.ap_frequent_offline",
+      "sha256": "d999b853c7b142d796d2361f519bdefeb168293881a4ce3390abee2147159a40"
+    },
+    {
+      "id": "DEMO-HOST-METHOD-FAULT-TREE-V1",
+      "filename": "methods/ap-offline-fault-tree.md",
+      "title": "AP 频繁离线演示故障树（公开合成）",
+      "source_type": "fault_tree",
+      "role": "FAULT_TREE",
+      "version": 1,
+      "device_type": "GENERAL",
+      "module": "demo.ap_frequent_offline",
+      "sha256": "e3793d888d0059ffbbfeb297612a9f31ee3dcf99d7299677bf3b57b9b0f04099"
+    }
+  ]
+}

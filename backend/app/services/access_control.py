@@ -159,6 +159,41 @@ def case_permission(db: Session, case_id: str, principal: dict[str, str]) -> str
     return membership.permission if membership else None
 
 
+def authorize_case_action(
+    db: Session,
+    case_id: str,
+    principal: dict[str, str],
+    *,
+    write: bool = False,
+    owner_only: bool = False,
+) -> Case:
+    """Authorize a service/tool action whose case id is not encoded in a URL.
+
+    REST authorization can derive the case from the request path. MCP carries the
+    case id inside tool arguments, so every case-scoped tool must call this helper
+    before reading or mutating domain state.
+    """
+
+    case = db.get(Case, case_id)
+    if not case:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Case not found")
+    permission = case_permission(db, case_id, principal)
+    if not permission:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "No access to this case")
+    role = principal.get("role", "VIEWER")
+    if write and (role == "VIEWER" or permission == "VIEWER"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Case permission is read-only",
+        )
+    if owner_only and permission != "OWNER":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the case owner may perform this action",
+        )
+    return case
+
+
 def accessible_case_clause(user_id: str):
     membership_case_ids = select(CaseMember.case_id).where(CaseMember.user_id == user_id)
     return or_(

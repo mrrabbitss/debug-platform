@@ -1,0 +1,196 @@
+schema_version: "1.0"
+name: gw-ap-debug-mcp
+version: "0.2.0"
+status: IN_PROGRESS
+description: >-
+  Stable MVP contract for Claude Code and Codex host reasoning over the Debug
+  Platform evidence, validation, persistence, and governed Markdown-routing plane.
+
+transport:
+  protocol: mcp
+  type: streamable_http
+  path: /mcp
+  authentication: bearer
+  large_file_upload: /api/v1/cases/{case_id}/artifacts
+  knowledge_markdown_upload: /api/v1/knowledge-routing/import
+
+knowledge_routing:
+  authorization: admin
+  rest_import: /api/v1/knowledge-routing/import
+  accepted_extensions:
+    - .md
+    - .markdown
+  maximum_files_per_request: 20
+  one_document_per_file: true
+  output_review_status: DRAFT
+  automatic_publish: forbidden
+  web:
+    reasoning_owner: platform_llm
+    model_source: selected_or_active_platform_chat_profile
+    model_input: bounded_masked_markdown_excerpt
+  cli:
+    reasoning_owner: host_cli
+    upload_plane: rest_multipart
+    context_tool: debug_get_knowledge_routing_context
+    apply_tool: debug_apply_knowledge_routing
+    backend_generative_llm_calls: forbidden
+
+reasoning:
+  owner: host_cli
+  supported_hosts:
+    - claude_code
+    - codex
+  backend_generative_llm_calls: forbidden
+  backend_responsibilities:
+    - parse_and_index
+    - bounded_retrieval
+    - evidence_allowlist
+    - method_and_fault_tree_coverage
+    - run_state_and_budget_validation
+    - immutable_analysis_persistence
+    - report_rendering
+  invariants:
+    - The active CLI session model performs planning, hypothesis formation, and final synthesis.
+    - Host runs never inherit or change the Web platform model configuration.
+    - Web REST behavior under /api/v1 remains independent from host_cli runs.
+    - Raw archives and complete logs use the REST multipart data plane, never MCP JSON.
+    - Model output is untrusted until schema, evidence, snapshot, and state-version validation pass.
+    - Method and evidence calls execute before the planning round that cites them.
+    - Planning tool_calls reuse each server call_id and the complete normalized accepted_arguments from its receipt.
+    - Each Markdown file becomes an independent inactive DRAFT and is never auto-published.
+    - Web routing uses a selected or active platform Chat profile; host_cli routing uses the active Claude Code or Codex session model.
+    - The host_cli path receives only bounded masked Markdown excerpts through MCP and makes zero backend generative model calls.
+    - Routing decisions may select only an active leaf category and are applied with document lock-version and content-hash validation.
+
+authorization:
+  principal_source: bearer_token
+  default_access: deny
+  case_membership_required: case_bound_tools
+  case_membership_exceptions:
+    - debug_status
+    - debug_list_cases
+  admin_only_non_case_tools:
+    - debug_get_knowledge_routing_context
+    - debug_apply_knowledge_routing
+  run_scope_is_pinned_to_case: true
+  run_receipt_writes_require_active_diagnosis_intent: true
+  domain_output_writes_require_explicit_user_intent: true
+
+access_semantics:
+  read: Does not mutate durable platform or host-run state.
+  write: Mutates durable host-run state, an AnalysisRun, or a Report.
+  receipt_note: >-
+    Method and evidence tools read domain data but append CAS-protected tool
+    receipts, evidence allowlist entries, or coverage to the durable host run;
+    therefore their MCP access classification is write.
+
+implementation_status:
+  contract: frozen_for_mvp
+  streamable_http_transport: focused_tests_passed
+  host_session_and_finalization: focused_tests_passed
+  business_tool_registry: focused_tests_passed
+  knowledge_routing_tools: full_and_real_codex_cli_passed
+  current_source_full_validation: passed_20260903_013142
+  web_multi_markdown_e2e: passed
+  claude_code_e2e: unavailable_cli_not_installed_on_validation_host
+  codex_cli_e2e: local_current_source_full_case_and_knowledge_routing_passed
+  opencode_e2e: not_run_by_user_request
+
+tools:
+  - name: debug_status
+    access: read
+    case_scope: none
+    purpose: Report MCP readiness, version, capabilities, and host_cli ownership guarantees.
+
+  - name: debug_list_cases
+    access: read
+    case_scope: principal_visible_cases
+    purpose: List bounded case summaries visible to the authenticated principal.
+
+  - name: debug_get_case_context
+    access: read
+    case_scope: required_case
+    purpose: Read artifacts, parse state, active generations, and analysis summaries for one case.
+
+  - name: debug_begin_host_diagnosis
+    access: write
+    write_effect: run_state
+    case_scope: required_case
+    purpose: Create a durable host_cli run and pin case, parse, and method snapshots.
+
+  - name: debug_get_host_run
+    access: read
+    case_scope: session_case
+    purpose: Read run state, optimistic version, budgets, coverage, evidence allowlist, and validation feedback.
+
+  - name: debug_list_diagnostic_documents
+    access: write
+    write_effect: run_state_receipt
+    case_scope: session_case
+    purpose: List diagnostic method documents pinned to the host run.
+
+  - name: debug_read_diagnostic_documents
+    access: write
+    write_effect: run_state_receipt
+    case_scope: session_case
+    purpose: Read bounded method content by IDs returned for the host run.
+
+  - name: debug_search_knowledge
+    access: write
+    write_effect: run_state_receipt
+    case_scope: session_case
+    purpose: Search approved device and diagnostic knowledge under the run context.
+
+  - name: debug_search_log
+    access: write
+    write_effect: run_state_receipt
+    case_scope: session_case
+    purpose: Search parsed GW/AP events and bounded source ranges while preserving artifact provenance.
+
+  - name: debug_get_evidence
+    access: write
+    write_effect: run_state_receipt
+    case_scope: session_case
+    purpose: Retrieve exact evidence already admitted to the current run.
+
+  - name: debug_submit_planning_round
+    access: write
+    write_effect: run_state
+    case_scope: session_case
+    purpose: Validate and persist one structured host-model planning round against already persisted tool receipts using optimistic state versioning.
+
+  - name: debug_finalize_diagnosis
+    access: write
+    write_effect: analysis
+    case_scope: session_case
+    purpose: Validate the final diagnosis and atomically persist an immutable AnalysisRun.
+
+  - name: debug_cancel_host_run
+    access: write
+    write_effect: run_state
+    case_scope: session_case
+    purpose: Cancel an active host run with a bounded factual reason.
+
+  - name: debug_generate_report
+    access: write
+    write_effect: report
+    case_scope: analysis_case
+    purpose: Generate and persist a report from an already persisted analysis without another reasoning pass.
+
+  - name: debug_open_ui
+    access: read
+    case_scope: case_or_analysis
+    purpose: Return the authorized Web UI URL for a case or analysis.
+
+  - name: debug_get_knowledge_routing_context
+    access: read
+    case_scope: global_knowledge_drafts
+    authorization: admin
+    purpose: Return the active leaf taxonomy plus bounded masked excerpts and optimistic concurrency fields for selected Markdown drafts; the host CLI model performs classification.
+
+  - name: debug_apply_knowledge_routing
+    access: write
+    write_effect: knowledge_draft_routing
+    case_scope: global_knowledge_drafts
+    authorization: admin
+    purpose: Atomically apply allowlisted host-model category decisions to independent inactive DRAFT documents without publishing them.

@@ -15,6 +15,7 @@ from app.services import (
     diagnosis,
     diagnostic_methods,
     diagnostic_planning,
+    diagnostic_planning_agent,
     diagnostic_planning_contract,
     diagnostic_tools,
     log_triage,
@@ -22,8 +23,12 @@ from app.services import (
 )
 from app.services.diagnosis import _evidence_for_persistence
 from app.services.agent_trace_runtime import create_live_agent_run
+from app.services.agent_runtime import ContextWindowPolicy, EvidenceSpillStore
 from app.services.agentic.tools import ToolContext, ToolPermission
-from app.services.diagnostic_agent_budget import DiagnosticAgentBudget
+from app.services.diagnostic_agent_budget import (
+    DiagnosticAgentBudget,
+    DiagnosticAgentBudgetTracker,
+)
 from app.services.diagnostic_methods import (
     DiagnosticMethodDocument,
     compile_diagnostic_patterns,
@@ -110,6 +115,135 @@ def test_diagnostic_tool_registry_reads_methods_and_searches_log_evidence() -> N
             tool_name="search_log",
             arguments={"keywords": ["offline"], "method_document_ids": ["DOC-unknown"]},
         )
+
+
+@pytest.mark.parametrize("search_terms, expected_tool_names", [
+    (["Heartbeat timeout"], ["search_log", "get_evidence"]),
+    (["marker-not-present"], ["search_log"]),
+    (
+        ["Heartbeat timeout", "missing-one", "missing-two", "missing-three"],
+        ["search_log", "get_evidence", "search_log", "search_log", "search_log"],
+    ),
+])
+def test_model_log_search_hydrates_only_nonempty_evidence(
+    tmp_path: Path,
+    search_terms: list[str],
+    expected_tool_names: list[str],
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / f'hydration-{len(search_terms)}.db'}"
+    )
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    method = _method(
+        "## 日志关键词\n- `Heartbeat timeout`", document_id="DOC-hydrate",
+    )
+    patterns = compile_diagnostic_patterns([method])
+    case = Case(id="CASE-hydrate", title="AP频繁离线", device_type="AP")
+    with factory() as db:
+        db.add(case)
+        run = create_live_agent_run(
+            db,
+            operation="comprehensive_diagnosis",
+            case_id=case.id,
+            resource_type="analysis",
+            resource_id="RUN-hydrate",
+            input_summary={"case_id": case.id},
+        )
+        db.commit()
+    environment = diagnostic_tools.DiagnosticToolEnvironment(
+        case=case,
+        methods=[method],
+        patterns=patterns,
+        evidence=[{
+            "evidence_id": "LEM-hydrate",
+            "source_type": "log_triage_match",
+            "artifact_id": "ART-hydrate",
+            "source_file": "AP-demo.txt",
+            "line_start": 42,
+            "line_end": 42,
+            "pattern_id": patterns[0].id,
+            "content": "Heartbeat timeout; AP offline",
+            "score": 0.9,
+        }],
+    )
+    registry = diagnostic_tools.build_diagnostic_tool_registry(environment)
+    planning_round = diagnostic_planning_contract.PlanningRound.model_validate({
+        "tool_calls": [
+            {
+                "call_id": (
+                    "model-log-search" if index == 0
+                    else f"model-log-search-{index + 1}"
+                ),
+                "tool_name": "search_log",
+                "arguments": {
+                    "keywords": [search_term],
+                    "method_document_ids": [method.id],
+                    "top_k": 20,
+                },
+                "method_document_ids": [method.id],
+                "rationale": "Verify the AP offline evidence",
+            }
+            for index, search_term in enumerate(search_terms)
+        ],
+    })
+    budget = DiagnosticAgentBudget()
+    tracker = DiagnosticAgentBudgetTracker(budget)
+    observations: list[dict] = []
+    executed: list[dict] = []
+    rendered, reason, new_ids = (
+        diagnostic_planning_agent._execute_planned_tool_calls(
+            _JobContext(),
+            planning_round=planning_round,
+            round_number=1,
+            budget=budget,
+            budget_tracker=tracker,
+            prior_tool_calls={},
+            coverage={},
+            tool_registry=registry,
+            tool_context=ToolContext(role="ENGINEER", case_id=case.id),
+            seen_queries=set(),
+            supplemental_results=[],
+            observations=observations,
+            executed_tool_calls=executed,
+            session_factory=factory,
+            agent_run_id=run.id,
+        )
+    )
+
+    assert reason is None
+    assert [item["tool_name"] for item in rendered] == expected_tool_names
+    assert rendered[0]["invoked_by"] == "MODEL"
+    assert tracker.tool_calls == len(expected_tool_names)
+    if "get_evidence" in expected_tool_names:
+        hydration = rendered[1]
+        assert hydration["invoked_by"] == "POLICY_EVIDENCE_HYDRATION"
+        assert hydration["hydrated_from_call_id"] == "model-log-search"
+        assert hydration["evidence_ids"] == ["LEM-hydrate"]
+        assert new_ids == {"LEM-hydrate"}
+        assert any(item["tool_name"] == "get_evidence" for item in observations)
+        assert {
+            item["call_id"] for item in rendered if item["invoked_by"] == "MODEL"
+        } == {
+            "model-log-search",
+            *(
+                f"model-log-search-{index + 1}"
+                for index in range(1, len(search_terms))
+            ),
+        }
+    else:
+        assert new_ids == set()
+        assert all(item["tool_name"] != "get_evidence" for item in executed)
+    with factory() as db:
+        traces = list(db.scalars(
+            select(AgentTraceEvent)
+            .where(AgentTraceEvent.run_id == run.id)
+            .order_by(AgentTraceEvent.sequence)
+        ).all())
+    assert [item.tool_name for item in traces[-len(expected_tool_names):]] == (
+        expected_tool_names
+    )
+    engine.dispose()
 
 
 def test_method_compiler_extracts_table_inline_and_template_patterns() -> None:
@@ -654,7 +788,7 @@ def test_llm_log_plan_corrects_invalid_first_response_and_aggregates_usage() -> 
                 "selected_pattern_ids": [
                     "DPAT-unknown" if call_number == 1 else patterns[0].id
                 ],
-                "additional_keywords": ["offline"],
+                "additional_keywords": ["TestLinkOK failed"],
                 "screening_steps": ["scan"],
             }
 
@@ -674,6 +808,53 @@ def test_llm_log_plan_corrects_invalid_first_response_and_aggregates_usage() -> 
         "total_tokens": 30,
     }
     assert metadata["duration_ms"] == 11
+
+
+def test_llm_log_plan_retries_an_empty_relevance_selection() -> None:
+    documents = [_method(
+        "## 日志关键词\n- `Heartbeat timeout`", document_id="DOC-empty-retry",
+    )]
+    patterns = compile_diagnostic_patterns(documents)
+    case = Case(id="CASE-empty-retry", title="AP频繁离线", device_type="AP")
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+        last_usage: dict[str, int] = {}
+        last_duration_ms = 1
+
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def generate_json(self, _system, user, **_kwargs):
+            self.calls.append(json_loads(user, {}))
+            self.last_usage = {"prompt_tokens": 10, "completion_tokens": 2}
+            if len(self.calls) == 1:
+                return {
+                    "selected_pattern_ids": [],
+                    "additional_keywords": ["offline", "ERROR"],
+                    "screening_steps": ["scan"],
+                }
+            return {
+                "selected_pattern_ids": [patterns[0].id],
+                "additional_keywords": [],
+                "screening_steps": ["scan"],
+            }
+
+    provider = _Provider()
+    plan, metadata = asyncio.run(log_triage._plan_with_model(
+        case, documents, patterns, provider=provider,
+    ))
+
+    assert len(provider.calls) == 2
+    assert "at least one known pattern" in (
+        provider.calls[1]["correction"]["previous_error"]
+    )
+    assert plan["selected_pattern_ids"] == [patterns[0].id]
+    assert plan["planning_attempts"] == 2
+    assert metadata["fallback"] is False
+    assert metadata["retry_count"] == 1
 
 
 def test_llm_log_plan_bounds_and_deduplicates_selected_searchers() -> None:
@@ -723,11 +904,12 @@ def test_llm_log_plan_bounds_and_deduplicates_selected_searchers() -> None:
 def test_glm_shaped_log_plan_is_normalized_before_validation(monkeypatch) -> None:
     documents = [_method(
         "## 日志关键词\n- `SyntheticTopo, apInst=[X] Status=[0]`\n"
-        "- `SyntheticLeave APInst offline:%u`",
+        "- `SyntheticLeave APInst offline:%u`\n- `FAILED`",
         document_id="DOC-glm",
     )]
     patterns = compile_diagnostic_patterns(documents)
     selected = next(item for item in patterns if item.text.startswith("SyntheticTopo,"))
+    broad = next(item for item in patterns if item.text == "FAILED")
     case = Case(id="CASE-glm", title="AP频繁离线", device_type="AP")
 
     class _Provider:
@@ -740,8 +922,10 @@ def test_glm_shaped_log_plan_is_normalized_before_validation(monkeypatch) -> Non
         async def generate_json(self, *args, **kwargs):
             return {
                 "read_document_ids": ["DOC-glm"],
-                "selected_pattern_ids": [selected.id],
-                "additional_keywords": ["offline", "Status=[0]"],
+                "selected_pattern_ids": [broad.id, selected.id],
+                "additional_keywords": [
+                    "offline", "FAILED", "Start", "Status=[0]", "UdmProc",
+                ],
                 "plan": "检查拓扑状态、心跳和离线事件。",
             }
 
@@ -750,9 +934,12 @@ def test_glm_shaped_log_plan_is_normalized_before_validation(monkeypatch) -> Non
 
     assert plan["planner_mode"] == "llm"
     assert plan["selected_pattern_ids"] == [selected.id]
+    assert plan["selected_pattern_candidate_count"] == 2
+    assert plan["selected_pattern_rejected_count"] == 1
     assert [item["keyword"] for item in plan["additional_keywords"]] == [
-        "offline", "Status=[0]",
+        "Status=[0]", "UdmProc",
     ]
+    assert plan["additional_keyword_rejected_count"] == 3
     assert plan["screening_steps"] == ["检查拓扑状态、心跳和离线事件。"]
     assert plan["rationale"] == "检查拓扑状态、心跳和离线事件。"
     assert metadata["usage"]["total_tokens"] == 30974
@@ -895,6 +1082,29 @@ def test_analysis_snapshot_omits_method_body_but_keeps_provenance() -> None:
     assert "content" not in persisted[0]
     assert persisted[0]["content_sha256"] == "d" * 64
     assert persisted[1]["content"] == "runtime evidence remains available to the case"
+
+
+def test_analysis_snapshot_keeps_first_rich_provenance_for_duplicate_id() -> None:
+    persisted = _evidence_for_persistence([{
+        "evidence_id": "LDE-local",
+        "source_type": "local_derived_evidence",
+        "source_file": "GW_demo.txt",
+        "line_start": 21,
+        "metadata": {"comparison_complete": True},
+    }, {
+        "evidence_id": "LDE-local",
+        "source_type": "local_derived_evidence",
+        "title": "LDE-local",
+        "metadata": {"comparison_complete": True},
+    }])
+
+    assert persisted == [{
+        "evidence_id": "LDE-local",
+        "source_type": "local_derived_evidence",
+        "source_file": "GW_demo.txt",
+        "line_start": 21,
+        "metadata": {"comparison_complete": True},
+    }]
 
 
 def test_final_synthesis_receives_complete_method_body_but_truncates_log_items() -> None:
@@ -1057,7 +1267,21 @@ def test_comprehensive_planner_records_usage_when_round_validation_fails(
         last_usage = {"prompt_tokens": 31, "completion_tokens": 9, "total_tokens": 40}
 
         async def generate_json(self, *args, **kwargs):
-            return {"read_document_ids": [], "checks": "not-a-list"}
+            self.last_usage = {
+                "prompt_tokens": 31,
+                "completion_tokens": 9,
+                "total_tokens": 40,
+            }
+            return {
+                "read_document_ids": [],
+                "checks": "not-a-list",
+                "tool_calls": [{
+                    "call_id": "unsafe-unknown-tool",
+                    "tool_name": "write_device_config",
+                    "arguments": {},
+                    "rationale": "This unallowlisted tool must never be repaired or run",
+                }],
+            }
 
     monkeypatch.setattr(diagnostic_planning, "get_llm_provider", lambda: _Provider())
     with factory() as db:
@@ -1109,6 +1333,117 @@ def test_comprehensive_planner_records_usage_when_round_validation_fails(
     assert failed.output_tokens == 27
     assert failed.retry_count == 2
     assert persisted.total_tokens == 120
+    engine.dispose()
+
+
+def test_pre_request_failure_does_not_reuse_previous_round_usage(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'planning-pre-request.db'}")
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    case = Case(
+        id="CASE-pre-request-failure",
+        title="Pre-request failure",
+        device_type="AP",
+        model_egress_approved=True,
+    )
+    with factory() as db:
+        db.add(case)
+        run = create_live_agent_run(
+            db,
+            operation="comprehensive_diagnosis",
+            case_id=case.id,
+            resource_type="analysis",
+            resource_id="RUN-pre-request-failure",
+            input_summary={"case_id": case.id},
+        )
+        db.commit()
+
+    class _Provider:
+        provider_id = "openai_compatible"
+        model_name = "glm-5.2"
+        is_mock = False
+        last_usage: dict[str, int] = {}
+        last_duration_ms = 0
+        last_validation_retry_count = 0
+        last_finish_reason = None
+
+    class _Registry:
+        def __init__(self) -> None:
+            self.manifest_calls = 0
+
+        def manifest(self, *, role: str) -> list[dict]:
+            assert role == "ENGINEER"
+            self.manifest_calls += 1
+            if self.manifest_calls == 2:
+                raise ValueError("Failure before the second model request")
+            return []
+
+    provider = _Provider()
+    registry = _Registry()
+    request_calls = 0
+
+    async def request_round(*args, **kwargs):
+        nonlocal request_calls
+        request_calls += 1
+        provider.last_usage = {
+            "prompt_tokens": 31,
+            "completion_tokens": 9,
+            "total_tokens": 40,
+        }
+        return diagnostic_planning_contract.PlanningRound(
+            continue_analysis=True,
+            stop_reason="MORE_EVIDENCE_NEEDED",
+        )
+
+    result = asyncio.run(diagnostic_planning_agent.execute_llm_planning_rounds(
+        _JobContext(),
+        provider=provider,
+        case=case,
+        methods=[],
+        triage_evidence=[],
+        baseline_search={"summary": {}, "results": []},
+        agent_run_id=run.id,
+        session_factory=factory,
+        tool_registry=registry,
+        tool_context=ToolContext(role="ENGINEER", case_id=case.id),
+        document_observation={},
+        fault_tree_items=[],
+        diagnostic_patterns=[],
+        request_round=request_round,
+        budget=DiagnosticAgentBudget(
+            max_rounds=2,
+            min_rounds=2,
+            max_stagnant_rounds=3,
+        ),
+        context_policy=ContextWindowPolicy(),
+        spill_store=EvidenceSpillStore(),
+    ))
+    failure = result[5]
+    budget_snapshot = result[7]
+
+    assert registry.manifest_calls == 2
+    assert request_calls == 1
+    assert failure is not None
+    assert budget_snapshot["usage"]["input_tokens"] == 31
+    assert budget_snapshot["usage"]["output_tokens"] == 9
+    assert budget_snapshot["usage"]["total_tokens"] == 40
+    with factory() as db:
+        persisted = db.get(AgentRun, run.id)
+        traces = list(db.scalars(
+            select(AgentTraceEvent)
+            .where(AgentTraceEvent.run_id == run.id)
+            .order_by(AgentTraceEvent.sequence)
+        ).all())
+    planning_traces = [
+        item for item in traces if item.stage.startswith("llm_planning_round_")
+    ]
+    assert persisted.total_tokens == 40
+    assert [
+        (item.status, item.input_tokens, item.output_tokens)
+        for item in planning_traces
+    ] == [("COMPLETED", 31, 9), ("FAILED", 0, 0)]
     engine.dispose()
 
 
@@ -1165,6 +1500,12 @@ def test_comprehensive_planner_normalizes_glm_rich_objects_and_retries(
                 "stop_reason": "ENOUGH_EVIDENCE",
             }
             if call_number == 1:
+                result["tool_calls"] = [{
+                    "call_id": "unknown-tool-shape",
+                    "tool_name": "unknown_tool",
+                    "arguments": {},
+                    "rationale": "Force one bounded correction for an unsafe shape",
+                }]
                 return result
             result["method_assessments"] = [{
                 "document_id": "DOC-glm-tree",

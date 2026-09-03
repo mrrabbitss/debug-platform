@@ -148,6 +148,28 @@ scripts\build_windows_portable.bat
 
 ## 4. 源码开发运行
 
+### codeagent Skill 一键入口
+
+使用兼容 Claude Code 接口的 `codeagent` 时，双击仓库根目录
+[start_codeagent.bat](start_codeagent.bat)。它会发现或记住客户端路径、准备本地后端、验证
+REST/MCP，并用当前仓库 Skill 打开 CLI；无需每次手输令牌或安装用户级 MCP 配置。
+支持自选安装路径，不改变客户端模型登录或网页端 Chat 配置。
+
+新电脑安装 Git、Python 3.11+ 并登录 codeagent 后，在 PowerShell 中执行：
+
+```powershell
+git clone --branch WebSkillMcp --single-branch https://github.com/mrrabbitss/debug-platform.git
+cd debug-platform
+.\start_codeagent.bat
+```
+
+本地后端需要 Python 3.11+，该入口不要求 Node/npm；只连接已部署服务器时无需本地 Python。
+`start_codeagent.bat -Check` 可在不启动 CLI 模型的情况下检查连接。实际魔改客户端仍需确认
+支持会话级 MCP 参数；完整说明与验证边界见
+[codeagent 最短启动流程](docs/agent-skill-mcp-deployment.md#codeagent-最短启动流程windows-11-源码)。
+
+### 网页开发环境
+
 要求：Python 3.11+、Node.js 20.19+ 或 22.12+。Python、Node.js 和 npm 需要加入 `PATH`。
 
 ### Windows

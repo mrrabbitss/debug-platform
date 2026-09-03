@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from app.core.utils import json_dumps
 from app.models import Case
@@ -15,12 +15,20 @@ from app.services.diagnostic_methods import (
     method_prompt_bundle,
 )
 from app.services.llm import LLMError
+from app.services.log_triage_keyword_policy import (
+    filter_additional_keyword_proposals,
+    is_precise_additional_keyword,
+)
+from app.services.log_triage_plan_contract import (
+    LogTriagePlan,
+    normalize_log_triage_plan,
+)
 from app.services.log_triage_plan_tools import attach_log_triage_tool_calls
 from app.services.planning_diagnostics import planning_failure_details
 from app.services.rag import tokenize
 
 
-TRIAGE_PROMPT_VERSION = "log-triage-tool-planner-v3"
+TRIAGE_PROMPT_VERSION = "log-triage-tool-planner-v5-precise-selection"
 MAX_LOG_PLAN_ATTEMPTS = 2
 MAX_LLM_SELECTED_PATTERNS = 60
 MAX_LLM_ADDITIONAL_KEYWORDS = 30
@@ -38,61 +46,6 @@ _ISSUE_PATTERN_HINTS: dict[str, tuple[str, ...]] = {
     "拓扑": ("topo", "neighborlist", "parent apinst"),
     "认证": ("auth", "handshake", "eap", "credential"),
 }
-
-
-class _KeywordProposal(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    keyword: Annotated[str, Field(min_length=2, max_length=256)]
-    reason: Annotated[str, Field(min_length=1, max_length=1000)]
-    relevance: float = Field(default=0.8, ge=0.0, le=1.0)
-
-
-class _LogTriagePlan(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    read_document_ids: list[str] = Field(default_factory=list, max_length=5000)
-    selected_pattern_ids: list[str] = Field(default_factory=list, max_length=5000)
-    additional_keywords: list[_KeywordProposal] = Field(default_factory=list, max_length=500)
-    hypotheses: list[str] = Field(default_factory=list, max_length=100)
-    screening_steps: list[str] = Field(default_factory=list, max_length=200)
-    missing_information: list[str] = Field(default_factory=list, max_length=100)
-    stop_conditions: list[str] = Field(default_factory=list, max_length=100)
-    rationale: str = Field(default="", max_length=20_000)
-
-
-def _normalize_log_triage_plan(raw: Any) -> dict[str, Any]:
-    """Accept common JSON-mode variations without weakening evidence gates."""
-    if not isinstance(raw, dict):
-        return raw
-    # Some OpenAI-compatible models interpret ``schema_name`` as a requested
-    # root property. Unwrap that presentation-only envelope while keeping the
-    # same Pydantic and evidence-ID validation below.
-    wrapped = raw.get("log_triage_plan")
-    if len(raw) == 1 and isinstance(wrapped, dict):
-        raw = wrapped
-    normalized = dict(raw)
-    rationale = normalized.get("rationale")
-    legacy_plan = normalized.get("plan")
-    if not isinstance(rationale, str) and isinstance(legacy_plan, str):
-        normalized["rationale"] = legacy_plan
-    if not normalized.get("screening_steps") and isinstance(legacy_plan, str):
-        normalized["screening_steps"] = [legacy_plan]
-
-    proposals: list[Any] = []
-    for item in normalized.get("additional_keywords") or []:
-        if isinstance(item, str):
-            keyword = item.strip()
-            if keyword:
-                proposals.append({
-                    "keyword": keyword,
-                    "reason": "模型根据案例现象与方法文档补充的字面量关键词",
-                    "relevance": 0.8,
-                })
-        else:
-            proposals.append(item)
-    normalized["additional_keywords"] = proposals
-    return normalized
 
 
 def _merge_usage(total: dict[str, int], usage: dict[str, Any]) -> None:
@@ -163,6 +116,12 @@ def deterministic_plan(
         if score > 0:
             scored.append((score, pattern))
     scored.sort(key=lambda item: (-item[0], item[1].id))
+    precise_patterns = [
+        pattern
+        for _, pattern in scored
+        if is_precise_additional_keyword(pattern.text)
+    ]
+    selected_patterns = precise_patterns[:MAX_LLM_SELECTED_PATTERNS]
     identifiers = list(dict.fromkeys(
         item
         for item in _IDENTIFIER.findall(issue)
@@ -170,9 +129,9 @@ def deterministic_plan(
     ))[:30]
     plan = {
         "read_document_ids": [document.id for document in documents],
-        "selected_pattern_ids": [
-            pattern.id for _, pattern in scored[:MAX_LLM_SELECTED_PATTERNS]
-        ],
+        "selected_pattern_ids": [pattern.id for pattern in selected_patterns],
+        "selected_pattern_candidate_count": len(scored),
+        "selected_pattern_rejected_count": len(scored) - len(precise_patterns),
         "additional_keywords": [
             {
                 "keyword": identifier,
@@ -192,9 +151,7 @@ def deterministic_plan(
         plan,
         documents,
         invoked_by="DETERMINISTIC_FALLBACK",
-        pattern_ids=[
-            pattern.id for _, pattern in scored[:MAX_LLM_SELECTED_PATTERNS]
-        ],
+        pattern_ids=[pattern.id for pattern in selected_patterns],
         keywords=identifiers,
     )
 
@@ -227,12 +184,15 @@ async def plan_with_model(
         "mandatory_method_documents": method_prompt_bundle(documents),
         "case_log_sources": artifact_sources or [],
         "compiled_patterns": [pattern.public_snapshot() for pattern in patterns],
-        "output_contract": _LogTriagePlan.model_json_schema(),
+        "output_contract": LogTriagePlan.model_json_schema(),
         "requirements": [
             "后端已通过只读文档工具完整读取 mandatory_method_documents；read_document_ids 会由工具轨迹证明并由后端写入，不要编造 ID",
             "选择与当前问题最相关的 compiled pattern ID；不得编造 pattern ID",
+            "必须至少选择一个有效 compiled pattern ID，或给出一个通过精确度校验的 additional_keyword；不得提交空筛查计划",
+            "不得把 FAILED、ERROR、offline、Start 等单独的宽泛 compiled pattern 选入 LLM 相关层；这些规则仍由方法强制检查层完整扫描",
             f"selected_pattern_ids 最多 {MAX_LLM_SELECTED_PATTERNS} 个，必须按与当前问题的相关度从高到低排列",
             "additional_keywords 只能给出要在日志中按字面量查找的短关键词，不得输出正则表达式",
+            "additional_keywords 必须是可精确定位的短语或结构化标识；不得使用 Start、FAILED、ERROR、offline 等宽泛单词",
             f"additional_keywords 最多 {MAX_LLM_ADDITIONAL_KEYWORDS} 个，必须去重并按相关度从高到低排列",
             "规划需包含假设、筛查步骤、缺失信息和停止条件",
             "GW 与 AP 属于同一组网诊断域；必须同时阅读 GW/AP/通用方法，并评估主 GW 与从 AP 的双向影响",
@@ -242,7 +202,8 @@ async def plan_with_model(
         ],
     }
     expected_documents = {document.id for document in documents}
-    known_patterns = {pattern.id for pattern in patterns}
+    patterns_by_id = {pattern.id: pattern for pattern in patterns}
+    known_patterns = set(patterns_by_id)
     cumulative_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     cumulative_duration_ms = 0
     validation_error: ValidationError | ValueError | None = None
@@ -259,6 +220,8 @@ async def plan_with_model(
                     "instruction": (
                         "重新输出完整 JSON 对象。不要省略或改写任何 required_read_document_ids；"
                         "additional_keywords 必须是对象数组，其他字段严格遵守 output_contract。"
+                        "必须至少选择一个已提供的 compiled pattern ID，或给出一个可精确定位、"
+                        "非宽泛的 additional_keyword。"
                     ),
                 },
             }
@@ -283,13 +246,29 @@ async def plan_with_model(
         _merge_usage(cumulative_usage, getattr(provider, "last_usage", {}) or {})
         cumulative_duration_ms += int(getattr(provider, "last_duration_ms", 0) or 0)
         try:
-            normalized = _normalize_log_triage_plan(raw)
+            normalized = normalize_log_triage_plan(raw)
             if isinstance(normalized, dict):
                 normalized["read_document_ids"] = sorted(expected_documents)
-            parsed = _LogTriagePlan.model_validate(normalized)
+            parsed = LogTriagePlan.model_validate(normalized)
             unknown_patterns = set(parsed.selected_pattern_ids).difference(known_patterns)
             if unknown_patterns:
                 raise ValueError("Model selected unknown diagnostic pattern IDs")
+            selected_candidates = list(dict.fromkeys(parsed.selected_pattern_ids))
+            selected = [
+                pattern_id for pattern_id in selected_candidates
+                if is_precise_additional_keyword(patterns_by_id[pattern_id].text)
+            ]
+            additional_keywords, rejected_keyword_count = (
+                filter_additional_keyword_proposals([
+                    proposal.model_dump(mode="json")
+                    for proposal in parsed.additional_keywords
+                ])
+            )
+            if not selected and not additional_keywords:
+                raise ValueError(
+                    "Model log-triage plan must select at least one known pattern "
+                    "or one precise additional keyword"
+                )
         except (ValidationError, ValueError) as exc:
             validation_error = exc
             if attempt < MAX_LOG_PLAN_ATTEMPTS:
@@ -302,22 +281,16 @@ async def plan_with_model(
             )
             raise
 
-        selected = list(dict.fromkeys(parsed.selected_pattern_ids))
-        additional_keywords: list[dict[str, Any]] = []
-        seen_keywords: set[str] = set()
-        for proposal in parsed.additional_keywords:
-            rendered = proposal.model_dump(mode="json")
-            normalized_keyword = rendered["keyword"].strip().casefold()
-            if normalized_keyword in seen_keywords:
-                continue
-            seen_keywords.add(normalized_keyword)
-            additional_keywords.append(rendered)
         plan = parsed.model_dump(mode="json")
-        plan["selected_pattern_candidate_count"] = len(selected)
+        plan["selected_pattern_candidate_count"] = len(selected_candidates)
+        plan["selected_pattern_rejected_count"] = (
+            len(selected_candidates) - len(selected)
+        )
         plan["selected_pattern_limit"] = MAX_LLM_SELECTED_PATTERNS
         plan["selected_pattern_selection_truncated"] = len(selected) > MAX_LLM_SELECTED_PATTERNS
         plan["selected_pattern_ids"] = selected[:MAX_LLM_SELECTED_PATTERNS]
         plan["additional_keyword_candidate_count"] = len(additional_keywords)
+        plan["additional_keyword_rejected_count"] = rejected_keyword_count
         plan["additional_keyword_limit"] = MAX_LLM_ADDITIONAL_KEYWORDS
         plan["additional_keyword_selection_truncated"] = (
             len(additional_keywords) > MAX_LLM_ADDITIONAL_KEYWORDS

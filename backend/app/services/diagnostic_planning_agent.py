@@ -17,6 +17,10 @@ from app.services.diagnostic_agent_budget import (
     DiagnosticAgentBudgetTracker,
     budget_failure_details,
 )
+from app.services.diagnostic_fault_tree_baseline import (
+    complete_fault_tree_with_deterministic_evidence,
+    is_case_log_evidence,
+)
 from app.services.diagnostic_methods import DiagnosticMethodDocument, DiagnosticPattern
 from app.services.diagnostic_planning_coverage import (
     TERMINAL_FAULT_TREE_STATUSES,
@@ -30,20 +34,29 @@ from app.services.llm import LLMError
 from app.services.planning_diagnostics import planning_failure_details
 
 
-def _valid_evidence_ids(
+def _valid_evidence_id_sets(
     triage_evidence: list[dict[str, Any]],
     baseline_search: dict[str, Any],
     supplemental_results: list[dict[str, Any]],
-) -> set[str]:
-    return {
+) -> tuple[set[str], set[str]]:
+    items = [
+        *triage_evidence,
+        *baseline_search.get("results", []),
+        *supplemental_results,
+    ]
+    all_ids = {
         str(item["evidence_id"])
-        for item in [
-            *triage_evidence,
-            *baseline_search.get("results", []),
-            *supplemental_results,
-        ]
+        for item in items
         if isinstance(item, dict) and item.get("evidence_id")
     }
+    case_ids = {
+        str(item["evidence_id"])
+        for item in items
+        if isinstance(item, dict)
+        and item.get("evidence_id")
+        and is_case_log_evidence(item)
+    }
+    return all_ids, case_ids
 
 
 def _apply_fault_tree_assessments(
@@ -69,6 +82,109 @@ def _apply_fault_tree_assessments(
         })
 
 
+def _execute_policy_evidence_fetch(
+    ctx: JobContext,
+    *,
+    search_call: Any,
+    search_invocation: Any,
+    round_number: int,
+    budget_tracker: DiagnosticAgentBudgetTracker,
+    tool_registry: Any,
+    tool_context: ToolContext,
+    supplemental_results: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+    executed_tool_calls: list[dict[str, Any]],
+    session_factory: Any,
+    agent_run_id: str,
+) -> tuple[dict[str, Any] | None, str | None, set[str]]:
+    """Hydrate non-empty model search hits with honest policy provenance."""
+
+    evidence_ids = list(dict.fromkeys(search_invocation.evidence_ids))[:100]
+    if not evidence_ids:
+        return None, None, set()
+    if not budget_tracker.can_invoke_tool():
+        return None, budget_tracker.stop_reason, set()
+    ctx.raise_if_cancelled()
+    invocation = invoke_diagnostic_tool(
+        tool_registry,
+        tool_context,
+        tool_name="get_evidence",
+        arguments={"evidence_ids": evidence_ids},
+    )
+    budget_tracker.record_tool_call()
+    if set(invocation.evidence_ids) != set(evidence_ids):
+        raise ValueError(
+            "Policy evidence hydration did not resolve every model search result"
+        )
+    budget_reason = budget_tracker.record_tool_output(invocation.output)
+    output_results = invocation.output.get("results", [])
+    supplemental_results.extend(
+        item
+        for item in output_results
+        if str(item.get("source_type") or "") != "context_spill"
+    )
+    observations.append({
+        "round": round_number,
+        "tool_name": "get_evidence",
+        "invoked_by": "POLICY_EVIDENCE_HYDRATION",
+        "arguments": invocation.arguments,
+        "summary": {
+            "returned": invocation.output.get("returned", 0),
+            "total_candidates": invocation.output.get("total_candidates", 0),
+        },
+        "results": output_results,
+    })
+    rendered_call = {
+        "round": round_number,
+        "call_id": f"policy-evidence-fetch-{search_call.call_id}",
+        "tool_name": "get_evidence",
+        "arguments": invocation.arguments,
+        "invoked_by": "POLICY_EVIDENCE_HYDRATION",
+        "hydrated_from_call_id": search_call.call_id,
+        "method_document_ids": search_call.method_document_ids,
+        "rationale": (
+            "对模型 search_log 返回的证据 ID 执行有界只读取回，"
+            "明确记录搜索到证据详情的因果链。"
+        ),
+        "fault_tree_item_ids": search_call.fault_tree_item_ids,
+        "status": "COMPLETED",
+        "returned": int(invocation.output.get("returned") or 0),
+        "total_candidates": int(
+            invocation.output.get("total_candidates") or 0
+        ),
+        "evidence_ids": invocation.evidence_ids,
+    }
+    executed_tool_calls.append(rendered_call)
+    with session_factory() as db:
+        append_live_trace(
+            db,
+            agent_run_id,
+            stage="execute_agent_tool",
+            tool_name="get_evidence",
+            status="COMPLETED",
+            duration_ms=invocation.duration_ms,
+            input_summary=invocation.arguments,
+            output_summary={
+                "returned": invocation.output.get("returned", 0),
+                "total_candidates": invocation.output.get(
+                    "total_candidates", 0,
+                ),
+            },
+            evidence_ids=invocation.evidence_ids,
+            metadata={
+                "round": round_number,
+                "invoked_by": "POLICY_EVIDENCE_HYDRATION",
+                "source_call_id": search_call.call_id,
+                "candidate_count": invocation.output.get(
+                    "total_candidates", 0,
+                ),
+                "returned_count": invocation.output.get("returned", 0),
+                "fault_tree_item_ids": search_call.fault_tree_item_ids,
+            },
+        )
+    return rendered_call, budget_reason, set(invocation.evidence_ids)
+
+
 def _execute_planned_tool_calls(
     ctx: JobContext,
     *,
@@ -90,6 +206,12 @@ def _execute_planned_tool_calls(
     rendered_calls: list[dict[str, Any]] = []
     new_evidence_ids: set[str] = set()
     budget_reason: str | None = None
+    evidence_fetch_completed = any(
+        call.get("invoked_by") == "POLICY_EVIDENCE_HYDRATION"
+        and call.get("status") == "COMPLETED"
+        and call.get("evidence_ids")
+        for call in executed_tool_calls
+    )
     for planned_call in planning_round.tool_calls[:budget.max_tool_calls_per_round]:
         call_arguments = dict(planned_call.arguments)
         if planned_call.method_document_ids:
@@ -97,13 +219,18 @@ def _execute_planned_tool_calls(
                 "method_document_ids", planned_call.method_document_ids,
             )
         dedupe_key = f"{planned_call.tool_name}:{json_dumps(call_arguments)}"
+        invoked_by = (
+            "POLICY_REPAIR"
+            if str(planned_call.call_id).startswith("policy-")
+            else "MODEL"
+        )
         if dedupe_key in prior_tool_calls:
             previous_call = prior_tool_calls[dedupe_key]
             reused_call = {
                 "round": round_number,
                 "call_id": planned_call.call_id,
                 "tool_name": planned_call.tool_name,
-                "invoked_by": "MODEL",
+                "invoked_by": invoked_by,
                 "method_document_ids": planned_call.method_document_ids,
                 "rationale": planned_call.rationale,
                 "fault_tree_item_ids": planned_call.fault_tree_item_ids,
@@ -144,7 +271,7 @@ def _execute_planned_tool_calls(
         observations.append({
             "round": round_number,
             "tool_name": planned_call.tool_name,
-            "invoked_by": "MODEL",
+            "invoked_by": invoked_by,
             "arguments": invocation.arguments,
             "summary": {
                 "returned": invocation.output.get("returned", 0),
@@ -157,6 +284,7 @@ def _execute_planned_tool_calls(
             "call_id": planned_call.call_id,
             "tool_name": planned_call.tool_name,
             "arguments": invocation.arguments,
+            "invoked_by": invoked_by,
             "method_document_ids": planned_call.method_document_ids,
             "rationale": planned_call.rationale,
             "fault_tree_item_ids": planned_call.fault_tree_item_ids,
@@ -191,6 +319,7 @@ def _execute_planned_tool_calls(
                 evidence_ids=invocation.evidence_ids,
                 metadata={
                     "round": round_number,
+                    "invoked_by": invoked_by,
                     "candidate_count": invocation.output.get("total_candidates", 0),
                     "returned_count": invocation.output.get("returned", 0),
                     "document_id": ",".join(
@@ -202,7 +331,130 @@ def _execute_planned_tool_calls(
         if output_budget_reason:
             budget_reason = output_budget_reason
             break
+        if (
+            planned_call.tool_name == "search_log"
+            and invocation.evidence_ids
+            and invoked_by == "MODEL"
+            and not evidence_fetch_completed
+        ):
+            # The per-round limit bounds model-planned calls. This one policy
+            # read is still charged to the aggregate tool budget, but must not
+            # silently displace a validated fourth model call.
+            fetched_call, fetch_budget_reason, fetched_ids = (
+                _execute_policy_evidence_fetch(
+                    ctx,
+                    search_call=planned_call,
+                    search_invocation=invocation,
+                    round_number=round_number,
+                    budget_tracker=budget_tracker,
+                    tool_registry=tool_registry,
+                    tool_context=tool_context,
+                    supplemental_results=supplemental_results,
+                    observations=observations,
+                    executed_tool_calls=executed_tool_calls,
+                    session_factory=session_factory,
+                    agent_run_id=agent_run_id,
+                )
+            )
+            if fetched_call is not None:
+                rendered_calls.append(fetched_call)
+                new_evidence_ids.update(fetched_ids)
+                evidence_fetch_completed = True
+            if fetch_budget_reason:
+                budget_reason = fetch_budget_reason
+                break
     return rendered_calls, budget_reason, new_evidence_ids
+
+
+def _reconcile_fault_tree_coverage(
+    *,
+    coverage: dict[str, Any],
+    failure: dict[str, Any] | None,
+    stop_reason: str,
+    active_round: int,
+    fault_tree_items: list[FaultTreeCoverageItem],
+    diagnostic_patterns: list[DiagnosticPattern],
+    triage_evidence: list[dict[str, Any]],
+    baseline_search: dict[str, Any],
+    supplemental_results: list[dict[str, Any]],
+    executed_tool_calls: list[dict[str, Any]],
+    session_factory: Any,
+    agent_run_id: str,
+) -> dict[str, Any]:
+    if not fault_tree_items:
+        return coverage
+    fallback_applied = not coverage["complete"] or failure is not None
+    fallback_reason = str(
+        (failure or {}).get("code")
+        or (
+            stop_reason if fallback_applied
+            else "MODEL_COVERAGE_EVIDENCE_RECONCILIATION"
+        )
+    )
+    all_evidence = [
+        *triage_evidence,
+        *[
+            item for item in baseline_search.get("results", [])
+            if isinstance(item, dict)
+        ],
+        *supplemental_results,
+    ]
+    reconciled = complete_fault_tree_with_deterministic_evidence(
+        coverage,
+        items=fault_tree_items,
+        evidence=all_evidence,
+        patterns=diagnostic_patterns,
+        round_number=max(1, active_round),
+        reason=fallback_reason,
+        fallback_applied=fallback_applied,
+    )
+    evidence_ids = list(dict.fromkeys(
+        str(evidence_id)
+        for item in reconciled.get("items", [])
+        for evidence_id in item.get("evidence_ids", [])
+    ))
+    executed_tool_calls.append({
+        "round": active_round or 1,
+        "call_id": "policy-deterministic-fault-tree-scan",
+        "tool_name": "deterministic_fault_tree_scan",
+        "invoked_by": "POLICY_FALLBACK" if fallback_applied else "POLICY",
+        "method_document_ids": list(dict.fromkeys(
+            item.method_document_id for item in fault_tree_items
+        )),
+        "rationale": (
+            "按已编译故障树 Pattern 对当前案例证据执行只读确定性扫描，"
+            "补足证据不足节点或与模型覆盖账本交叉核验；不生成或猜测证据。"
+        ),
+        "fault_tree_item_ids": [item.id for item in fault_tree_items],
+        "status": "COMPLETED",
+        "returned": len(evidence_ids),
+        "total_candidates": len(all_evidence),
+        "evidence_ids": evidence_ids,
+    })
+    with session_factory() as db:
+        append_live_trace(
+            db,
+            agent_run_id,
+            stage="deterministic_fault_tree_evidence",
+            tool_name="deterministic_fault_tree_scan",
+            status="COMPLETED",
+            output_summary={
+                "total": reconciled.get("total", 0),
+                "attempted": reconciled.get("attempted", 0),
+                "concluded": reconciled.get("concluded", 0),
+                "status_counts": reconciled.get("status_counts", {}),
+            },
+            evidence_ids=evidence_ids,
+            stop_reason=fallback_reason,
+            metadata={
+                "reason": fallback_reason,
+                "fallback_applied": fallback_applied,
+                "resolution_source_counts": reconciled.get(
+                    "resolution_source_counts", {}
+                ),
+            },
+        )
+    return reconciled
 
 
 async def execute_llm_planning_rounds(
@@ -275,9 +527,16 @@ async def execute_llm_planning_rounds(
             started = perf_counter()
             active_round_started = started
             coverage_before = coverage_snapshot(coverage)
-            valid_evidence_ids = _valid_evidence_ids(
+            valid_locator_ids, valid_evidence_ids = _valid_evidence_id_sets(
                 triage_evidence, baseline_search, supplemental_results,
             )
+            # Clear the mutable provider snapshot before evaluating any
+            # request arguments. A context or tool-manifest failure must not
+            # charge the preceding round's usage a second time.
+            provider.last_usage = {}
+            provider.last_duration_ms = 0
+            provider.last_validation_retry_count = 0
+            provider.last_finish_reason = None
             try:
                 planning_round = await asyncio.wait_for(
                     request_round(
@@ -299,6 +558,7 @@ async def execute_llm_planning_rounds(
                             if not item.get("attempted")
                         },
                         valid_evidence_ids=valid_evidence_ids,
+                        valid_evidence_locator_ids=valid_locator_ids,
                         context_policy=context_policy,
                         spill_store=spill_store,
                     ),
@@ -316,6 +576,9 @@ async def execute_llm_planning_rounds(
                 break
             rendered = planning_round.model_dump(mode="json")
             rendered["round"] = round_number
+            rendered["planner_repairs"] = list(
+                getattr(provider, "last_plan_repairs", []) or []
+            )
             rendered["planning_attempts"] = int(
                 getattr(provider, "last_validation_retry_count", 0) or 0
             ) + 1
@@ -348,6 +611,7 @@ async def execute_llm_planning_rounds(
                         "fault_tree_assessments": len(
                             planning_round.fault_tree_assessments
                         ),
+                        "planner_repairs": len(rendered["planner_repairs"]),
                         "continue": planning_round.continue_analysis,
                     },
                     evidence_ids=planning_round.read_document_ids,
@@ -361,6 +625,11 @@ async def execute_llm_planning_rounds(
                         "aggregate_tokens": budget_tracker.total_tokens,
                         "token_budget": budget.max_total_tokens,
                         "context_governance": context_metrics,
+                        "planner_repair_codes": [
+                            str(item.get("code") or "")
+                            for item in rendered["planner_repairs"]
+                            if isinstance(item, dict)
+                        ],
                     },
                 )
             rendered_calls: list[dict[str, Any]] = []
@@ -462,6 +731,9 @@ async def execute_llm_planning_rounds(
             "context_governance": (
                 getattr(provider, "last_context_metrics", {}) or {}
             ),
+            "planner_repairs": list(
+                getattr(provider, "last_plan_repairs", []) or []
+            ),
         }
         with session_factory() as db:
             append_live_trace(
@@ -527,6 +799,20 @@ async def execute_llm_planning_rounds(
             "error_type": "FaultTreeCoverageError",
             "finish_reason": getattr(provider, "last_finish_reason", None),
         }
+    final_coverage = _reconcile_fault_tree_coverage(
+        coverage=final_coverage,
+        failure=failure,
+        stop_reason=stop_reason,
+        active_round=active_round,
+        fault_tree_items=fault_tree_items,
+        diagnostic_patterns=diagnostic_patterns,
+        triage_evidence=triage_evidence,
+        baseline_search=baseline_search,
+        supplemental_results=supplemental_results,
+        executed_tool_calls=executed_tool_calls,
+        session_factory=session_factory,
+        agent_run_id=agent_run_id,
+    )
     return (
         prior_rounds,
         supplemental_results,

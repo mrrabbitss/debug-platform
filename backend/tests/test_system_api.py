@@ -54,6 +54,18 @@ def test_model_and_layered_knowledge_api_round_trip(tmp_path: Path, monkeypatch)
         assert profile_json["proxy_url_hint"] == "http://proxy.example.com:8080"
         assert "proxy-secret" not in chat_profile.text
 
+        unmanaged_sidecar = client.post("/api/v1/system/models", json={
+            "name": "Impersonated bundled sidecar",
+            "task_type": "embedding",
+            "mode": "api",
+            "provider": "llama_cpp_local",
+            "model_name": "bge",
+            "base_url": "http://127.0.0.1:19001/v1",
+            "enabled": True,
+        })
+        assert unmanaged_sidecar.status_code == 400
+        assert "created and secured by the launcher" in unmanaged_sidecar.text
+
         cleared_proxy = client.patch(
             f"/api/v1/system/models/{profile_json['id']}",
             json={"clear_proxy_url": True},
@@ -104,5 +116,50 @@ def test_model_and_layered_knowledge_api_round_trip(tmp_path: Path, monkeypatch)
         embedding_test = client.post("/api/v1/system/models/MODEL-embedding-hashing/test")
         assert embedding_test.status_code == 200
         assert embedding_test.json()["dimension"] == 384
+
+    engine.dispose()
+
+
+def test_managed_llama_profiles_cannot_be_modified_or_deleted(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("BUNDLED_GGUF_API_KEY", "m" * 48)
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_EMBEDDING_URL",
+        "http://127.0.0.1:19201/v1",
+    )
+    monkeypatch.setenv(
+        "BUNDLED_GGUF_RERANKER_URL",
+        "http://127.0.0.1:19202",
+    )
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'managed-api.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+    with session_factory() as db:
+        seed_model_profiles(db)
+
+    def override_db():
+        with session_factory() as db:
+            yield db
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = override_db
+
+    profile_id = "MODEL-embedding-bundled-gguf"
+    with TestClient(app) as client:
+        updated = client.patch(
+            f"/api/v1/system/models/{profile_id}",
+            json={"name": "tampered"},
+        )
+        assert updated.status_code == 409
+        assert "managed by the launcher" in updated.text
+
+        deleted = client.delete(f"/api/v1/system/models/{profile_id}")
+        assert deleted.status_code == 409
 
     engine.dispose()

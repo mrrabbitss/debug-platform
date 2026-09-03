@@ -4,20 +4,14 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.core.db import SessionLocal
-from app.core.utils import json_dumps, json_loads, mask_sensitive
+from app.core.utils import json_loads, mask_sensitive
 from app.diagnostic_models import LogEvidenceMatch, LogTriageRun
 from app.models import Artifact, Case
 from app.services.agent_trace_runtime import append_live_trace
-from app.services.agent_runtime import (
-    ContextWindowPolicy,
-    EvidenceSpillStore,
-    configured_context_policy,
-)
-from app.services.agent_runtime.budget import merge_usage_totals
+from app.services.agent_runtime import EvidenceSpillStore, configured_context_policy
 from app.services.agentic.tools import ToolContext
 from app.services.agentic_search import agentic_search
 from app.services.diagnostic_agent_budget import (
@@ -25,44 +19,32 @@ from app.services.diagnostic_agent_budget import (
     DiagnosticAgentBudgetTracker,
     configured_diagnostic_agent_budget,
 )
+from app.services.diagnostic_fault_tree_baseline import (
+    complete_fault_tree_with_deterministic_evidence,
+)
 from app.services.diagnostic_methods import (
     DiagnosticMethodDocument,
-    DiagnosticPattern,
     compile_diagnostic_patterns,
     load_applicable_diagnostic_methods,
 )
 from app.services.diagnostic_scope import normalize_artifact_source
 from app.services.diagnostic_log_search import search_persisted_log_evidence
 from app.services.diagnostic_planning_agent import execute_llm_planning_rounds
-from app.services.diagnostic_planning_coverage import (
-    coverage_snapshot,
-    initial_fault_tree_coverage,
-)
-from app.services.diagnostic_planning_context import (
-    build_governed_planning_prompt,
-    context_attempt_summary,
-    observe_context_attempt,
-)
+from app.services.diagnostic_planning_coverage import initial_fault_tree_coverage
 from app.services.diagnostic_tools import (
     DiagnosticToolEnvironment,
     build_diagnostic_tool_registry,
     invoke_diagnostic_tool,
     summarize_method_usage,
 )
-from app.services.diagnostic_planning_contract import (
-    PlanningRound as _PlanningRound,
-    normalize_planning_round as _normalize_planning_round,
-    symptom_relevant_method_ids as _symptom_relevant_method_ids,
-    validate_planning_round as _validate_planning_round,
-)
+from app.services.diagnostic_planning_request import request_planning_round
 from app.services.jobs import JobContext
-from app.services.llm import LLMError, get_llm_provider
-from app.services.fault_tree_coverage import FaultTreeCoverageItem, compile_fault_tree_items
+from app.services.llm import get_llm_provider
+from app.services.fault_tree_coverage import compile_fault_tree_items
 
 
 DIAGNOSTIC_PLANNER_PROMPT_VERSION = "diagnostic-tool-agent-v4-fault-tree-coverage"
 MAX_PLANNING_ROUNDS = 20
-MAX_PLANNING_ATTEMPTS = 3
 
 
 @dataclass
@@ -171,151 +153,6 @@ def _triage_evidence(
     }
 
 
-async def _request_planning_round(
-    provider: Any,
-    *,
-    round_number: int,
-    case: Case,
-    methods: list[DiagnosticMethodDocument],
-    triage_evidence: list[dict[str, Any]],
-    prior_rounds: list[dict[str, Any]],
-    search_observations: list[dict[str, Any]],
-    tool_manifest: list[dict[str, Any]],
-    document_observation: dict[str, Any],
-    fault_tree_items: list[FaultTreeCoverageItem],
-    diagnostic_patterns: list[DiagnosticPattern],
-    fault_tree_coverage: dict[str, Any],
-    unattempted_fault_tree_item_ids: set[str],
-    valid_evidence_ids: set[str],
-    context_policy: ContextWindowPolicy,
-    spill_store: EvidenceSpillStore,
-) -> _PlanningRound:
-    expected = {method.id for method in methods}
-    cumulative_usage = dict.fromkeys((
-        "prompt_tokens", "completion_tokens", "total_tokens",
-        "cached_tokens", "reasoning_tokens",
-    ), 0)
-    cumulative_duration_ms = 0
-    context_attempts: list[dict[str, Any]] = []
-    validation_error: ValidationError | ValueError | None = None
-    for attempt in range(1, MAX_PLANNING_ATTEMPTS + 1):
-        correction: dict[str, Any] | None = None
-        if validation_error is not None:
-            correction = {
-                "attempt": attempt,
-                "previous_error_type": type(validation_error).__name__,
-                "previous_error": str(validation_error)[:1500],
-                "required_read_document_ids": sorted(expected),
-                "required_method_assessment_ids": sorted(expected),
-                "symptom_relevant_fault_tree_ids": sorted(
-                    _symptom_relevant_method_ids(case, methods)
-                ),
-                "required_fault_tree_item_ids": sorted(
-                    item.id for item in fault_tree_items
-                ),
-                "unattempted_fault_tree_item_ids": sorted(
-                    unattempted_fault_tree_item_ids
-                ),
-                "instruction": (
-                    "重新输出完整 JSON 对象并严格遵守 output_contract。每个相关故障树"
-                    "或日志分析方法都必须产生绑定其 method_document_id 的 check，且至少"
-                    "一个 search_query 或 search_knowledge/search_log tool_call 的"
-                    " method_document_ids 必须引用它。尚未在本轮绑定检查和证据工具的"
-                    " fault_tree_item 必须保持 PENDING。"
-                ),
-            }
-        request_prompt, context_metrics = build_governed_planning_prompt(
-            round_number=round_number,
-            case=case,
-            methods=methods,
-            triage_evidence=triage_evidence,
-            prior_rounds=prior_rounds,
-            search_observations=search_observations,
-            tool_manifest=tool_manifest,
-            document_observation=document_observation,
-            fault_tree_items=fault_tree_items,
-            diagnostic_patterns=diagnostic_patterns,
-            fault_tree_coverage=fault_tree_coverage,
-            unattempted_fault_tree_item_ids=unattempted_fault_tree_item_ids,
-            output_contract=_PlanningRound.model_json_schema(),
-            context_policy=context_policy,
-            spill_store=spill_store,
-            correction=correction,
-        )
-        context_metrics["attempt"] = attempt
-        context_attempts.append(context_metrics)
-        provider.last_context_metrics = context_attempt_summary(
-            context_attempts,
-            total_prompt_tokens=cumulative_usage["prompt_tokens"],
-        )
-        if not context_metrics.get("within_budget"):
-            raise ValueError("Context input exceeds the configured model budget")
-        try:
-            raw = await provider.generate_json(
-                "你是受预算约束的 GW/AP 综合诊断 Planner。逐轮形成假设、执行可验证检查、寻找反证并决定是否停止。",
-                json_dumps(request_prompt),
-                schema_name="diagnostic_planning_round",
-                purpose=f"diagnostic_planning_round_{round_number}",
-            )
-        except LLMError:
-            attempt_usage = getattr(provider, "last_usage", {}) or {}
-            observe_context_attempt(context_metrics, attempt_usage)
-            merge_usage_totals(cumulative_usage, attempt_usage)
-            cumulative_duration_ms += int(getattr(provider, "last_duration_ms", 0) or 0)
-            provider.last_context_metrics = context_attempt_summary(
-                context_attempts,
-                total_prompt_tokens=cumulative_usage["prompt_tokens"],
-            )
-            provider.last_usage = cumulative_usage
-            provider.last_duration_ms = cumulative_duration_ms
-            provider.last_validation_retry_count = max(0, attempt - 1)
-            raise
-        attempt_usage = getattr(provider, "last_usage", {}) or {}
-        observe_context_attempt(context_metrics, attempt_usage)
-        merge_usage_totals(cumulative_usage, attempt_usage)
-        cumulative_duration_ms += int(getattr(provider, "last_duration_ms", 0) or 0)
-        try:
-            normalized = _normalize_planning_round(raw)
-            if isinstance(normalized, dict):
-                normalized["read_document_ids"] = sorted(expected)
-            parsed = _PlanningRound.model_validate(normalized)
-            _validate_planning_round(
-                parsed,
-                round_number=round_number,
-                case=case,
-                methods=methods,
-                fault_tree_items=fault_tree_items,
-                diagnostic_patterns=diagnostic_patterns,
-                unattempted_fault_tree_item_ids=unattempted_fault_tree_item_ids,
-                valid_evidence_ids=valid_evidence_ids,
-                valid_evidence_locator_ids={
-                    *valid_evidence_ids,
-                    *spill_store.handle_ids,
-                },
-            )
-        except (ValidationError, ValueError) as exc:
-            validation_error = exc
-            if attempt < MAX_PLANNING_ATTEMPTS:
-                continue
-            provider.last_usage = cumulative_usage
-            provider.last_duration_ms = cumulative_duration_ms
-            provider.last_validation_retry_count = attempt - 1
-            provider.last_context_metrics = context_attempt_summary(
-                context_attempts,
-                total_prompt_tokens=cumulative_usage["prompt_tokens"],
-            )
-            raise
-        provider.last_usage = cumulative_usage
-        provider.last_duration_ms = cumulative_duration_ms
-        provider.last_validation_retry_count = attempt - 1
-        provider.last_context_metrics = context_attempt_summary(
-            context_attempts,
-            total_prompt_tokens=cumulative_usage["prompt_tokens"],
-        )
-        return parsed
-    raise AssertionError("Planning attempts exhausted without a result")
-
-
 def _search_query_result(
     case_id: str,
     query: str,
@@ -349,6 +186,7 @@ def run_diagnostic_planning(
     case: Case,
     agent_run_id: str,
     baseline_search: dict[str, Any],
+    case_evidence: list[dict[str, Any]] | None = None,
     session_factory: Any = SessionLocal,
     budget: DiagnosticAgentBudget | None = None,
 ) -> DiagnosticPlanningResult:
@@ -361,6 +199,14 @@ def run_diagnostic_planning(
     patterns = compile_diagnostic_patterns(methods)
     fault_tree_items = compile_fault_tree_items(methods)
     triage_evidence, triage_coverage = _triage_evidence(case.id, session_factory)
+    local_derived_evidence = [
+        item for item in list(case_evidence or [])
+        if str(item.get("source_type") or "") == "local_derived_evidence"
+    ]
+    effective_case_evidence = (
+        [*triage_evidence, *local_derived_evidence]
+        if triage_evidence else list(case_evidence or [])
+    )
     baseline_evidence = [
         item for item in baseline_search.get("results", []) if isinstance(item, dict)
     ]
@@ -374,7 +220,7 @@ def run_diagnostic_planning(
         methods=methods,
         patterns=patterns,
         fault_tree_items=fault_tree_items,
-        evidence=[*triage_evidence, *baseline_evidence],
+        evidence=[*effective_case_evidence, *baseline_evidence],
         knowledge_search=lambda query, top_k: _search_query_result(
             case.id, query, session_factory, top_k,
         ),
@@ -505,6 +351,31 @@ def run_diagnostic_planning(
             if provider.is_mock
             else "MODEL_EGRESS_NOT_APPROVED"
         )
+        fallback_coverage = complete_fault_tree_with_deterministic_evidence(
+            initial_fault_tree_coverage(fault_tree_items),
+            items=fault_tree_items,
+            evidence=[*effective_case_evidence, *baseline_evidence],
+            patterns=patterns,
+            round_number=1,
+            reason=fallback_stop_reason,
+        )
+        fallback_evidence_ids = list(dict.fromkeys(
+            str(evidence_id)
+            for item in fallback_coverage.get("items", [])
+            for evidence_id in item.get("evidence_ids", [])
+        ))
+        policy_tool_calls.append({
+            "round": 1,
+            "call_id": "policy-deterministic-fault-tree-scan",
+            "tool_name": "deterministic_fault_tree_scan",
+            "invoked_by": "POLICY_FALLBACK",
+            "method_document_ids": [method.id for method in methods],
+            "rationale": "无外发模型时仍按方法 Pattern 完成本地只读证据核验。",
+            "fault_tree_item_ids": [item.id for item in fault_tree_items],
+            "status": "COMPLETED",
+            "returned": len(fallback_evidence_ids),
+            "evidence_ids": fallback_evidence_ids,
+        })
         fallback_plan = {
             "planner_mode": "deterministic_fallback",
             "agent_mode": "typed_read_only_tools",
@@ -536,9 +407,7 @@ def run_diagnostic_planning(
                 "all_documents_read": True,
             },
             "method_catalog": [method.public_snapshot() for method in methods],
-            "fault_tree_coverage": coverage_snapshot(
-                initial_fault_tree_coverage(fault_tree_items)
-            ),
+            "fault_tree_coverage": fallback_coverage,
             "tool_calls": policy_tool_calls,
             "stop_reason": fallback_stop_reason,
             "budget": DiagnosticAgentBudgetTracker(agent_budget).snapshot(),
@@ -558,14 +427,16 @@ def run_diagnostic_planning(
                 tool_name="deterministic_planner",
                 status="COMPLETED",
                 output_summary=fallback_plan,
-                evidence_ids=[item["evidence_id"] for item in triage_evidence[:250]],
+                evidence_ids=[
+                    item["evidence_id"] for item in effective_case_evidence[:250]
+                ],
                 stop_reason=fallback_stop_reason,
                 metadata={"reason": fallback_stop_reason},
             )
         return DiagnosticPlanningResult(
             public_plan=fallback_plan,
             method_documents=methods,
-            evidence=triage_evidence,
+            evidence=effective_case_evidence,
             supplemental_results=[],
         )
 
@@ -584,7 +455,7 @@ def run_diagnostic_planning(
             provider=provider,
             case=case,
             methods=methods,
-            triage_evidence=triage_evidence,
+            triage_evidence=effective_case_evidence,
             baseline_search=baseline_search,
             agent_run_id=agent_run_id,
             session_factory=session_factory,
@@ -595,7 +466,7 @@ def run_diagnostic_planning(
             ),
             fault_tree_items=fault_tree_items,
             diagnostic_patterns=patterns,
-            request_round=_request_planning_round,
+            request_round=request_planning_round,
             budget=agent_budget,
             context_policy=context_policy,
             spill_store=spill_store,
@@ -643,6 +514,6 @@ def run_diagnostic_planning(
     return DiagnosticPlanningResult(
         public_plan=public_plan,
         method_documents=methods,
-        evidence=triage_evidence,
+        evidence=effective_case_evidence,
         supplemental_results=supplemental_results,
     )

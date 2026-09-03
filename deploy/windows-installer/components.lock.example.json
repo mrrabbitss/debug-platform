@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "bundle_id": "debug-platform-retrieval-gguf-win-x64-cpu-v1",
+  "target": "windows-x64",
+  "runtime": {
+    "name": "llama.cpp CPU runtime",
+    "backend": "cpu",
+    "version": "b10729",
+    "revision": "458681e1d5d4a29a1463c4732e03226cf384b997",
+    "source_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b10729",
+    "license": "MIT",
+    "cache_directory": "llama",
+    "license_install_path": "licenses/llama.cpp/LICENSE",
+    "executable_install_path": "runtime/llama/llama-server.exe"
+  },
+  "native_dependencies": [
+    {
+      "id": "microsoft-vc143-crt-x64-app-local",
+      "version": "14.44.35211.0",
+      "source_url": "https://download.visualstudio.microsoft.com/download/pr/45d3b8dd-bced-4b37-9974-142f748d710c/4aaf54db0bfc9435f7c3660e1a00237a4b556042bfeea64bde44c2e0194e6ee5/Microsoft.VC.14.44.17.14.CRT.Redist.X64.base.vsix",
+      "source_size": 3224191,
+      "source_sha256": "4aaf54db0bfc9435f7c3660e1a00237a4b556042bfeea64bde44c2e0194e6ee5",
+      "license": "LicenseRef-Microsoft-Visual-Studio-2022-Redistributable",
+      "license_url": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution",
+      "redistribution": "app_local_unmodified",
+      "signer_subject_contains": "Microsoft Windows Software Compatibility Publisher",
+      "file_install_paths": [
+        "runtime/llama/concrt140.dll",
+        "runtime/llama/msvcp140.dll",
+        "runtime/llama/msvcp140_1.dll",
+        "runtime/llama/msvcp140_2.dll",
+        "runtime/llama/msvcp140_atomic_wait.dll",
+        "runtime/llama/msvcp140_codecvt_ids.dll",
+        "runtime/llama/vccorlib140.dll",
+        "runtime/llama/vcruntime140.dll",
+        "runtime/llama/vcruntime140_1.dll",
+        "runtime/llama/vcruntime140_threads.dll"
+      ]
+    }
+  ],
+  "models": [
+    {
+      "id": "bge-base-zh-v1.5-gguf",
+      "task_type": "embedding",
+      "model_name": "BAAI/bge-base-zh-v1.5",
+      "revision": "f03589ceff5aac7111bd60cfc7d497ca17ecac65",
+      "source_url": "https://huggingface.co/BAAI/bge-base-zh-v1.5",
+      "license": "MIT",
+      "license_install_path": "licenses/models/bge-base-zh-v1.5/LICENSE",
+      "file_install_path": "models/embedding/bge-base-zh-v1.5-f16.gguf",
+      "base_path": "/v1",
+      "health_path": "/health",
+      "server_arguments": [
+        "--embedding",
+        "--pooling",
+        "cls",
+        "--embd-normalize",
+        "2",
+        "--ctx-size",
+        "512",
+        "--batch-size",
+        "512",
+        "--ubatch-size",
+        "512",
+        "--no-webui"
+      ]
+    },
+    {
+      "id": "qwen3-reranker-0.6b-gguf",
+      "task_type": "reranker",
+      "model_name": "Qwen/Qwen3-Reranker-0.6B",
+      "revision": "a02f48bb4f057028298c21fa033da2b30d7742d5",
+      "source_url": "https://huggingface.co/ggml-org/Qwen3-reranker-0.6B-Q8_0-GGUF",
+      "upstream_model_revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+      "license": "Apache-2.0",
+      "license_install_path": "licenses/models/qwen3-reranker-0.6b/LICENSE",
+      "file_install_path": "models/reranker/qwen3-reranker-0.6b-q8_0.gguf",
+      "base_path": "/v1",
+      "health_path": "/health",
+      "server_arguments": [
+        "--reranking",
+        "--pooling",
+        "rank",
+        "--ctx-size",
+        "8192",
+        "--parallel",
+        "1",
+        "--batch-size",
+        "512",
+        "--ubatch-size",
+        "512",
+        "--no-webui"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "cache_path": "llama/concrt140.dll",
+      "install_path": "runtime/llama/concrt140.dll",
+      "size": 324208,
+      "sha256": "2405355f0a58067b258f8df33c327e3a3d716eaac5a3a5aebb757842d85bd376"
+    },
+    {
+      "cache_path": "llama/msvcp140.dll",
+      "install_path": "runtime/llama/msvcp140.dll",
+      "size": 557728,
+      "sha256": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9"
+    },
+    {
+      "cache_path": "llama/msvcp140_1.dll",
+      "install_path": "runtime/llama/msvcp140_1.dll",
+      "size": 35952,
+      "sha256": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d"
+    },
+    {
+      "cache_path": "llama/msvcp140_2.dll",
+      "install_path": "runtime/llama/msvcp140_2.dll",
+      "size": 280200,
+      "sha256": "3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9"
+    },
+    {
+      "cache_path": "llama/msvcp140_atomic_wait.dll",
+      "install_path": "runtime/llama/msvcp140_atomic_wait.dll",
+      "size": 50304,
+      "sha256": "640b2aefced484d0368eea5bdd06addd0658a3a70a49256e560d6923b404a479"
+    },
+    {
+      "cache_path": "llama/msvcp140_codecvt_ids.dll",
+      "install_path": "runtime/llama/msvcp140_codecvt_ids.dll",
+      "size": 31872,
+      "sha256": "f2069a52880ec885ee7f0511186100eb7fada0411a2b4948fafea7735b878a18"
+    },
+    {
+      "cache_path": "llama/vccorlib140.dll",
+      "install_path": "runtime/llama/vccorlib140.dll",
+      "size": 352384,
+      "sha256": "19839407c3fdbc824e5bce189bf68ddf8097f12ec28b757797ffa0415c144ddd"
+    },
+    {
+      "cache_path": "llama/vcruntime140.dll",
+      "install_path": "runtime/llama/vcruntime140.dll",
+      "size": 124544,
+      "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+    },
+    {
+      "cache_path": "llama/vcruntime140_1.dll",
+      "install_path": "runtime/llama/vcruntime140_1.dll",
+      "size": 49792,
+      "sha256": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f"
+    },
+    {
+      "cache_path": "llama/vcruntime140_threads.dll",
+      "install_path": "runtime/llama/vcruntime140_threads.dll",
+      "size": 38528,
+      "sha256": "219915cf20822f34d5e7c1fdd4e21ae7f3396881096c51036225fb8f84b47afa"
+    },
+    {
+      "cache_path": "llama/llama-server.exe",
+      "install_path": "runtime/llama/llama-server.exe",
+      "size": 123456789,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "llama/llama.dll",
+      "install_path": "runtime/llama/llama.dll",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "llama/ggml.dll",
+      "install_path": "runtime/llama/ggml.dll",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "llama/ggml-base.dll",
+      "install_path": "runtime/llama/ggml-base.dll",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "llama/ggml-cpu.dll",
+      "install_path": "runtime/llama/ggml-cpu.dll",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "llama/LICENSE-LLVM-OpenMP",
+      "install_path": "licenses/llama.cpp/LICENSE-LLVM-OpenMP",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "licenses/llama.cpp-LICENSE.txt",
+      "install_path": "licenses/llama.cpp/LICENSE",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "models/bge-base-zh-v1.5-f16.gguf",
+      "install_path": "models/embedding/bge-base-zh-v1.5-f16.gguf",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "licenses/bge-base-zh-v1.5.LICENSE",
+      "install_path": "licenses/models/bge-base-zh-v1.5/LICENSE",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "models/qwen3-reranker-0.6b-q8_0.gguf",
+      "install_path": "models/reranker/qwen3-reranker-0.6b-q8_0.gguf",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    },
+    {
+      "cache_path": "licenses/qwen3-reranker-0.6b.LICENSE",
+      "install_path": "licenses/models/qwen3-reranker-0.6b/LICENSE",
+      "size": 1,
+      "sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    }
+  ]
+}

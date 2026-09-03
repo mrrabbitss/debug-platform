@@ -14,6 +14,10 @@
 Dockerfile text eol=lf
 Makefile text eol=lf
 
+# These synthetic demo inputs have a byte-level SHA-256 contract. Preserve the
+# recorded bytes in commits, clones and source archives on every platform.
+sample_data/demo_ap_frequent_offline/** -text
+
 *.png binary
 *.jpg binary
 *.jpeg binary

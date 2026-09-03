@@ -84,6 +84,10 @@ const errorCount = computed(() => eventStats.value.level_counts.ERROR || 0)
 const modules = computed(() => Object.keys(eventStats.value.module_counts || {}).sort())
 const synthesisStatus = computed(() => diagnosis.value.synthesis_status || null)
 const synthesisFailure = computed(() => synthesisStatus.value?.failure || null)
+const isDemoSnapshot = computed(() => Boolean(
+  diagnosis.value?.demo_snapshot
+  || diagnosis.value?.synthesis_status?.mode === 'DEMO_VALIDATED_SNAPSHOT'
+))
 const analysisEvidence = computed<Record<string, any>>(() => {
   if (!latestAnalysis.value) return {}
   try {
@@ -110,6 +114,15 @@ function evidenceLabel(evidenceId: string): string {
       : `${sourceFile} - 第 ${lineStart} 行`
   }
   if (sourceFile) return String(sourceFile)
+  const derivedLocations = [metadata.udn_location, metadata.mac_location]
+    .filter(location => location && typeof location === 'object')
+    .map(location => {
+      const file = String(location.source_file || '')
+      const line = Number(location.line || location.line_start || 0)
+      return file && line > 0 ? `${file} - 第 ${line} 行` : file
+    })
+    .filter(Boolean)
+  if (derivedLocations.length) return [...new Set(derivedLocations)].join('、')
   if (item.title) return `《${item.title}》`
   if (item.source_type === 'analysis') return '综合诊断结果'
   return '证据位置未记录'
@@ -130,7 +143,7 @@ function displayDiagnosisText(value: unknown): string {
     rendered = rendered.split(evidenceId).join(label)
   }
   return rendered.replace(
-    /\b(?:EVT|LEM|LEH|DOC|KCHUNK|LOCALDOC|SYM|COMMIT|MEM|ANL|AREV)-[A-Za-z0-9_.:-]+\b/g,
+    /\b(?:EVT|LEM|LEH|LDE|DOC|KCHUNK|LOCALDOC|SYM|COMMIT|MEM|ANL|AREV)-[A-Za-z0-9_.:-]+\b/g,
     '证据位置未记录'
   )
 }
@@ -493,6 +506,17 @@ onBeforeUnmount(() => {
 
     <el-alert v-if="caseAccess && !canEditCase" type="info" :closable="false" title="当前账号对这个案例只有只读权限。" style="margin-bottom:14px" />
 
+    <el-alert
+      v-if="isDemoSnapshot"
+      type="info"
+      :closable="false"
+      show-icon
+      data-testid="demo-case-banner"
+      title="合成日志演示 · 真实 GLM-5.2 历史成功结果"
+      description="两份日志、两侧 LLM 筛查、2 轮综合规划、真实 Token/耗时与文件行号证据均来自此前通过 wawapii.com 完成的 GLM-5.2 成功运行。导入快照时不会再次出站；凭据、原始 Prompt 和私有方法正文未随快照分发。"
+      style="margin-bottom:14px"
+    />
+
     <el-alert v-if="currentJob" :closable="false" :type="['FAILED', 'DEAD_LETTER'].includes(currentJob.status) ? 'error' : currentJob.status === 'CANCELLED' ? 'warning' : 'info'" style="margin-bottom:14px">
       <template #title>{{ currentJob.kind }}：{{ currentJob.message || currentJob.status }}</template>
       <el-progress :percentage="currentJob.progress" :status="['FAILED', 'DEAD_LETTER'].includes(currentJob.status) ? 'exception' : undefined" />
@@ -680,14 +704,24 @@ onBeforeUnmount(() => {
           :case-id="caseId"
           :run-id="latestAnalysisWithTrace.agent_run_id"
           operation="comprehensive_diagnosis"
-          title="综合诊断多轮 LLM Planning 轨迹"
+          :title="isDemoSnapshot ? '真实 GLM-5.2 历史诊断轨迹（脱敏快照）' : '综合诊断多轮 LLM Planning 轨迹'"
           style="margin-bottom:14px"
         />
         <el-empty v-if="!latestAnalysis" description="请先完成日志解析并启动综合诊断" />
         <template v-else>
           <el-alert type="info" :closable="false" :title="displayDiagnosisText(diagnosis.summary || '诊断完成')" />
           <el-alert
-            v-if="synthesisStatus"
+            v-if="isDemoSnapshot"
+            type="info"
+            :closable="false"
+            show-icon
+            data-testid="demo-diagnosis-snapshot"
+            title="这是此前真实 GLM-5.2 成功诊断的脱敏、证据重定位快照"
+            description="模型结论、2 轮规划、工具轨迹、321,453 Token 与约 146 秒耗时均来自历史成功运行；当前导入过程未再次调用模型。结论已重绑定到当前合成日志的文件名与行号，私有方法正文和凭据未入包。"
+            style="margin-top:10px"
+          />
+          <el-alert
+            v-else-if="synthesisStatus"
             :type="synthesisStatus.accepted ? 'success' : synthesisStatus.mode === 'SKIPPED' ? 'info' : 'warning'"
             :closable="false"
             show-icon

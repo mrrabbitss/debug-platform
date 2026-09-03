@@ -215,12 +215,15 @@ class OpenAICompatibleProvider(LLMProvider):
             thinking_mode = getattr(self, "thinking_mode", None)
             if thinking_mode is None and hasattr(self, "thinking_enabled"):
                 thinking_mode = "enabled" if self.thinking_enabled else "disabled"
-            # Log keyword planning is a bounded JSON extraction task. GLM Thinking
-            # can consume the whole output budget before emitting the JSON object,
-            # and can exceed common corporate-proxy request deadlines. Keep deep
-            # reasoning available for comprehensive diagnosis, but make this stage
-            # deterministic and short regardless of the profile-wide preference.
-            if purpose == "log_triage_planning":
+            # Tool selection and log-keyword extraction are bounded JSON planning
+            # tasks. GLM Thinking can consume the whole response window before it
+            # emits the JSON object and exceed common corporate-proxy deadlines.
+            # Keep the profile preference for final synthesis and interactive chat,
+            # while making these structured control-plane calls deterministic.
+            if (
+                purpose == "log_triage_planning"
+                or purpose.startswith("diagnostic_planning_round_")
+            ):
                 thinking_mode = "disabled"
             self.last_thinking_mode = thinking_mode or "inherit"
             if thinking_mode in {"enabled", "disabled"}:

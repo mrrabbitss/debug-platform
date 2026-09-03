@@ -26,7 +26,7 @@ from app.models import (
 
 
 _INTERNAL_EVIDENCE_ID = re.compile(
-    r"\b(?:EVT|LEM|LEH|DOC|KCHUNK|LOCALDOC|SYM|COMMIT|MEM|ANL|AREV)-"
+    r"\b(?:EVT|LEM|LEH|LDE|DOC|KCHUNK|LOCALDOC|SYM|COMMIT|MEM|ANL|AREV)-"
     r"[A-Za-z0-9_.:-]+\b"
 )
 
@@ -57,6 +57,23 @@ def evidence_display_label(item: dict[str, Any]) -> str:
     metadata = item.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
+    derived_labels: list[str] = []
+    for key in ("udn_location", "mac_location"):
+        location = metadata.get(key)
+        if not isinstance(location, dict) or not location.get("source_file"):
+            continue
+        label = _location_label(
+            str(location["source_file"]),
+            location.get("line") or location.get("line_start"),
+            location.get("line_end"),
+        )
+        if label not in derived_labels:
+            derived_labels.append(label)
+    # A local comparison is only meaningful when both operands remain visible.
+    # Its top-level source points at the first operand for jump navigation, so
+    # prefer the richer nested provenance in reports and other text surfaces.
+    if derived_labels:
+        return "、".join(derived_labels)
     source_file = (
         item.get("source_file")
         or item.get("file_path")

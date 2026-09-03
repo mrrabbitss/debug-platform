@@ -174,7 +174,14 @@ def test_json_generation_sends_explicit_thinking_mode(
     assert provider.last_finish_reason == "stop"
 
 
-def test_log_triage_json_generation_forces_thinking_disabled(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "purpose",
+    ["log_triage_planning", "diagnostic_planning_round_1"],
+)
+def test_structured_planning_json_forces_thinking_disabled(
+    monkeypatch,
+    purpose: str,
+) -> None:
     captured_request: dict = {}
 
     class FakeCompletions:
@@ -198,7 +205,7 @@ def test_log_triage_json_generation_forces_thinking_disabled(monkeypatch) -> Non
     asyncio.run(provider.generate_json(
         "system",
         "user",
-        purpose="log_triage_planning",
+        purpose=purpose,
     ))
 
     assert captured_request["extra_body"] == {"thinking": {"type": "disabled"}}

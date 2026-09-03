@@ -1,7 +1,26 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.utils import json_dumps, json_loads
+
+
+_PRIVATE_MODEL_ENDPOINT_FIELDS = frozenset({
+    "base_url", "endpoint", "endpoint_url", "proxy_url",
+})
+
+
+def _public_model_config(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _public_model_config(item)
+            for key, item in value.items()
+            if str(key).casefold() not in _PRIVATE_MODEL_ENDPOINT_FIELDS
+        }
+    if isinstance(value, list):
+        return [_public_model_config(item) for item in value]
+    return value
 
 
 class ORMModel(BaseModel):
@@ -48,6 +67,21 @@ class CaseOut(ORMModel):
     owner_id: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class DemoCaseImportOut(BaseModel):
+    created: bool
+    restored: bool
+    case: CaseOut
+    artifact_count: int
+    event_count: int
+    triage_run_count: int
+    analysis_run_id: str
+    demo_snapshot: bool
+    model_called: bool
+    recorded_model_run: bool
+    recorded_model: str
+    recorded_total_tokens: int
 
 
 class ArtifactOut(ORMModel):
@@ -357,6 +391,14 @@ class AnalysisOut(ORMModel):
     error_message: str | None
     created_at: datetime
     completed_at: datetime | None
+
+    @field_validator("model_config_json", mode="before")
+    @classmethod
+    def redact_private_model_endpoints(cls, value: Any) -> str:
+        parsed = json_loads(str(value or ""), {})
+        if not isinstance(parsed, dict):
+            parsed = {}
+        return json_dumps(_public_model_config(parsed))
 
 
 class JobOut(ORMModel):

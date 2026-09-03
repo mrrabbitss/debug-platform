@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.db import Base
 from app.core.utils import json_loads
 from app.models import AgentRun, AgentTraceEvent, AnalysisRun, Artifact, Case, LogEvent
+from app.schemas import AnalysisOut
 from app.services import diagnosis
 
 
@@ -62,9 +63,16 @@ def test_analysis_records_safe_model_configuration_snapshot(tmp_path: Path, monk
         assert run.prompt_version == "v4-fault-tree-coverage"
         snapshot = json_loads(run.model_config_json, {})
         assert snapshot["profile_name"] == "Qwen production"
-        assert snapshot["base_url"] == "https://model.example.com/v1"
+        assert snapshot["endpoint_configured"] is True
+        assert "base_url" not in snapshot
         assert snapshot["config"]["timeout_seconds"] == 60
         assert "api_key" not in run.model_config_json.lower()
+
+        # Old rows may still contain an endpoint snapshot. The API response
+        # model removes it without mutating the historical database record.
+        run.model_config_json = '{"base_url":"https://private.invalid/v1","mode":"api"}'
+        public = AnalysisOut.model_validate(run)
+        assert json_loads(public.model_config_json, {}) == {"mode": "api"}
 
     engine.dispose()
 

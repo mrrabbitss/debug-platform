@@ -1,0 +1,48 @@
+============================================================
+Start run collect command:WAP:get wlan basic laninst 1 wlaninst6
+get wlan basic laninst 1 wlaninst6
+get WLANConfiguration!
+Device Model : DEMO-GW-9000
+Firmware Version : DEMO-V1.0.0
+Serial Number : SYNTHETIC-GW-001
+============================================================
+Start run collect command:WAP:cat /var/smartlink/topodebug.0.log
+NOTICE 2026-08-28 09:59:40.010[545][WAP]AddAPTopoTree, APInst: 1, Parent: 33
+NOTICE 2026-08-28 09:59:40.020[545][WAP]Topo, apInst=[1] Status=[1]
+============================================================
+Start run collect command:WAP:display ip neigh
+NOTICE 2026-08-28 09:59:50.000[90][LAN]LAN3 REACHABLE 02:00:00:00:01:01 192.0.2.10
+NOTICE 2026-08-28 09:59:50.050[90][LAN]LAN3 link is up, speed=1000Mbps duplex=full
+============================================================
+Start run collect command:WAP:cat /proc/self/maps
+NOTICE 2026-08-28 09:59:55.000[33][UDM]libmap loaded /lib/libudm_rpc_adapt.so
+============================================================
+Start run collect command:WAP:display debuglog info
+NOTICE 2026-08-28 10:00:00.000[33][UDM]UDN[uuid:00e0fc37-2525-2828-2500-020000000101] advertisement received, lastEventTime[114277]
+WARN 2026-08-28 10:04:30.100[33][UDM][Abnormal] curTime[114598], iAdvrTimeOut[250], lastEventTime[114277], UDN[uuid:00e0fc37-2525-2828-2500-020000000101]
+WARN 2026-08-28 10:04:30.120[545][WAP]ApInst:1 Recv Offline Event, src=CtrlPointVerify
+WARN 2026-08-28 10:04:30.140[545][WAP]Topo, apInst=[1] Status=[0]
+WARN 2026-08-28 10:04:30.160[545][WAP]DelAPTopoTree DelType: 0, APInstId: 1, Parent APInstId: 33
+WARN 2026-08-28 10:04:30.180[545][WAP]COVER_PonApLeaveProc ApInst offline:1
+NOTICE 2026-08-28 10:04:31.000[90][LAN]LAN3 REACHABLE 02:00:00:00:01:01 192.0.2.10
+NOTICE 2026-08-28 10:05:02.000[33][UDM]Add new AP to list uuid:00e0fc37-2525-2828-2500-020000000101
+NOTICE 2026-08-28 10:05:02.030[545][WAP]Topo, apInst=[1] Status=[1]
+NOTICE 2026-08-28 10:10:00.000[33][UDM]UDN[uuid:00e0fc37-2525-2828-2500-020000000101] advertisement received, lastEventTime[114877]
+WARN 2026-08-28 10:14:30.100[33][UDM][Abnormal] curTime[115198], iAdvrTimeOut[250], lastEventTime[114877], UDN[uuid:00e0fc37-2525-2828-2500-020000000101]
+WARN 2026-08-28 10:14:30.120[545][WAP]ApInst:1 Recv Offline Event, src=CtrlPointVerify
+WARN 2026-08-28 10:14:30.140[545][WAP]Topo, apInst=[1] Status=[0]
+WARN 2026-08-28 10:14:30.160[545][WAP]DelAPTopoTree DelType: 0, APInstId: 1, Parent APInstId: 33
+WARN 2026-08-28 10:14:30.180[545][WAP]COVER_PonApLeaveProc ApInst offline:1
+NOTICE 2026-08-28 10:14:31.000[90][LAN]LAN3 REACHABLE 02:00:00:00:01:01 192.0.2.10
+NOTICE 2026-08-28 10:15:01.000[33][UDM]Add new AP to list uuid:00e0fc37-2525-2828-2500-020000000101
+NOTICE 2026-08-28 10:15:01.030[545][WAP]Topo, apInst=[1] Status=[1]
+NOTICE 2026-08-28 10:20:00.000[33][UDM]UDN[uuid:00e0fc37-2525-2828-2500-020000000101] advertisement received, lastEventTime[115477]
+WARN 2026-08-28 10:24:30.100[33][UDM][Abnormal] curTime[115798], iAdvrTimeOut[250], lastEventTime[115477], UDN[uuid:00e0fc37-2525-2828-2500-020000000101]
+WARN 2026-08-28 10:24:30.120[545][WAP]ApInst:1 Recv Offline Event, src=CtrlPointVerify
+WARN 2026-08-28 10:24:30.140[545][WAP]Topo, apInst=[1] Status=[0]
+WARN 2026-08-28 10:24:30.160[545][WAP]DelAPTopoTree DelType: 0, APInstId: 1, Parent APInstId: 33
+WARN 2026-08-28 10:24:30.180[545][WAP]COVER_PonApLeaveProc ApInst offline:1
+NOTICE 2026-08-28 10:24:31.000[90][LAN]LAN3 REACHABLE 02:00:00:00:01:01 192.0.2.10
+NOTICE 2026-08-28 10:25:03.000[33][UDM]Add new AP to list uuid:00e0fc37-2525-2828-2500-020000000101
+NOTICE 2026-08-28 10:25:03.030[545][WAP]Topo, apInst=[1] Status=[1]
+NOTICE 2026-08-28 10:25:10.000[90][SYSTEM]demo capture complete; no physical-link failure was observed
