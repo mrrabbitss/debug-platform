@@ -1,6 +1,26 @@
 # Validation Record
 
-## Latest: script server and quick client package (2026-09-07 18:43 CST)
+## Latest: one-command server preparation (2026-09-07)
+
+- Full run `20260907-193858-full` passed its first **10 stages**, including backend
+  **478 passed / 1 skipped**, coverage **80.48%**, and frontend typecheck/build. It stopped
+  at the Python dependency audit because the PyPI TLS connection closed unexpectedly.
+- The failed audit and all seven remaining Full stages were run with their canonical commands:
+  **8/8 PASS** in `artifacts/validation/20260907-193858-full-followup/summary.json`, including
+  dependency audits, extension compilation, doctor, runtime smoke and **7 browser E2E tests**.
+  All 18 Full checks passed across these two runs; the original failed summary is retained.
+- Root `setup_server.bat` and `scripts/setup_lan_server.ps1`: **9 focused tests PASS**,
+  covering interpreter selection, read-only planning, existing-directory protection, failures in
+  each build stage, final verification failure and publication of verified output only.
+- Actual batch entrypoint dry-run and reuse of the existing complete server directory PASS;
+  the latter ran bundled Python layout and manifest validation against the real server package.
+- Build-stage sequencing uses synthetic subprocess replacements in regression tests. A fresh
+  download/conversion/build through the new wrapper was not rerun on this machine, which has
+  Python 3.14 but no registered Python 3.12. The four underlying build commands are unchanged.
+- Prior release CI run `34114208853` failed the Windows large-log parser test with
+  `JobLeaseLostError`; its other jobs passed. That run does not establish green CI for this change.
+
+## Previous: script server and quick client package (2026-09-07 18:43 CST)
 
 - `scripts/run_lan_server.py` / `scripts/start_lan_server.bat`: initial setup, saved-data restart,
   real HTTPS readiness, LAN RBAC admin access, public certificate export and exclusion of backup while
