@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
 import MarkdownKnowledgeRoutingDialog from '../components/knowledge/MarkdownKnowledgeRoutingDialog.vue'
+import KnowledgeDraftActions from '../components/KnowledgeDraftActions.vue'
+import KnowledgeQuality from '../components/KnowledgeQuality.vue'
 import {
   knowledgeDeviceTypeLabel,
   knowledgeDeviceTypeOptions
@@ -29,6 +31,7 @@ const categoryDialog = ref(false)
 const revisionDialog = ref(false)
 const editingDocumentId = ref<string | null>(null)
 const editingLockVersion = ref<number | null>(null)
+const editingDraftVersion = ref<number | null>(null)
 const editingCategoryId = ref<string | null>(null)
 const revisionDocument = ref<KnowledgeDocument | null>(null)
 const revisions = ref<KnowledgeRevision[]>([])
@@ -187,6 +190,7 @@ function selectCategory(category: KnowledgeCategory) {
 function resetDocumentForm() {
   editingDocumentId.value = null
   editingLockVersion.value = null
+  editingDraftVersion.value = null
   documentForm.title = ''
   documentForm.category_id = selectedCategoryId.value
   documentForm.source_type = sourceTypeForCategory(selectedCategoryId.value)
@@ -253,7 +257,9 @@ async function extractMethod(document: KnowledgeDocument) {
 
 async function openEditDocument(document: KnowledgeDocument) {
   try {
-    const detail: KnowledgeDocument = (await api.get(`/knowledge/${document.id}`)).data
+    const published: KnowledgeDocument = (await api.get(`/knowledge/${document.id}`)).data
+    const detail = { ...published, ...published.pending_draft?.snapshot }
+    editingDraftVersion.value = published.pending_draft?.version || null
     editingDocumentId.value = detail.id
     documentForm.title = detail.title
     documentForm.category_id = detail.category_id || ''
@@ -286,14 +292,14 @@ async function saveDocument() {
       firmware_range: documentForm.firmware_range || null,
       module: documentForm.module || null,
       ...(editingDocumentId.value
-        ? { expected_lock_version: editingLockVersion.value }
+        ? { expected_lock_version: editingLockVersion.value, expected_draft_version: editingDraftVersion.value }
         : {})
     }
     if (editingDocumentId.value) await api.patch(`/knowledge/${editingDocumentId.value}`, payload)
     else await api.post('/knowledge', payload)
     ElMessage.success(
       editingDocumentId.value
-        ? '知识内容已修改并生成新草稿版本，请重新审核发布'
+        ? '已保存草稿，请审核发布；已有发布版本继续可用'
         : '知识草稿已新增并建立索引，请审核后发布'
     )
     documentDialog.value = false
@@ -373,10 +379,10 @@ async function reviewAction(
       labels[action],
       { type: action === 'reject' || action === 'archive' ? 'warning' : 'info' }
     )
-    await api.post(`/knowledge/${document.id}/review/${action}`, {
+    const response = await api.post(`/knowledge/${document.id}/review/${action}`, {
       expected_lock_version: document.lock_version
     })
-    ElMessage.success(`${labels[action]}成功`)
+    ElMessage.success(response.data.publication_pending ? '发布构建任务已提交，请在任务中心查看结果' : `${labels[action]}成功`)
     await loadDocuments()
   } catch (error: any) {
     if (error !== 'cancel') ElMessage.error(errorText(error))
@@ -406,7 +412,7 @@ async function rollbackRevision(revision: KnowledgeRevision) {
     )
     await api.post(
       `/knowledge/${document.id}/revisions/${revision.version}/rollback`,
-      { expected_lock_version: document.lock_version }
+      { expected_lock_version: document.lock_version, expected_draft_version: document.pending_draft?.version }
     )
     ElMessage.success('已从历史版本生成新草稿')
     revisionDialog.value = false
@@ -556,6 +562,8 @@ onMounted(load)
           <el-table-column label="操作" width="420" fixed="right">
             <template #default="scope">
               <el-button link type="primary" @click="openEditDocument(scope.row as KnowledgeDocument)">修改</el-button>
+              <KnowledgeDraftActions :document="scope.row as KnowledgeDocument" @changed="load" />
+              <KnowledgeQuality :document="scope.row as KnowledgeDocument" @changed="load" />
               <el-button
                 v-if="['DRAFT', 'REJECTED'].includes(scope.row.review_status)"
                 link
@@ -565,7 +573,7 @@ onMounted(load)
                 提交审核
               </el-button>
               <el-button
-                v-if="scope.row.review_status === 'IN_REVIEW'"
+                v-if="scope.row.can_publish && scope.row.review_status === 'IN_REVIEW'"
                 link
                 type="success"
                 @click="reviewAction(scope.row as KnowledgeDocument, 'approve')"
@@ -573,7 +581,7 @@ onMounted(load)
                 发布
               </el-button>
               <el-button
-                v-if="scope.row.review_status === 'IN_REVIEW'"
+                v-if="scope.row.can_publish && scope.row.review_status === 'IN_REVIEW'"
                 link
                 type="danger"
                 @click="reviewAction(scope.row as KnowledgeDocument, 'reject')"

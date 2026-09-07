@@ -16,9 +16,10 @@ Claude Code / Codex 当前会话模型 ─┤
 开关互相切换。
 
 截至 2026-09-03，registry 的 17 个业务工具、主应用装配、身份解析、诊断 Host 运行及新增
-Markdown 路由门禁均已通过最终源码完整回归。`20260903-014606-full` 的 18 个阶段全部通过：
-后端 `330 passed, 1 skipped`、前端生产构建和 runtime smoke 通过，5 个浏览器 E2E 全部通过，
-其中包含多 Markdown Web 路由和综合诊断。
+Markdown 路由门禁均已通过完整回归。最新 `20260903-155255-full` 的 18 个阶段全部通过：
+后端 `416 passed, 1 skipped`、前端生产构建和 runtime smoke 通过，5 个浏览器 E2E 全部通过，
+其中包含多 Markdown Web 路由和综合诊断。此前 `20260903-014606-full` 的 330 项结果仅为
+历史基线；当前完整记录见 [VALIDATION.md](../VALIDATION.md)。
 
 真实 Codex CLI 也已完成当前源码两条 Host 路径：batch `KRBATCH-28b4b098d8984ae2` 的两个
 Markdown 分别归入故障树与协议诊断规则，均保持 DRAFT/inactive 且后端 Chat/model egress 为零；
@@ -38,7 +39,7 @@ OpenCode 当前仅为辅助客户端规划项，按用户要求未消耗额度�
 Codex 诊断结果不等同于魔改 `codeagent` 真机验证。本机未安装该客户端，当前状态为
 `LIMITED`，不能宣称已完成其真实模型端到端测试。
 
-2026-09-03 启动器黑盒测试 `10 passed`（68.40 秒）：使用模拟 CLI 配合真实后端 REST/MCP
+2026-09-03 首版启动器黑盒测试 `10 passed`（68.40 秒）：使用模拟 CLI 配合真实后端 REST/MCP
 握手，覆盖模拟 Program Files 自动发现、`.ps1`/`.cmd` 中文及空格路径、配置/DPAPI 二次复用、
 更换端点不复用旧令牌、仓库迁移后的工作目录与 Skill 路径，以及失败退出回收和已有服务保留。
 新增门禁验证原生 stderr warning 配合退出码 `0` 可以继续，真实非零退出码 `17` 不被吞掉，
@@ -50,9 +51,18 @@ Windows 11 电脑单独验收。
 后端 `340 passed, 1 skipped`、覆盖率 80.44%，5 项网页 E2E 全部通过，包括综合诊断与多
 Markdown 归类；详细记录见 [VALIDATION.md](../VALIDATION.md)。这些仍不替代真实 codeagent 验收。
 
-客户端必须支持 `--mcp-config`、`--strict-mcp-config` 和 `--append-system-prompt`；启动前会
+客户端必须支持 `--mcp-config` 和 `--append-system-prompt`；启动前会
 检查其 `--help`，不支持时明确停止。它不是任意 CLI 的通用适配器，不要把 `-CliCommand`
 直接改成原生 `codex`；原生 Codex 的部署仍使用本页后文对应流程。
+
+当前默认是**额外加载** `gw-ap-debug`，不再传 `--strict-mcp-config`，因此不主动排除
+CodeAgent 原有的 MCP。启动器不读取或修改用户 `%USERPROFILE%\.cac`，也不覆盖其代理、模型、
+登录配置；原有配置仍由客户端自身加载。若已有同名 `gw-ap-debug` 配置，请在客户端 `/mcp`
+中核对实际地址，避免把旧服务当成当前服务。魔改客户端的最终合并语义仍以实机结果为准。
+
+2026-09-03 追加模式相关黑盒 `12 passed`（70.97 秒），新增验证仅有包内 `agent-skills`
+时的 Skill 定位、`-ConnectOnly` 禁止源码依赖安装、用户合成配置字节不变，以及模型/代理环境
+保持不变。测试客户端为模拟 CLI，不消耗模型额度，也不替代真实 CodeAgent 验收。
 
 Windows PowerShell 5.1 下，pip 或 CLI `--help` 写入 stderr 的 warning 不会单独判为失败；
 原生命令按实际退出码判断，`0` 可继续，非零仍失败，依赖准备输出继续保存在启动日志中。
@@ -142,7 +152,9 @@ Windows PowerShell 5.1 下，pip 或 CLI `--help` 写入 stderr 的 warning 不�
 - `start_codeagent.bat` / `scripts/start_codeagent.ps1`：源码 Windows 11 的 codeagent
   一键入口；只为本次会话准备后端连接与 MCP 配置。
 
-codeagent 一键入口当前随源码提供，不表示既有 Core/GGUF 安装包已包含这一新入口。
+旧 Core/GGUF 安装产物不包含 codeagent 一键入口；本轮 0.2.0 组件化构建开始纳入包内入口。
+它使用包内 Python 和已编译前端，不会创建源码 `.venv`；具体安装、双击入口与模型边界见
+[全 GGUF 安装指南](windows-offline-gguf-installer.md)。
 
 Windows Core 便携构建把上述标准源和两个安装器放在
 `agent-skills/gw-ap-debug` 与 `scripts/`，无需另外下载源码仓库。便携启动器会把
@@ -171,7 +183,7 @@ Windows Core 便携构建把上述标准源和两个安装器放在
 4. 网页路径保留当前平台模型设置。`host_cli_mcp` 路径必须有自动测试证明不会调用
    后端生成式模型 provider。
 5. Markdown 完整文件与原始日志一样走 `/api/v1` multipart 数据面，不进入 `/mcp`。
-   `/api/v1/knowledge-routing/import` 仅允许管理员；Web 可使用平台 Chat Profile，CLI 请求固定
+   `/api/v1/knowledge-routing/import` 允许工程师或管理员；工程师仅能处理自己的草稿。Web 可使用平台 Chat Profile，CLI 请求固定
    `reasoning_owner=host_cli`，再由当前客户端模型通过两个知识路由工具完成判断和 DRAFT 写回。
 6. 为每位操作者签发最小权限令牌，并将最终外部地址记录为
    `https://debug.example.internal/mcp` 这类完整 URL。
@@ -345,7 +357,7 @@ $env:DEBUGPLATFORM_API_BASE_URL = 'https://debug.example.internal/api/v1'
 | Web | `/api/v1/knowledge-routing/import` multipart | 用户选择或当前激活的平台 Chat Profile | 本地保存，发送脱敏限长片段，校验模型结果，每文件创建一个 DRAFT |
 | Claude Code / Codex | 同一 REST multipart，`reasoning_owner=host_cli` | 当前 CLI 会话模型 | 先暂存每文件一个 DRAFT，再通过 MCP 返回脱敏限长上下文并校验 Host 决策；后端 Chat 调用为零 |
 
-两条路径均只接受 1–20 个 `.md`/`.markdown` 文件、要求管理员身份、只允许选择现有活动叶子
+两条路径均只接受 1–20 个 `.md`/`.markdown` 文件、要求工程师或管理员身份、只允许选择现有活动叶子
 分类，并且绝不自动提交审核或发布。多个输入不会被拼成一个文档；每个文件都有独立 artifact、
 后台 job、知识文档、版本与审核生命周期。
 
@@ -409,14 +421,14 @@ codex mcp remove gw-ap-debug
 
 | 现象 | 检查 |
 |---|---|
-| codeagent 找不到或参数预检失败 | 用 `-CliCommand` 指定现有程序完整路径；该构建必须提供本页列出的三个 Claude 兼容参数，脚本不会安装或改造客户端。 |
+| codeagent 找不到或参数预检失败 | 用 `-CliCommand` 指定现有程序完整路径；该构建必须提供本页列出的两个 Claude 兼容参数，脚本不会安装或改造客户端。 |
 | 一键入口发现已有后端但 MCP 校验失败 | 已有服务会保持运行。用 `-Configure` 提供同时可用于 REST/MCP 的令牌；若服务尚未配置 MCP 凭据，由操作者确认后手动停止它，再用一键入口启动，脚本不强杀服务或改写其鉴权。 |
 | 客户端提示缺少环境变量 | 必须在启动 `claude`/`codex` 的同一进程树设置 URL 与令牌。 |
 | HTTP 401/403 | 令牌已过期、未映射用户，或用户没有目标案例权限；不要改成模型 API Key。 |
 | `/mcp` 为 404 | 确认完整地址包含 `/mcp`，并检查反向代理是否保留路径。 |
 | MCP 正常但网页异常 | 这是独立入口；按原 Web 回归检查 `/api/v1`、前端和平台模型配置。 |
 | 上传 401 而 MCP 正常 | 检查 REST 层是否接受同一 scoped token，或由管理员提供批准的数据面令牌映射。 |
-| Markdown 路由返回 403 | 知识分类和草稿写回要求 `ADMIN`；案例成员权限不能替代知识管理员权限。 |
+| Markdown 路由返回 403 | 需要 `ENGINEER` 操作自己的草稿或 `ADMIN`；案例成员权限不能替代文档归属。 |
 | Web 分类提示缺少模型或同意 | 选择已启用且非 Mock 的 Chat Profile；API 模式需显式同意发送脱敏限长片段。 |
 | CLI 分类提示 stale/hash 不匹配 | 文档已在读取上下文后发生变化；重新调用 `debug_get_knowledge_routing_context` 并重新判断。 |
 | Finalize 拒绝 evidence ID | 刷新 host run，只使用本次运行工具返回的证据，不能复用旧案例 ID。 |

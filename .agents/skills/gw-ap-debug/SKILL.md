@@ -52,6 +52,11 @@ Claude Code session is the only generative reasoner for this workflow.
 4. List and read the diagnostic method documents before proposing checks.
    Assess every method the run marks as required; do not infer content from a
    title alone.
+   The run can include the signed-in user's personal knowledge revisions. Keep
+   `personal_revision_id` and `PERSONAL_UNREVIEWED` provenance in the result;
+   a personal correction is immediately usable by its author but is not a
+   globally approved fact. Never use a past case or a method as proof of this
+   case's root cause; retrieve and validate current-case evidence.
 5. Form a bounded check plan locally, then call the required method/evidence
    tools. Each response returns a server receipt. Submit that round only after
    the calls exist. For every call cited in `planning.tool_calls`, copy that

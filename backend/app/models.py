@@ -5,6 +5,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
 from app.core.utils import utcnow
+from app.memory_models import AgentMemory as AgentMemory
+from app.publication_models import KnowledgeDraft as KnowledgeDraft, KnowledgePublication as KnowledgePublication
+from app.knowledge_acl_models import KnowledgeAccess as KnowledgeAccess
+from app.publication_models import KnowledgeWorkingRevision as KnowledgeWorkingRevision
 
 
 class UserAccount(Base):
@@ -315,6 +319,7 @@ class KnowledgeChunk(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True)
     chunk_index: Mapped[int] = mapped_column(Integer)
+    document_version: Mapped[int] = mapped_column(Integer, default=1, index=True)
     heading: Mapped[str | None] = mapped_column(String(512), nullable=True)
     content: Mapped[str] = mapped_column(Text)
     token_estimate: Mapped[int] = mapped_column(Integer, default=0)
@@ -659,34 +664,6 @@ class CommitFileChange(Base):
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
-class AgentMemory(Base):
-    __tablename__ = "agent_memories"
-    __table_args__ = (
-        Index("ix_agent_memories_kind_outcome", "memory_type", "outcome"),
-        Index("ix_agent_memories_case_kind", "case_id", "memory_type"),
-    )
-
-    id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    case_id: Mapped[str | None] = mapped_column(
-        ForeignKey("cases.id", ondelete="CASCADE"), nullable=True, index=True
-    )
-    memory_type: Mapped[str] = mapped_column(String(32), index=True)
-    source_kind: Mapped[str] = mapped_column(String(64), index=True)
-    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    title: Mapped[str] = mapped_column(String(512))
-    content: Mapped[str] = mapped_column(Text)
-    context_json: Mapped[str] = mapped_column(Text, default="{}")
-    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
-    outcome: Mapped[str] = mapped_column(String(32), default="UNKNOWN", index=True)
-    confidence: Mapped[float] = mapped_column(Float, default=0.5)
-    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
-    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
-    reuse_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-
-
 class AnalysisRun(Base):
     __tablename__ = "analysis_runs"
 
@@ -728,6 +705,9 @@ class DiagnosisFeedback(Base):
     root_cause_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     evidence_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     comment: Mapped[str] = mapped_column(Text, default="")
+    resolution_status: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
+    resolution_notes: Mapped[str] = mapped_column(Text, default="")
+    resolution_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     corrections_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(32), default="SUBMITTED", index=True)
     submitted_by: Mapped[str | None] = mapped_column(String(128), nullable=True)

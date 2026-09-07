@@ -65,7 +65,10 @@ def _review_result(document: KnowledgeDocument) -> dict[str, Any]:
     "/knowledge/{document_id}/revisions",
     response_model=list[KnowledgeRevisionOut],
 )
-def list_knowledge_revisions(document_id: str, db: Db) -> list[dict[str, Any]]:
+def list_knowledge_revisions(document_id: str, request: Request, db: Db) -> list[dict[str, Any]]:
+    from app.services.knowledge_access import can_read_revision, require_knowledge_access
+    principal = _principal(request)
+    require_knowledge_access(db, document_id, principal)
     document = db.get(KnowledgeDocument, document_id)
     if not document:
         raise HTTPException(404, "Knowledge document not found")
@@ -86,6 +89,7 @@ def list_knowledge_revisions(document_id: str, db: Db) -> list[dict[str, Any]]:
             "snapshot": json_loads(revision.snapshot_json, {}),
         }
         for revision in revisions
+        if can_read_revision(db, document, revision, principal)
     ]
 
 
@@ -96,10 +100,48 @@ def _transition(
     db: Session,
     action: str,
 ) -> dict[str, Any]:
-    principal = _require_admin(request)
+    principal = _principal(request)
     document = db.get(KnowledgeDocument, document_id)
     if not document:
         raise HTTPException(404, "Knowledge document not found")
+    from app.services.knowledge_access import require_knowledge_access, require_publisher
+    if action == "SUBMIT":
+        require_knowledge_access(db, document_id, principal, write=True)
+    else:
+        require_publisher(db, document, principal)
+    from app.core.config import get_settings
+    if action == "APPROVE" and get_settings().deployment_mode == "lan_server":
+        from app.services.knowledge_drafts import draft_for_document
+        from app.services.knowledge_governance import document_snapshot, require_lock_version
+        from app.models import KnowledgeDraft, KnowledgeAccess
+        from app.services.jobs import job_runner
+        from app.services.knowledge_publication import publication_job
+        try:
+            require_lock_version(document, payload.expected_lock_version)
+            if document.review_status != "IN_REVIEW":
+                raise ValueError("Knowledge is not in review")
+            access = db.get(KnowledgeAccess, document_id)
+            author = (access.owner_id if access else None) or actor_id(principal)
+            draft = draft_for_document(db, document_id, author=author or "")
+            if draft and draft.status == "BUILDING":
+                raise ValueError("Publication already building")
+            if not draft:
+                draft = KnowledgeDraft(id=new_id("KDRAFT"), document_id=document_id, base_version=document.version,
+                    created_by=author, owner_key=author or "", snapshot_json="{}")
+                db.add(draft)
+            snapshot = document_snapshot(db, document)
+            snapshot.pop("active", None)
+            snapshot.pop("review_status", None)
+            draft.snapshot_json = json_dumps(snapshot)
+            draft.status = "IN_REVIEW"
+            draft.review_comment = payload.comment
+            db.commit()
+            args = {"document_id": document_id, "draft_id": draft.id,
+                    "draft_version": draft.version, "reviewer": actor_id(principal)}
+            job = job_runner.submit(db, "publish_knowledge_revision", publication_job, *args.values(), input_data=args)
+            return {**_review_result(document), "job": {"id": job.id, "status": job.status}, "publication_pending": True}
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
     try:
         transition_document_review(
             db,
@@ -194,8 +236,10 @@ def rollback_knowledge_revision(
             expected_lock_version=payload.expected_lock_version,
             created_by=actor_id(principal),
             change_summary=payload.change_summary,
+            expected_draft_version=payload.expected_draft_version,
         )
-        index_document(db, document)
+        if not document.active:
+            index_document(db, document)
         db.commit()
         db.refresh(document)
     except ValueError as exc:
@@ -246,6 +290,9 @@ def create_diagnosis_feedback(
         evidence_correct=payload.evidence_correct,
         comment=payload.comment,
         corrections_json=json_dumps(payload.corrections),
+        resolution_status=payload.resolution_status,
+        resolution_notes=payload.resolution_notes,
+        resolution_observed_at=payload.resolution_observed_at,
         status="SUBMITTED",
         submitted_by=actor_id(principal),
     )
@@ -273,6 +320,9 @@ def review_diagnosis_feedback(
     feedback.reviewed_by = actor_id(principal)
     feedback.reviewed_at = utcnow()
     feedback.review_comment = payload.comment
+    from app.services.memory_governance import apply_reviewed_resolution
+
+    apply_reviewed_resolution(db, feedback)
     db.commit()
     db.refresh(feedback)
     return feedback_to_dict(feedback)

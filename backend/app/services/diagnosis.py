@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from sqlalchemy import case as sql_case, select
 
 from app.core.db import SessionLocal
-from app.core.utils import json_dumps, new_id, utcnow
+from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import AnalysisRun, Artifact, Case, CodeSymbol, LogEvent, Repository
 from app.services.agent_trace_runtime import (
     append_live_trace,
@@ -426,8 +426,11 @@ def prepare_analysis_run(
     case: Case,
     created_by: str,
 ) -> tuple[AnalysisRun, Any]:
+    from app.services.knowledge_personal import personal_view
+    knowledge_view = personal_view(db, created_by)
     model_info = get_active_chat_model_info()
     model_config = sanitize_model_config({
+        "personal_knowledge_revisions": knowledge_view,
         "profile_name": model_info.get("profile_name"),
         "mode": model_info.get("mode"),
         "base_url": model_info.get("base_url"),
@@ -507,6 +510,7 @@ def _analyze_case_impl(
         )
         db.commit()
         run_id = run.id
+        knowledge_view = json_loads(run.model_config_json, {}).get("personal_knowledge_revisions", [])
 
     ctx.update(10, "Collecting high-signal log events")
     event_started = perf_counter()
@@ -568,6 +572,7 @@ def _analyze_case_impl(
     with SessionLocal() as db:
         search_result = agentic_search(
             db,
+            knowledge_view=knowledge_view,
             case_id=case_id,
             query=query,
             top_k=12,
@@ -613,6 +618,7 @@ def _analyze_case_impl(
     ctx.update(48, "Reading all applicable methods and starting multi-round LLM planning")
     planning = run_diagnostic_planning(
         ctx,
+        knowledge_view=knowledge_view,
         case=case,
         agent_run_id=agent_run_id,
         baseline_search=search_result,

@@ -135,6 +135,51 @@ installer before evaluating or signing a current candidate.
 
 ## Atomic upgrade and uninstall contract
 
+### Optional components
+
+The current Setup component page supports Full (default), Core, Core + Embedding,
+Core + Reranker, and a custom selection. Core is always required. The shared
+llama.cpp CPU runtime is included when either GGUF model is selected; a Core-only
+installation keeps Hashing Embedding and disables Reranker. Selecting only the
+Reranker does not automatically add a semantic Embedding model.
+
+Double-clicking `Install.bat` displays the same four choices; Enter defaults to
+Full for a new installation and preserves the previous selection on upgrade.
+For unattended ZIP installs use:
+
+```bat
+Install.bat -Components Full -NoLaunch
+Install.bat -Components Core -NoLaunch
+Install.bat -Components Embedding -NoLaunch
+Install.bat -Components Reranker -NoLaunch
+Install.bat -Components Auto -NoLaunch
+```
+
+`Auto` reads only the prior `installation-selection.json`, defaulting to Full
+when no selection was recorded. Explicit `-Components` takes precedence.
+To change components, rerun the original full Setup/ZIP from outside the existing
+installation. An installed partial tree is not a full distribution source.
+
+Both distribution forms intentionally retain the full download/extraction payload.
+Inside an unpublished sibling staging directory, `component_selection.py` first
+verifies every source file and rejects unknown files, unsafe paths, links, missing
+files or incorrect hashes, including corruption in a model the user did not select.
+It then removes only manifest-declared unselected model/runtime files, updates
+the model and build metadata, records the selected tasks, and generates a strict
+installed manifest. The original manifest bytes remain in
+`source-package-manifest.json` and their SHA-256 is recorded in
+`installation-selection.json`; model/license provenance remains intact.
+The ordinary launcher integrity check must then pass before any installed
+directory is replaced. This preserves integrity without requiring absent optional
+files to appear in the installed manifest.
+
+The Start menu includes separate Web and CodeAgent launch shortcuts; the optional
+desktop task creates both. The installer does not install CodeAgent, select its
+model, or modify its login/configuration. Selecting fewer local models does not
+remove the CodeAgent shortcut.
+
+### Atomic publication
+
 Inno Setup must never merge package files directly into `{app}`. A merge leaves
 files removed by newer versions behind, and the next `package-manifest.json`
 check then correctly rejects the unexpected stale files.
@@ -142,10 +187,10 @@ check then correctly rejects the unexpected stale files.
 The Inno source now extracts every payload file to
 `{tmp}\GWAPDebugPlatformPayload`, with `package-manifest.json` as the final
 `[Files]` entry. Its `AfterInstall` callback runs
-`install_local.ps1 -NoLaunch -NoShortcuts`, waits for PowerShell to terminate,
+`install_local.ps1 -NoLaunch -NoShortcuts -Components <selection>`, waits for PowerShell to terminate,
 and raises a fatal Setup error if the process cannot start or exits non-zero.
 The shared publisher copies to a sibling staging tree, verifies the complete
-manifest, keeps the prior app tree as a backup during the swap, and removes it
+source manifest and the selected-component manifest, keeps the prior app tree as a backup during the swap, and removes it
 only after publication succeeds. Files absent from the new release therefore
 cannot survive an upgrade.
 

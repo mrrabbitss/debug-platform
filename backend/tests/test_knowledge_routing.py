@@ -254,7 +254,7 @@ def test_host_cli_reads_masked_context_and_atomically_applies_routing(
         db.commit()
 
     registry = create_debugplatform_mcp_registry(session_factory=factory)
-    with pytest.raises(MCPToolError, match="Administrator"):
+    with pytest.raises(MCPToolError, match="role required"):
         _call(
             registry,
             "debug_get_knowledge_routing_context",
@@ -262,7 +262,7 @@ def test_host_cli_reads_masked_context_and_atomically_applies_routing(
                 "document_ids": ["DOC-host-routing"],
                 "consent_host_model_data": True,
             },
-            role="ENGINEER",
+            role="VIEWER",
         )
     routing_context = _call(
         registry,

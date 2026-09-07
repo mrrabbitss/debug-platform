@@ -158,10 +158,12 @@ def _search_query_result(
     query: str,
     session_factory: Any,
     top_k: int = 10,
+    knowledge_view: list[str] | None = None,
 ) -> dict[str, Any]:
     with session_factory() as db:
         result = agentic_search(
             db,
+            knowledge_view=knowledge_view,
             case_id=case_id,
             query=query,
             top_k=max(1, min(top_k, 20)),
@@ -189,13 +191,14 @@ def run_diagnostic_planning(
     case_evidence: list[dict[str, Any]] | None = None,
     session_factory: Any = SessionLocal,
     budget: DiagnosticAgentBudget | None = None,
+    knowledge_view: list[str] | None = None,
 ) -> DiagnosticPlanningResult:
     agent_budget = budget or configured_diagnostic_agent_budget()
     with session_factory() as db:
         current_case = db.get(Case, case.id)
         if not current_case:
             raise ValueError("Case not found")
-        methods = load_applicable_diagnostic_methods(db, current_case)
+        methods = load_applicable_diagnostic_methods(db, current_case, **({"knowledge_view": knowledge_view} if knowledge_view else {}))
     patterns = compile_diagnostic_patterns(methods)
     fault_tree_items = compile_fault_tree_items(methods)
     triage_evidence, triage_coverage = _triage_evidence(case.id, session_factory)
@@ -222,7 +225,7 @@ def run_diagnostic_planning(
         fault_tree_items=fault_tree_items,
         evidence=[*effective_case_evidence, *baseline_evidence],
         knowledge_search=lambda query, top_k: _search_query_result(
-            case.id, query, session_factory, top_k,
+            case.id, query, session_factory, top_k, knowledge_view,
         ),
         log_search=lambda payload: search_persisted_log_evidence(
             triage_run_ids=triage_coverage["triage_run_ids"],

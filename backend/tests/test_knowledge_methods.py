@@ -111,6 +111,11 @@ def test_fault_case_api_extracts_updates_and_cascades_analysis_method(
             yield db
 
     app = FastAPI()
+    @app.middleware("http")
+    async def administrator_session(request, call_next):
+        request.state.principal = {"id": "test-admin", "role": "ADMIN"}
+        return await call_next(request)
+
     app.include_router(router, prefix="/api/v1")
     app.dependency_overrides[get_db] = override_db
 

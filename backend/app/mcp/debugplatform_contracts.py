@@ -96,7 +96,16 @@ class DebugKnowledgeRoutingContextInput(_StrictInput):
     consent_host_model_data: Literal[True]
 
 
+class DebugKnowledgeSectionsInput(_StrictInput):
+    document_id: str = Field(min_length=1, max_length=40)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    offset: int = Field(default=0, ge=0, le=512)
+    limit: int = Field(default=2, ge=1, le=2)
+    consent_host_model_data: Literal[True]
+
+
 class DebugKnowledgeRoutingDecision(_StrictInput):
+    covered_section_ids: list[str] = Field(default_factory=list, max_length=512)
     document_id: str = Field(min_length=1, max_length=40)
     expected_lock_version: int = Field(ge=1)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

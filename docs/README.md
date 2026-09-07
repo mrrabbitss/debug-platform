@@ -6,6 +6,15 @@
 
 ## 架构与演进
 
+- [从 release 分支准备服务器](仓库部署准备.md)
+- [2026-09-07 分机交付文件](../deploy/releases/20260907/README.md)
+- [服务器使用指南（脚本启动）](服务器使用指南.md)
+- [分机使用指南](分机使用指南.md)
+- [本地多客户端 CLI 推理、中断恢复与持久化实测](local-multiclient-cli-validation.md)
+- [2026-09-07 试点交接与验收范围](pilot-handoff-20260907.md)
+- [局域网与知识演进 M0–M5 实施记录](lan-knowledge-iteration.md)
+- [Win11 局域网服务器先导运行说明](../deploy/windows-server/README.md)
+- [Win11 无后端轻客户端安装与使用](../deploy/windows-client/README.md)
 - [项目结构、技术栈、优缺点和迭代历程](project-architecture-and-evolution.md)
 - [Windows 11 Claude Code / Codex Skill + MCP 部署](agent-skill-mcp-deployment.md)
 - [Windows 11 便携部署与本地模型隔离](windows-portable-deployment.md)

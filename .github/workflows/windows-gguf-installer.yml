@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Numeric package version (for example 0.1.0)
+        description: Numeric package version (for example 0.2.0)
         required: true
-        default: "0.1.0"
+        default: "0.2.0"
         type: string
       hf_endpoint:
         description: Optional HTTPS Hugging Face mirror origin

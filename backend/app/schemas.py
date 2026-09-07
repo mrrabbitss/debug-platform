@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.utils import json_dumps, json_loads
 
@@ -130,6 +130,7 @@ class KnowledgeCreate(BaseModel):
 
 
 class KnowledgeUpdate(BaseModel):
+    expected_draft_version: int | None = Field(default=None, ge=1)
     title: str | None = None
     source_type: str | None = None
     device_type: str | None = None
@@ -146,6 +147,10 @@ class KnowledgeUpdate(BaseModel):
 
 
 class KnowledgeOut(ORMModel):
+    can_publish: bool = False
+    can_attest_history: bool = False
+    review_drafts: list[dict[str, Any]] = Field(default_factory=list)
+    pending_draft: dict[str, Any] | None = None
     id: str
     title: str
     source_type: str
@@ -181,6 +186,7 @@ class KnowledgeReviewAction(BaseModel):
 
 
 class KnowledgeRollbackRequest(BaseModel):
+    expected_draft_version: int | None = Field(default=None, ge=1)
     expected_lock_version: int = Field(ge=1)
     change_summary: str = Field(default="", max_length=512)
 
@@ -228,6 +234,15 @@ class DiagnosisFeedbackCreate(BaseModel):
     evidence_correct: bool | None = None
     comment: str = Field(default="", max_length=20000)
     corrections: dict[str, Any] = Field(default_factory=dict)
+    resolution_status: Literal["UNKNOWN", "RESOLVED", "NOT_RESOLVED", "RECURRED"] = "UNKNOWN"
+    resolution_notes: str = Field(default="", max_length=10000)
+    resolution_observed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def require_observed_result(self):
+        if self.resolution_status != "UNKNOWN" and (not self.resolution_notes.strip() or not self.resolution_observed_at):
+            raise ValueError("A real outcome requires observation time and verification notes")
+        return self
 
 
 class DiagnosisFeedbackReview(BaseModel):

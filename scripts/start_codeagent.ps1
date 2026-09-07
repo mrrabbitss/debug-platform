@@ -3,9 +3,11 @@ param(
     [switch]$DryRun,
     [switch]$Check,
     [switch]$Configure,
+    [switch]$ConnectOnly,
     [string]$CliCommand = '',
     [string]$McpUrl = '',
     [string]$StateDirectory = '',
+    [string]$WorkingDirectory = '',
     [ValidateRange(10, 600)]
     [int]$BackendStartupTimeoutSeconds = 90
 )
@@ -23,6 +25,8 @@ $previousClientEnvironment = @{}
 try {
     if (-not $StateDirectory) { $StateDirectory = Join-Path $script:RepoRoot '.agent-runtime\codeagent-launcher' }
     $stateRoot = [IO.Path]::GetFullPath($StateDirectory)
+    $cliWorkingDirectory = if ($WorkingDirectory) { [IO.Path]::GetFullPath($WorkingDirectory) } else { $script:RepoRoot }
+    if (-not [IO.Directory]::Exists($cliWorkingDirectory)) { throw 'The requested CLI working directory does not exist.' }
     $configPath = Join-Path $stateRoot 'config.json'
     $tokenPath = Join-Path $stateRoot 'token.dpapi'
     $config = $null
@@ -47,12 +51,17 @@ try {
     $localBackend = $mcpUri.IsLoopback -and $mcpUri.Scheme -eq 'http' -and $mcpUri.AbsolutePath -eq '/mcp'
     if ($localBackend -and $mcpUri.Port -lt 1024) { throw 'A local backend requires a port between 1024 and 65535.' }
     $skillPath = Join-Path $script:RepoRoot '.claude\skills\gw-ap-debug\SKILL.md'
+    if (-not [IO.File]::Exists($skillPath)) {
+        $skillPath = Join-Path $script:RepoRoot 'agent-skills\gw-ap-debug\SKILL.md'
+    }
     if (-not [IO.File]::Exists($skillPath)) { throw "The current project Skill is missing: $skillPath" }
     $resolvedCli = Get-LauncherCliPath -Explicit $CliCommand -Saved $config.cli_command -AllowPrompt (-not $DryRun -and -not $Check)
     if ($DryRun) {
         [ordered]@{
             dry_run = $true; repository_root = $script:RepoRoot; state_directory = $stateRoot
-            mcp_url = $mcpUri.AbsoluteUri; local_backend_start_allowed = [bool]$localBackend
+            working_directory = $cliWorkingDirectory
+            mcp_url = $mcpUri.AbsoluteUri; local_backend_start_allowed = [bool]($localBackend -and -not $ConnectOnly)
+            connect_only = [bool]$ConnectOnly
             cli_command = $resolvedCli; cli_available = [bool]$resolvedCli; skill_path = $skillPath
             token_persistence = 'Windows DPAPI CurrentUser'; changes_global_cli_config = $false
             starts_processes = $false; writes_files = $false
@@ -66,6 +75,9 @@ try {
     $token = $env:DEBUGPLATFORM_MCP_TOKEN
     $injectToken = $false
     $localPortInitiallyFree = $localBackend -and (Test-LauncherPortFree $mcpUri.Port)
+    if ($ConnectOnly -and $localPortInitiallyFree) {
+        throw 'ConnectOnly requires an already running backend. No source virtual environment or backend will be started.'
+    }
     if ($localBackend) {
         $authMode = Get-LauncherSetting 'AUTH_MODE' 'local'
         $apiKey = Get-LauncherSetting 'API_KEY'
@@ -89,6 +101,9 @@ try {
     [IO.Directory]::CreateDirectory($stateRoot) | Out-Null
     $backendReused = $true
     if ($localBackend -and (Test-LauncherPortFree $mcpUri.Port)) {
+        if ($ConnectOnly) {
+            throw 'ConnectOnly backend is no longer available. No source virtual environment or backend will be started.'
+        }
         $python = Initialize-LauncherBackend $stateRoot
         # Check again after bootstrap: never race an existing listener by terminating it.
         if (Test-LauncherPortFree $mcpUri.Port) {
@@ -115,9 +130,16 @@ try {
         }
         throw
     }
+    if ($config.server_id -and $status.server_instance_id -and
+            $config.server_id -cne $status.server_instance_id -and -not $Configure) {
+        throw 'The server identity at this URL changed. Verify the server and run -Configure to bind it again.'
+    }
     Save-LauncherToken $tokenPath $token $mcpUri.AbsoluteUri
     $savedCli = if ($resolvedCli) { $resolvedCli } else { $config.cli_command }
-    Write-LauncherJson $configPath ([ordered]@{ schema_version = 1; cli_command = $savedCli; mcp_url = $mcpUri.AbsoluteUri })
+    Write-LauncherJson $configPath ([ordered]@{
+        schema_version = 1; cli_command = $savedCli; mcp_url = $mcpUri.AbsoluteUri
+        server_id = $status.server_instance_id
+    })
     $summary = [ordered]@{
         ok = $true; mcp_url = $mcpUri.AbsoluteUri; backend_reused = [bool]$backendReused
         inference_owner = $status.inference_owner; backend_chat_allowed = $status.backend_chat_allowed
@@ -137,8 +159,9 @@ try {
     $env:DEBUGPLATFORM_MCP_URL = $mcpUri.AbsoluteUri
     $env:DEBUGPLATFORM_MCP_TOKEN = $token
     $prompt = "For GW/AP diagnosis and Markdown knowledge routing, explicitly read and follow the current project Skill at: $skillPath . Use its real directory for helper scripts. Do not substitute another same-named user Skill. The active CodeAgent model owns reasoning; use the gw-ap-debug MCP evidence plane and verify debug_status before work."
-    $cliArguments = @('--mcp-config', $sessionFile, '--strict-mcp-config', '--append-system-prompt', $prompt)
-    Set-Location -LiteralPath $script:RepoRoot
+    # Add the platform server for this session without disabling the client's existing MCPs.
+    $cliArguments = @('--mcp-config', $sessionFile, '--append-system-prompt', $prompt)
+    Set-Location -LiteralPath $cliWorkingDirectory
     Write-Host '[OK] REST and MCP verified. Starting CodeAgent with the current project Skill.'
     & $resolvedCli @cliArguments
     if ($null -ne $LASTEXITCODE) { $exitCode = $LASTEXITCODE }

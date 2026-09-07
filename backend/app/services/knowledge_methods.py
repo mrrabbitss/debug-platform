@@ -226,6 +226,8 @@ def enrich_knowledge_metadata(
     metadata: dict[str, Any] | None,
 ) -> dict[str, Any]:
     result = deepcopy(metadata or {})
+    from app.services.knowledge_compiler import compile_markdown
+    result["compiled_knowledge"] = compile_markdown(content)
     if source_type in STRUCTURED_SOURCE_TYPES:
         result["markdown_structure"] = parse_markdown_sections(content)
         result["knowledge_format"] = (
@@ -368,6 +370,14 @@ def derive_analysis_method(
     )
     created = derivation is None
     derived = db.get(KnowledgeDocument, derivation.derived_document_id) if derivation else None
+    if derived and derived.active and derived.review_status == "ACTIVE":
+        from app.services.knowledge_drafts import save_draft
+        save_draft(db, derived, {
+            "title": f"{source.title}：分析方法", "content": method_content, "metadata": method_metadata,
+            **{key: getattr(source, key) for key in ("device_type", "device_model", "firmware_range", "module", "trust_level", "confidentiality")},
+        }, expected_lock_version=derived.lock_version, expected_draft_version=None, author="derivation-engine")
+        db.commit()
+        return derived, False
     if derived is None:
         derived = KnowledgeDocument(
             id=new_id("DOC"),

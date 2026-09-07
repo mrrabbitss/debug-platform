@@ -4,7 +4,7 @@ param(
     [string]$OutputRoot = "",
     [string]$PortableRoot = "",
     [string]$PythonExe = "python",
-    [string]$Version = "0.1.0",
+    [string]$Version = "0.2.0",
     [string]$IsccPath = "",
     [switch]$SkipPortableBuild,
     [switch]$SkipFrontendBuild,
@@ -516,7 +516,7 @@ if (-not $SkipSmokeTest -and -not $SkipModelSmoke) {
     )
 }
 
-foreach ($name in @("Install.bat", "install_local.ps1", "OFFLINE_INSTALL.txt")) {
+foreach ($name in @("Install.bat", "install_local.ps1", "component_selection.py", "OFFLINE_INSTALL.txt")) {
     Copy-Item `
         -LiteralPath (Join-Path $projectRoot "deploy\windows-installer\$name") `
         -Destination (Join-Path $packageRoot $name) `

@@ -4,6 +4,9 @@ param(
     [switch]$NoLaunch,
     [switch]$NoDesktopShortcut,
     [switch]$NoShortcuts,
+    [ValidateSet("Auto", "Full", "Core", "Embedding", "Reranker")]
+    [string]$Components = "Auto",
+    [switch]$ChooseComponents,
     [ValidateRange(1, 600)][int]$LockTimeoutSeconds = 120
 )
 
@@ -80,6 +83,40 @@ function New-PlatformShortcuts {
         $shortcut.WorkingDirectory = $InstalledRoot
         $shortcut.Description = "Start GW/AP Intelligent Debug Platform"
         $shortcut.Save()
+    }
+    $cliShortcutTargets = @(
+        (Join-Path $startMenuDirectory "GWAP Debug Platform - CodeAgent.lnk")
+    )
+    if (-not $NoDesktopShortcut) {
+        $cliShortcutTargets += Join-Path (
+            [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
+        ) "GWAP Debug Platform - CodeAgent.lnk"
+    }
+    foreach ($shortcutPath in $cliShortcutTargets) {
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = Join-Path $InstalledRoot "start_codeagent.bat"
+        $shortcut.WorkingDirectory = $InstalledRoot
+        $shortcut.Description = "Connect your existing CodeAgent CLI to GW/AP Debug Platform"
+        $shortcut.Save()
+    }
+}
+
+function Get-PreviousComponentSelection {
+    $selectionPath = Join-Path $destination "installation-selection.json"
+    if (-not (Test-Path -LiteralPath $selectionPath -PathType Leaf)) {
+        return "Full"
+    }
+    try {
+        $previous = Get-Content -LiteralPath $selectionPath -Raw | ConvertFrom-Json
+        if (
+            [int]$previous.schema_version -ne 1 -or
+            [string]$previous.selection -notin @("Full", "Core", "Embedding", "Reranker")
+        ) {
+            throw "Unsupported component selection metadata."
+        }
+        return [string]$previous.selection
+    } catch {
+        throw "Cannot read the previous component selection; choose -Components explicitly."
     }
 }
 
@@ -198,7 +235,33 @@ try {
         }
     }
 
+    $selectedComponents = if ($Components -eq "Auto") {
+        Get-PreviousComponentSelection
+    } else {
+        $Components
+    }
+    if ($ChooseComponents) {
+        Write-Host ""
+        Write-Host "Select components (Core is always required):"
+        Write-Host "  1. Full: Core + GGUF Embedding + GGUF Reranker"
+        Write-Host "  2. Core only: Hashing Embedding + disabled Reranker"
+        Write-Host "  3. Core + GGUF Embedding"
+        Write-Host "  4. Core + GGUF Reranker"
+        $choice = Read-Host "Enter 1-4, or press Enter to keep $selectedComponents"
+        switch ($choice.Trim()) {
+            "" { }
+            "1" { $selectedComponents = "Full" }
+            "2" { $selectedComponents = "Core" }
+            "3" { $selectedComponents = "Embedding" }
+            "4" { $selectedComponents = "Reranker" }
+            default { throw "Invalid component choice. Run Install.bat again and select 1-4." }
+        }
+    }
+
     if ($sourceRoot -eq $destination) {
+        if ($selectedComponents -ne (Get-PreviousComponentSelection)) {
+            throw "Use the original full Setup/ZIP outside this install to change components."
+        }
         Write-Host "[INFO] The platform is already running from its installation directory."
         if (-not $NoShortcuts) {
             New-PlatformShortcuts -InstalledRoot $destination
@@ -228,9 +291,12 @@ try {
 
         $python = Join-Path $staging "runtime\python\python.exe"
         $launcher = Join-Path $staging "portable_launcher.py"
+        $componentProjector = Join-Path $staging "component_selection.py"
         if (
             -not (Test-Path -LiteralPath $python -PathType Leaf) -or
-            -not (Test-Path -LiteralPath $launcher -PathType Leaf)
+            -not (Test-Path -LiteralPath $launcher -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $componentProjector -PathType Leaf) -or
+            -not (Test-Path -LiteralPath (Join-Path $staging "start_codeagent.bat") -PathType Leaf)
         ) {
             throw "The bundled application runtime is incomplete."
         }
@@ -251,6 +317,13 @@ try {
             throw "Refusing to use an unsafe installer verification directory."
         }
         try {
+            Write-Host "[INFO] Verifying the full source and selecting $selectedComponents components..."
+            & $python -B -s $componentProjector `
+                --package-root $staging `
+                --selection $selectedComponents
+            if ($LASTEXITCODE -ne 0) {
+                throw "Component selection/integrity verification failed with exit code $LASTEXITCODE."
+            }
             & $python -B -s $launcher `
                 --check `
                 --no-browser `

@@ -10,6 +10,7 @@ from sqlalchemy import or_, select
 from starlette.concurrency import run_in_threadpool
 
 from app.core.db import SessionLocal
+from app.core.config import get_settings
 from app.core.utils import json_loads, new_id
 from app.mcp.contracts import MCPToolCallContext, MCPToolError
 from app.mcp.debugplatform_contracts import (
@@ -22,6 +23,7 @@ from app.mcp.debugplatform_contracts import (
     DebugGetEvidenceInput,
     DebugHostRunInput,
     DebugKnowledgeRoutingContextInput,
+    DebugKnowledgeSectionsInput,
     DebugListCasesInput,
     DebugListDiagnosticDocumentsInput,
     DebugOpenUIInput,
@@ -91,6 +93,7 @@ DEBUGPLATFORM_MCP_TOOL_NAMES = (
     "debug_generate_report",
     "debug_open_ui",
     "debug_get_knowledge_routing_context",
+    "debug_read_knowledge_sections",
     "debug_apply_knowledge_routing",
 )
 
@@ -196,6 +199,8 @@ class _DebugPlatformTools:
             "ready": True,
             "database": "ready",
             "server": "gw-ap-debug-platform",
+            "server_instance_id": get_settings().server_instance_id or "standalone",
+            "client_contract_version": "1.0",
             "server_version": DEBUGPLATFORM_MCP_SERVER_VERSION,
             "contract_version": HOST_DIAGNOSTIC_CONTRACT_VERSION,
             "transport": "streamable_http",
@@ -535,9 +540,12 @@ class _DebugPlatformTools:
         context: MCPToolCallContext,
     ) -> dict[str, Any]:
         principal = _principal(context)
-        if principal["role"] != "ADMIN":
-            raise MCPToolError("Administrator role required")
+        if principal["role"] not in {"ADMIN", "ENGINEER"}:
+            raise MCPToolError("Engineer or administrator role required")
         with self.session_factory() as db:
+            from app.services.knowledge_access import require_knowledge_access
+            for document_id in payload.document_ids:
+                require_knowledge_access(db, document_id, principal, write=True)
             result = knowledge_routing_context(
                 db,
                 payload.document_ids,
@@ -551,15 +559,32 @@ class _DebugPlatformTools:
             "consent_recorded": payload.consent_host_model_data,
         }
 
+    def read_knowledge_sections(self, payload: DebugKnowledgeSectionsInput, context: MCPToolCallContext) -> dict:
+        from app.services.knowledge_compiler import read_sections
+        from app.models import KnowledgeDocument
+        principal = _principal(context)
+        with self.session_factory() as db:
+            from app.services.knowledge_access import require_knowledge_access
+            require_knowledge_access(db, payload.document_id, principal)
+            document = db.get(KnowledgeDocument, payload.document_id)
+            if not document:
+                raise MCPToolError("Knowledge document not found")
+            return {**read_sections(document.content, content_sha256=payload.content_sha256,
+                                    offset=payload.offset, limit=payload.limit),
+                    "document_id": document.id, "backend_chat_calls": 0}
+
     def apply_knowledge_routing(
         self,
         payload: DebugApplyKnowledgeRoutingInput,
         context: MCPToolCallContext,
     ) -> dict[str, Any]:
         principal = _principal(context)
-        if principal["role"] != "ADMIN":
-            raise MCPToolError("Administrator role required")
+        if principal["role"] not in {"ADMIN", "ENGINEER"}:
+            raise MCPToolError("Engineer or administrator role required")
         with self.session_factory() as db:
+            from app.services.knowledge_access import require_knowledge_access
+            for decision in payload.decisions:
+                require_knowledge_access(db, decision.document_id, principal, write=True)
             results = apply_knowledge_routing(
                 db,
                 [item.model_dump(mode="json") for item in payload.decisions],
@@ -666,5 +691,6 @@ def create_debugplatform_mcp_registry(
     register("debug_generate_report", "Render an existing completed analysis without another inference pass.", DebugGenerateReportInput, tools.generate_report, read_only=False)
     register("debug_open_ui", "Return the existing Web UI URL for a case; never launches a browser.", DebugOpenUIInput, tools.open_ui, read_only=True)
     register("debug_get_knowledge_routing_context", "Read active knowledge taxonomy and bounded masked Markdown excerpts for host-model classification.", DebugKnowledgeRoutingContextInput, tools.get_knowledge_routing_context, read_only=True)
+    register("debug_read_knowledge_sections", "Read complete masked Markdown sections page by page; preserve returned section IDs for full-source classification.", DebugKnowledgeSectionsInput, tools.read_knowledge_sections, read_only=True)
     register("debug_apply_knowledge_routing", "Atomically apply host-model category decisions to DRAFT knowledge without publishing it.", DebugApplyKnowledgeRoutingInput, tools.apply_knowledge_routing, read_only=False)
     return registry

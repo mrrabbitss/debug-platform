@@ -52,6 +52,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
         EMBEDDING_PROVIDER="hashing", RERANKER_PROVIDER="disabled",
         GWAP_TEST_CLI_RECORD=str(tmp_path / "client-record.json"),
         ANTHROPIC_MODEL="launcher-test-preserve-model",
+        CLAUDE_CONFIG_DIR=str(tmp_path / "isolated-cli-config"),
     )
     return environment
 
@@ -70,7 +71,7 @@ def _run(
         iterator = iter(arguments)
         for argument in iterator:
             key = argument.removeprefix("-")
-            parameters[key] = True if key in {"DryRun", "Check", "Configure"} else next(iterator)
+            parameters[key] = True if key in {"DryRun", "Check", "Configure", "ConnectOnly"} else next(iterator)
         environment = {
             **environment, "GWAP_TEST_PROGRAM_FILES": str(program_files),
             "GWAP_TEST_LAUNCH_PARAMETERS": json.dumps(parameters),
@@ -99,7 +100,7 @@ def _fake_cli(tmp_path: Path, extension: str = "ps1") -> Path:
     path.write_text(
         """$ErrorActionPreference = 'Stop'
 if ($args -contains '--help') {
-    Write-Output '--mcp-config --strict-mcp-config --append-system-prompt'
+    Write-Output '--mcp-config --append-system-prompt'
     exit 0
 }
 if ($args -contains '--version') { Write-Output 'codeagent-test 1.0'; exit 0 }
@@ -112,6 +113,16 @@ $sha = [Security.Cryptography.SHA256]::Create()
 try {
     $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($token)))
 } finally { $sha.Dispose() }
+$connectionEnvironment = $null
+if ($env:GWAP_TEST_CAPTURE_CONNECTION -eq 'synthetic-fixture') {
+    $connectionEnvironment = @{
+        ANTHROPIC_BASE_URL = $env:ANTHROPIC_BASE_URL
+        HTTP_PROXY = $env:HTTP_PROXY
+        HTTPS_PROXY = $env:HTTPS_PROXY
+        ALL_PROXY = $env:ALL_PROXY
+        NO_PROXY = $env:NO_PROXY
+    }
+}
 $record = [ordered]@{
     arguments = $items
     cwd = (Get-Location).Path
@@ -120,6 +131,8 @@ $record = [ordered]@{
     token_hash = $digest
     model = $env:ANTHROPIC_MODEL
     mcp_url = $env:DEBUGPLATFORM_MCP_URL
+    config_directory = $env:CLAUDE_CONFIG_DIR
+    connection_environment = $connectionEnvironment
 }
 [IO.File]::WriteAllText($env:GWAP_TEST_CLI_RECORD, ($record | ConvertTo-Json -Depth 12),
     [Text.UTF8Encoding]::new($false))
@@ -143,6 +156,20 @@ def _assert_ok(result: subprocess.CompletedProcess[str]) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def _assert_additive_session(record: dict[str, object], repository: Path = ROOT) -> None:
+    arguments = record["arguments"]
+    assert arguments[::2] == ["--mcp-config", "--append-system-prompt"]
+    assert "--strict-mcp-config" not in arguments
+    assert "--model" not in arguments
+    assert "--dangerously-skip-permissions" not in arguments
+    assert list(record["mcp_config"]["mcpServers"]) == ["gw-ap-debug"]
+    skill_path = repository / ".claude" / "skills" / "gw-ap-debug" / "SKILL.md"
+    if not skill_path.is_file():
+        skill_path = repository / "agent-skills" / "gw-ap-debug" / "SKILL.md"
+    assert str(skill_path) in arguments[3]
+    assert not Path(arguments[1]).exists(), "The session-only MCP file must be cleaned up"
+
+
 def test_codeagent_dry_run_is_non_mutating(tmp_path: Path) -> None:
     state = tmp_path / "state not created"
     result = _run(
@@ -163,6 +190,44 @@ def test_codeagent_refuses_insecure_remote_url(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "HTTPS" in result.stdout + result.stderr
     assert not state.exists()
+
+
+@pytest.mark.parametrize("mode", ["Check", "DryRun"])
+def test_codeagent_connect_only_does_not_bootstrap_and_accepts_packaged_skill(
+    tmp_path: Path, mode: str,
+) -> None:
+    package = tmp_path / "portable source 中文"
+    for relative in (
+        "scripts/start_codeagent.ps1", "scripts/codeagent_launcher_support.ps1",
+        "scripts/codeagent_launcher_http.ps1",
+    ):
+        destination = package / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, destination)
+    skill_path = package / "agent-skills" / "gw-ap-debug" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("# Synthetic packaged Skill fixture\n", encoding="utf-8")
+    state = tmp_path / "state not created"
+    port = _unused_port()
+    result = _run(
+        _environment(tmp_path), state, "-ConnectOnly", f"-{mode}",
+        "-McpUrl", f"http://127.0.0.1:{port}/mcp",
+        launcher=package / "scripts" / "start_codeagent.ps1",
+    )
+    if mode == "DryRun":
+        _assert_ok(result)
+        plan = json.loads(result.stdout)
+        assert plan["connect_only"] is True
+        assert plan["local_backend_start_allowed"] is False
+        assert Path(plan["skill_path"]).resolve() == skill_path
+    else:
+        assert result.returncode != 0
+        assert "ConnectOnly requires an already running backend" in result.stdout + result.stderr
+    assert not state.exists()
+    assert not (package / ".venv").exists()
+    assert not (tmp_path / "isolated.db").exists()
+    assert not (tmp_path / "client-record.json").exists()
+    assert not _port_open(port)
 
 
 def test_codeagent_native_stderr_warning_uses_exit_code(tmp_path: Path) -> None:
@@ -219,6 +284,14 @@ def test_codeagent_arbitrary_path_and_second_launch_reuse_configuration(
 ) -> None:
     state = tmp_path / "启动配置 with spaces"
     environment = _environment(tmp_path)
+    # Synthetic settings only: never inspect the developer's real CLI configuration.
+    user_config = tmp_path / "Existing CLI 用户配置"
+    user_config.mkdir()
+    environment["CLAUDE_CONFIG_DIR"] = str(user_config)
+    user_settings = b'{"env":{"ANTHROPIC_MODEL":"user-model"},"permissions":{"defaultMode":"default"}}'
+    existing_mcp = b'{"mcpServers":{"existing-tools":{"command":"synthetic-existing-mcp"}}}'
+    (user_config / "settings.json").write_bytes(user_settings)
+    (user_config / "mcp.json").write_bytes(existing_mcp)
     cli = _fake_cli(tmp_path, entry)
     port = _unused_port()
     url = f"http://127.0.0.1:{port}/mcp"
@@ -237,9 +310,10 @@ def test_codeagent_arbitrary_path_and_second_launch_reuse_configuration(
     config = first_record["mcp_config"]["mcpServers"]["gw-ap-debug"]
     assert config["url"] == url
     assert config["headers"]["Authorization"] == "Bearer ${DEBUGPLATFORM_MCP_TOKEN}"
-    assert "--strict-mcp-config" in first_record["arguments"]
-    assert "--model" not in first_record["arguments"]
-    assert "--dangerously-skip-permissions" not in first_record["arguments"]
+    _assert_additive_session(first_record)
+    assert first_record["config_directory"] == str(user_config)
+    assert (user_config / "settings.json").read_bytes() == user_settings
+    assert (user_config / "mcp.json").read_bytes() == existing_mcp
     assert not _port_open(port)
 
     settings = json.loads((state / "config.json").read_text(encoding="utf-8-sig"))
@@ -250,6 +324,10 @@ def test_codeagent_arbitrary_path_and_second_launch_reuse_configuration(
     second = _run(environment, state)
     _assert_ok(second)
     second_record = json.loads(record_path.read_text(encoding="utf-8-sig"))
+    _assert_additive_session(second_record)
+    assert second_record["config_directory"] == str(user_config)
+    assert (user_config / "settings.json").read_bytes() == user_settings
+    assert (user_config / "mcp.json").read_bytes() == existing_mcp
     assert second_record["token_hash"] == first_record["token_hash"]
     assert second_record["mcp_url"] == url
     assert not _port_open(port)
@@ -271,6 +349,8 @@ def test_codeagent_propagates_client_failure_and_cleans_owned_backend(tmp_path: 
         "-McpUrl", f"http://127.0.0.1:{port}/mcp",
     )
     assert result.returncode == 23, result.stdout + result.stderr
+    record = json.loads((tmp_path / "client-record.json").read_text(encoding="utf-8-sig"))
+    _assert_additive_session(record)
     assert not _port_open(port)
 
 
@@ -340,9 +420,19 @@ def test_codeagent_reuses_existing_backend_without_changing_auth(tmp_path: Path)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(ROOT / relative, destination)
             shutil.copytree(ROOT / ".claude" / "skills", relocated / ".claude" / "skills")
+            connection_environment = {
+                "ANTHROPIC_BASE_URL": "https://model-relay.example.invalid/v1",
+                "HTTP_PROXY": "http://127.0.0.1:18888",
+                "HTTPS_PROXY": "http://127.0.0.1:18889",
+                "ALL_PROXY": "http://127.0.0.1:18890",
+                "NO_PROXY": "company.example.invalid",
+            }
+            environment.update(connection_environment)
+            environment["GWAP_TEST_CAPTURE_CONNECTION"] = "synthetic-fixture"
+            relocated_cli = _fake_cli(tmp_path)
             moved_result = _run(
                 environment, tmp_path / "relocated-state", "-McpUrl", base + "/mcp",
-                "-CliCommand", str(_fake_cli(tmp_path)),
+                "-CliCommand", str(relocated_cli),
                 launcher=relocated / "scripts" / "start_codeagent.ps1",
             )
             _assert_ok(moved_result)
@@ -350,6 +440,26 @@ def test_codeagent_reuses_existing_backend_without_changing_auth(tmp_path: Path)
             assert Path(moved_record["cwd"]).resolve() == relocated
             prompt_index = moved_record["arguments"].index("--append-system-prompt") + 1
             assert str(relocated) in moved_record["arguments"][prompt_index]
+            _assert_additive_session(moved_record, relocated)
+            assert moved_record["connection_environment"] == connection_environment
+            assert server.poll() is None
+
+            packaged = tmp_path / "portable package 中文"
+            shutil.copytree(relocated / "scripts", packaged / "scripts")
+            shutil.copytree(ROOT / "agent-skills", packaged / "agent-skills")
+            cli_workspace = tmp_path / "external workspace 中文"
+            cli_workspace.mkdir()
+            packaged_result = _run(
+                environment, tmp_path / "packaged-state", "-McpUrl", base + "/mcp",
+                "-CliCommand", str(relocated_cli), "-ConnectOnly",
+                "-WorkingDirectory", str(cli_workspace),
+                launcher=packaged / "scripts" / "start_codeagent.ps1",
+            )
+            _assert_ok(packaged_result)
+            packaged_record = json.loads((tmp_path / "client-record.json").read_text(encoding="utf-8-sig"))
+            _assert_additive_session(packaged_record, packaged)
+            assert Path(packaged_record["cwd"]).resolve() == cli_workspace.resolve()
+            assert not (packaged / ".venv").exists()
             assert server.poll() is None
 
             environment["DEBUGPLATFORM_MCP_TOKEN"] = "synthetic-wrong-token"

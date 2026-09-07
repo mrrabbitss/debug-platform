@@ -1,5 +1,205 @@
 # Validation Record
 
+## Latest: script server and quick client package (2026-09-07 18:43 CST)
+
+- `scripts/run_lan_server.py` / `scripts/start_lan_server.bat`: initial setup, saved-data restart,
+  real HTTPS readiness, LAN RBAC admin access, public certificate export and exclusion of backup while
+  running PASS. Evidence: `artifacts/lan/script-server-smoke-20260907/smoke-result.json`.
+- Stopped-server backup returned `Backup verified`; matching archive retained under that isolated
+  server's `backups` directory. No service, scheduled task, firewall rule or system trust was installed.
+- Focused client/config/runner tests: **26 passed** across the two targeted selections.
+- Client package `cf4dafdaa87fb4e3`, **20 files / 40,046 ZIP bytes**, includes the concise user guide.
+  Final handoff files: `artifacts/lan/quickstart-20260907` (client ZIP, two separate Markdown guides, SHA256).
+- The final ZIP was extracted and installed into an isolated directory; manifest checks, guide byte equality,
+  content scan and remote-only launcher dry-run PASS. No desktop shortcut or user trust store was changed by tests.
+- Full regression `20260907-183320-full`: **18/18 stages PASS**, 591.53 seconds;
+  backend **469 passed / 1 skipped**, coverage **80.48%**, Edge E2E **7 passed**.
+  Dependency audits, repository harness, Golden gates, runtime smoke and local doctor passed.
+  External Docker/PostgreSQL/Qdrant and GitHub CI were not run; company CodeAgent still needs target-machine acceptance.
+
+## Earlier increment: two real CLI clients over HTTPS (2026-09-07)
+
+- `scripts/verify_multiclient_cli.py`: final successful full run
+  `artifacts/lan/multi-cli-20260907-d/result.json`, 355.64 seconds; prior complete run `multi-cli-20260907-c`
+  also passed in 262.71 seconds. Two authenticated Codex CLI
+  processes each completed two planning rounds and persisted one diagnosis plus one HTML report.
+- Client A was terminated after method reading and resumed the same durable host session in a new
+  CLI process while client B remained alive. Both final exit codes were zero. Cross-principal host-run
+  reads through new MCP sessions were rejected.
+- Actual packaged local retrieval audit: **10 Embedding / 2 Reranker / 0 backend Chat** calls, all E/R successful.
+- Post-shutdown read-only verification in final `result.json`: published method, both cases and analyses
+  retained; 6 confirmed facts use current-case logs, both sets of 5 citations valid, report SHA256 values match.
+  Test credentials revoked and owned server processes shut down. One model-stream network retry recovered.
+- Verifier, host session/diagnosis/runtime and MCP transport/auth/integration/registry regression:
+  **39 passed** in 19.84 seconds; repository harness **24/24 PASS**.
+  This increment changes validation tooling and documentation, not packaged product runtime code.
+  The most recent product Full remains the 16:04 CST record below; CI was not run.
+- Physical multi-machine networking, company CodeAgent, ten concurrent model jobs, and disk failure are
+  outside this result. Setup investigations and reproduction steps are recorded in
+  [local multi-client validation](docs/local-multiclient-cli-validation.md).
+
+## Previous Full: personal knowledge and pilot candidate (2026-09-07 16:04 CST)
+
+- `scripts\validate_all.bat Full`: PASS, **18/18** stages, run
+  `artifacts/validation/20260907-155428-full/summary.json` (571.21 seconds).
+- Backend **461 passed / 1 skipped**, coverage **80.48%**; Edge browser **7 passed**.
+  Includes migration 0021, independent authors, immutable Web/CLI views, publisher/admin approvals,
+  initial publication, crashed publication recovery, full server restore, human attestation and Markdown coverage.
+- Python/npm production dependency audits, VS Code compilation, local doctor, runtime smoke,
+  repository harness and Golden quality/time gates PASS. Existing SQLite ResourceWarning and Node
+  color/annotation warnings remain; Docker/PostgreSQL/Qdrant external acceptance and GitHub CI were not run.
+- Earlier run `20260907-153651-full` exposed two stale test assumptions (17 tools and no test principal),
+  corrected and included in the passing run. `20260907-154646-full` exceeded the unchanged 5-second graph
+  budget during concurrent package assembly; the final isolated Full passed without relaxing the gate.
+- `artifacts/lan/transport-pilot-b-20260907/result.json`: actual Caddy HTTPS, engineer REST/MCP,
+  GW/AP uploads, origin rejection and token revocation PASS; 10 distinct principals, 40 simultaneous
+  case reads/writes, zero failures, P95 0.142 s. Not a ten-model-job load test. Initial smoke used the wrong
+  REST token header; corrected to the established X-API-Key contract before this successful run.
+- `artifacts/lan/retrieval-pilot-20260907.json`: actual packaged GGUF E/R PASS, 14 normalized 768-D vectors,
+  relevant document first, 9 embedding / 1 reranking / 0 Chat calls. Does not establish upstream model equivalence.
+- `artifacts/lan/knowledge-evolution-cli-pilot-20260907.json`: real Codex CLI consumed synthetic retrieved
+  personal corrections; same/similar/different-cause/insufficient-evidence answers and citations **4/4 PASS**.
+  No company data or backend Chat. This is answer synthesis after retrieval, not full interactive MCP acceptance.
+- Core and GGUF 0.3.1 package smoke PASS; server directory `artifacts/lan/server-pilot-20260907`,
+  light client `artifacts/lan/client-pilot-20260907/GWAP-Client-e365cda6ba051b60.zip`.
+  `artifacts/lan/pilot-source-package-comparison.json`: 236 backend/frontend/Skill files matched.
+- Server PowerShell syntax and complete backup/restore tests PASS. Windows service installation,
+  scheduled-task execution, actual upgrade rollback, corporate network clients and off-machine restore
+  remain target-machine acceptance work. See [pilot handoff](docs/pilot-handoff-20260907.md).
+
+## LAN and knowledge iteration work in progress (2026-09-07)
+
+- Baseline Full: `artifacts/validation/20260907-093626-full/summary.json`, 18/18 stages PASS,
+  backend 416 passed / 1 skipped, coverage 80.44%, browser E2E 5 passed.
+- Existing launcher/portable focused regression: 19 passed.
+- LAN profile, model gates and access-control regression: 27 passed; Windows connector tests: 2 passed;
+  later LAN/Caddy/client public-certificate regression: 24 passed.
+- Fresh portable `artifacts/portable/lan-m1b-20260907/debug-platform-windows-x64`: manifest, isolated
+  runtime, backend readiness, Vue route, bundled recorded AP-offline demo PASS. Building from a venv
+  exposed and fixed the copied-Python-redirector defect (`sys._base_executable` is now used).
+- Real HTTPS/RBAC/MCP: `artifacts/lan/transport-m1-20260907/result.json` PASS. Actual Caddy TLS,
+  engineer discovery, GW/AP multipart uploads, Vue route, MCP session/status, Origin rejection,
+  REST and live-session token revocation verified. No Windows services installed, no machine/user
+  certificate-store changes, no GGUF or generative model calls in this transport smoke.
+- Memory/migration/knowledge-governance regression: 10 passed; new candidate publication, expiry,
+  real-resolution and recurrence regressions: 3 passed. Frontend typecheck/build PASS.
+- Publication/migration tests: 9 passed; publication + existing governance/method tests: 12 passed.
+  Edge publication E2E: 1 passed (12.0s), covering edit-to-proposal, old content still active,
+  human submission/approval, persistent background publication and a matching manifest.
+- Real four-process Windows credential contention: 20 consecutive passes after resolving the
+  stable parent directory for mutex identity, rather than the concurrently replaced token file.
+- Fresh Core `artifacts/portable/lan-m3b-20260907/debug-platform-windows-x64` self-check, backend,
+  Vue route and recorded demo passed. GGUF ZIP 0.3.0 under `artifacts/installer/lan-m3-20260907`
+  passed real E/R and packaged app smoke; no Setup.exe was produced in this invocation.
+- LAN package `artifacts/lan/server-m3-20260907`: real HTTPS/RBAC/MCP transport PASS in
+  `artifacts/lan/transport-m3-20260907/result.json`; real packaged retrieval PASS in
+  `artifacts/lan/retrieval-m3-20260907.json`: 14 finite normalized 768-D vectors, relevant result
+  first, 9 local embedding calls / 1 local reranker call / 0 backend Chat calls, clean shutdown.
+  This is synthetic sanity coverage, not upstream equivalence or complete diagnostic quality acceptance.
+- Full `20260907-113656-full` stopped at the unsynchronized workflow OpenAPI contract (fixed).
+  Full `20260907-113802-full`: 450 passed / 2 failed / 1 skipped, coverage 80.59%; failures were
+  the health-test module patch target and real Windows credential contention described above.
+  Post-fix Full `20260907-115000-full`: **18/18 stages PASS**, backend **452 passed / 1 skipped**,
+  coverage **80.59%**, six Edge browser E2E scenarios passed (33.5s), including the new knowledge
+  publication workflow. Remaining warnings are SQLite connection ResourceWarnings, VueUse PURE
+  annotations, Node color settings, and extension development-dependency notices (production audit clean).
+  The subsequent SQLite connection-close fix in the standalone retrieval verifier passed its targeted
+  verifier/client tests (16 passed) and the real packaged retrieval run above; no application behavior changed.
+- The above are incremental results, **not** final M0–M5 acceptance. Package directories are tested
+  intermediate snapshots, not a final release (the latest Web historical-rollback form change is source-only).
+  Real CLI reasoning, final synchronized packages, Windows service recovery, full server restore/upgrade,
+  knowledge access scopes and the remaining knowledge evolution work still require completion.
+
+## WebSkillMcp 0.2.0 additive MCP and component installer (2026-09-03)
+
+Current source adds MCP session configuration without `--strict-mcp-config`;
+the launcher never writes the user's `.cac` or other global CLI configuration.
+The portable CodeAgent entry uses bundled Python, the package Skill, a separate
+`data/workspace`, and a ConnectOnly call to the shared PowerShell entry. A
+CurrentUser DPAPI credential permits unkeyed-local Web/CLI coexistence without
+changing `.env`, configured API-key/RBAC policies or model/proxy settings.
+
+- Final-source Full `20260903-155255-full`: `18/18` stages PASSED in `675.96s`;
+  backend `416 passed, 1 skipped, 13 warnings` in `531.68s`, coverage `80.44%`.
+  All five Edge/Playwright E2E scenarios pass (`33.1s`), including comprehensive
+  Web diagnosis, multi-MD routing and Chat proxy configuration. All warnings are
+  SQLite unclosed-connection ResourceWarnings, not failed assertions. This run
+  includes the final Peek pipe, portable coordinator and new artifact-verifier
+  regression tests. Ruff, diff checking and the `24/24` Harness also pass.
+- Earlier Full `20260903-151923-full`: `18/18` stages PASSED in `567.91s`; backend
+  `399 passed, 1 skipped, 2 warnings`, coverage `80.44%`; all five browser E2E
+  scenarios passed, including comprehensive Web diagnosis and multi-MD routing.
+  The warnings were SQLite connection ResourceWarnings, not failed assertions.
+- Source launcher additive/ConnectOnly checks, portable coordinator tests,
+  component projection/install tests and real Windows DPAPI/concurrency checks
+  passed before assembly. Final external-workspace and artifact acceptance
+  checks are recorded below.
+- Rebuilt Core with Python `3.12.13`; the frontend was freshly built with Node
+  `24.11.1` in the initial candidate and reused unchanged for the final launcher
+  reassembly. The final GGUF build explicitly used `-SkipPortableBuild` with that
+  newly verified Core, not a historical 0.1.0 package. No GGUF/runtime/API smoke
+  gates were skipped. Local toolchain versions differ from CI's pinned Python
+  `3.12.12` / Node `22.22.0`; this is not a clean CI release build.
+- Both real GGUF inference checks and the assembled package's model activation,
+  E/R APIs, recorded demo, source-line jumps and Web route smoke passed. The
+  final Inno Setup compile completed in `226.281s`.
+
+Final tested MVP artifacts under `artifacts/installer/webskillmcp-0.2.0-verified/`:
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `GWAP-Debug-Platform-Setup-0.2.0-x64.exe` | 901991777 | `0564efa59184318a04c7d41ea37e3415626550ca41b25014232908be0207bed9` |
+| `debug-platform-offline-gguf-0.2.0-windows-x64.zip` | 936413385 | `4e747fd348b2d1c247377fbe98c6bed320bdf69902b8ef5aa3a1e026cfa5dfcc` |
+| `debug-platform-offline-gguf-0.2.0-windows-x64.provenance.json` | 15294 | `b6a5042d8dfc803c788630c7a194ed5004003a6fb3473b447482f4d4a414dabd` |
+
+- Final package manifest SHA-256:
+  `2b549c96301660bca40bf54d70f9ede1548e8f6d7a70d308b17423c65b4be3d5`.
+- `20260903-verified-core-codeagent`: `2/2 PASS`, `41.58s`;
+  `20260903-verified-gguf-codeagent`: `2/2 PASS`, `45.79s`. Both use the original
+  packaged product with a simulated CLI, not a diagnostic wrapper. Owned-backend
+  exit code `23`, Web-first reuse, unchanged shared DPAPI token, preserved existing
+  Web process, external workspace output, synthetic user settings/model/proxy
+  environment preservation, and cleanup of all owned ports/session/key files pass.
+  The GGUF run enables both real `llama_cpp_local` providers. Chat calls are zero.
+- `real-retrieval-validation.json`: `PASS`, `39.622s`. Two synthetic documents
+  pass DRAFT -> IN_REVIEW -> ACTIVE through real governance APIs. Reindex completes
+  with `14 x 768` finite, normalized persistent vectors; five candidates are really
+  embedded and reranked, with the related document first. The single-case Recall@10,
+  MRR and NDCG@10 are `1.0` (Precision@10 `0.1`); audit records nine successful local
+  Embedding calls, one Reranker call and no Chat calls. Shutdown is clean. This is
+  small-corpus retrieval sanity, not an upstream-equivalence Golden or proof of
+  ANN recall against the stored vector generation.
+- Earlier component matrix `component-verification-20260903-153136-957417c3`:
+  `5/5 PASS`, `288.619s` (Core -> Auto/Core -> E -> R -> Full).
+  `setup-verification-20260903-153808-97ae1046`: `PASS`, `745.298s`; real Setup
+  `/TYPE=core/embedding/reranker/full` installations/upgrades each exit `0`, then
+  uninstall removes only the owned application/uninstaller/shortcuts/registry.
+  A 128-byte synthetic business-data marker is preserved. These Setup results bind
+  to the earlier `a3e180...` EXE, not the final `0564ef...` EXE. Installer selection
+  scripts are byte-identical; final-payload installation is checked separately.
+- Final-payload matrix `component-verification-20260903-155643-46f4d482`:
+  `5/5 PASS`, `319.855s`, bound to the final `2b549c...` manifest above. Core,
+  Auto/Core, Embedding, Reranker and Full have the expected actual files and pass
+  installed-package self-check; external data is preserved, with no staging/backup
+  residue. This run uses an isolated Chinese/space/bracket path and does not change
+  global shortcuts, registry or the default application installation.
+
+The earlier `webskillmcp-0.2.0-final/` candidate is superseded and must not be
+distributed: managed startup stalled during NumPy native imports while another
+thread performed a blocking stdin read. Proxy-free and proxied Core controls both
+reproduced it. Non-blocking `PeekNamedPipe` fixed the original-product tests above;
+`20260903-core-peek-shutdown` also records readiness, graceful exit `0` and closed
+port in `12.03s`. The final child uses explicit Python `-u`. A separate PowerShell 7
+header-array cast in the portable smoke verifier was corrected and the full
+package smoke rerun successfully.
+
+Setup remains `NotSigned`; independent clean Win11/CPU/enterprise-policy matrices,
+upstream-equivalence Golden, real private CodeAgent inference/Ctrl+C/window-close,
+interactive wizard GUI coverage and release CI are not claimed. RBAC retains the
+configured legacy-admin policy; these tests do not prove personal-token enforcement.
+No OpenCode or Chat-model quota was used. This turn does not publish the artifacts
+or commit/push the source branch.
+
 ## WebSkillMcp publication preflight (2026-09-03)
 
 The handoff source branch is `WebSkillMcp`. README and the deployment guide now

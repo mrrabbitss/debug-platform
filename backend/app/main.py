@@ -3,6 +3,8 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import JSONResponse
 
 from app.api.routes import router
 from app.core.config import get_settings
@@ -17,6 +19,8 @@ from app.services.audit import AuditMiddleware
 from app.services.model_profiles import seed_model_profiles
 from app.services.retrieval_models import ensure_builtin_embedding_index
 from app.services.static_frontend import mount_static_frontend
+from app.services.storage_capacity import StorageCapacityError
+from app.services.model_capacity import ModelCapacityError
 
 
 @asynccontextmanager
@@ -48,6 +52,14 @@ app = FastAPI(
     description="Evidence-driven GW/AP collectDebuginfo analysis, RAG and code correlation platform.",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(StorageCapacityError)
+@app.exception_handler(ModelCapacityError)
+async def capacity_error_handler(_request, error):
+    return JSONResponse(status_code=503, content={"detail": str(error)}, headers={"Retry-After": "30"})
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list or ["*"],
@@ -60,6 +72,12 @@ app.add_middleware(
     ],
 )
 app.add_middleware(AuditMiddleware)
+if settings.trusted_hosts:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=[host.strip() for host in settings.trusted_hosts.split(",") if host.strip()],
+        www_redirect=False,
+    )
 app.include_router(router, prefix=settings.api_prefix, dependencies=[Depends(verify_api_key)])
 configure_debugplatform_mcp(app, settings)
 

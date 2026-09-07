@@ -95,7 +95,10 @@ def _revision_evidence(
         persisted = []
     with SessionLocal() as db:
         current_case = db.get(Case, case.id)
-        methods = load_applicable_diagnostic_methods(db, current_case or case)
+        # Follow-up edits retain the original diagnosis's immutable knowledge view.
+        knowledge_view = json_loads(source.model_config_json, {}).get("personal_knowledge_revisions", [])
+        methods = load_applicable_diagnostic_methods(db, current_case or case,
+            **({"knowledge_view": knowledge_view} if knowledge_view else {}))
         search = agentic_search(
             db,
             case_id=case.id,
@@ -105,6 +108,7 @@ def _revision_evidence(
             record_memory=False,
             execution_mode="diagnosis_revision_retrieval",
             joint_diagnostic_scope=True,
+            knowledge_view=knowledge_view,
         )
     method_by_id = {item.id: item for item in methods}
     evidence: list[dict[str, Any]] = []

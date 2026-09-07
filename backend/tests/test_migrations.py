@@ -41,7 +41,7 @@ def test_migrations_create_fresh_database_and_are_idempotent(tmp_path: Path) -> 
         "analysis_revisions",
     }.issubset(table_names)
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0017"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0021"
     analysis_column_info = {item["name"]: item for item in inspect(engine).get_columns("analysis_runs")}
     event_indexes = {item["name"] for item in inspect(engine).get_indexes("log_events")}
     model_indexes = {item["name"] for item in inspect(engine).get_indexes("model_profiles")}
@@ -187,7 +187,7 @@ def test_migrations_adopt_legacy_create_all_database_without_data_loss(tmp_path:
             "SELECT parse_run_id FROM log_events WHERE id = 'EVT-legacy'"
         ))
     assert title == "legacy case"
-    assert version == "0017"
+    assert version == "0021"
     assert active_run_id == "ART-legacy"
     assert event_run_id == "ART-legacy"
     engine.dispose()

@@ -156,10 +156,11 @@ def test_knowledge_review_revision_rollback_and_feedback_gate(
             },
         )
         assert updated.status_code == 200, updated.text
-        assert updated.json()["review_status"] == "DRAFT"
-        assert updated.json()["active"] is False
-        assert updated.json()["version"] == 2
-        assert updated.json()["lock_version"] == 4
+        assert updated.json()["review_status"] == "ACTIVE"
+        assert updated.json()["active"] is True
+        assert updated.json()["version"] == 1
+        assert updated.json()["lock_version"] == 3
+        assert updated.json()["pending_draft"]["snapshot"]["title"] == "Updated authentication timeout"
 
         missing_precondition = client.patch(
             f"/api/v1/knowledge/{document['id']}",
@@ -178,15 +179,16 @@ def test_knowledge_review_revision_rollback_and_feedback_gate(
 
         rollback = client.post(
             f"/api/v1/knowledge/{document['id']}/revisions/1/rollback",
-            json={"expected_lock_version": 4},
+            json={"expected_lock_version": 3, "expected_draft_version": updated.json()["pending_draft"]["version"]},
         )
         assert rollback.status_code == 200, rollback.text
-        assert rollback.json()["version"] == 3
+        assert rollback.json()["version"] == 1
         restored = client.get(
             f"/api/v1/knowledge/{document['id']}"
         ).json()
         assert restored["title"] == "Authentication timeout"
-        assert restored["review_status"] == "DRAFT"
+        assert restored["review_status"] == "ACTIVE"
+        assert restored["pending_draft"]["snapshot"]["title"] == "Authentication timeout"
 
         feedback = client.post(
             "/api/v1/cases/CASE-feedback/diagnosis-feedback",

@@ -65,6 +65,7 @@ class HostDiagnosticSnapshot:
     initial_evidence: list[dict[str, Any]]
     case_snapshot_hash: str
     method_manifest_hash: str
+    knowledge_view: tuple[str, ...] = ()
 
     @property
     def method_manifest(self) -> list[dict[str, Any]]:
@@ -158,6 +159,7 @@ def load_host_diagnostic_snapshot(
     case_id: str,
     *,
     session_factory: Any = SessionLocal,
+    knowledge_view: list[str] | None = None,
 ) -> HostDiagnosticSnapshot:
     """Load a stable, provider-neutral snapshot for one host-owned run."""
 
@@ -174,7 +176,7 @@ def load_host_diagnostic_snapshot(
         methods = (
             demo_methods
             if demo_methods is not None
-            else load_applicable_diagnostic_methods(db, case)
+            else load_applicable_diagnostic_methods(db, case, **({"knowledge_view": knowledge_view} if knowledge_view else {}))
         )
         artifact_sources_by_id = {
             artifact.id: normalize_artifact_source(artifact, case)
@@ -234,6 +236,7 @@ def load_host_diagnostic_snapshot(
     if demo_methods is not None:
         validate_bundled_demo_method_compilation(methods, patterns, fault_tree_items)
     return HostDiagnosticSnapshot(
+        knowledge_view=tuple(knowledge_view or []),
         case=case,
         artifacts=artifacts,
         artifact_sources=list(artifact_sources_by_id.values()),
@@ -292,6 +295,7 @@ def _knowledge_search(
     query: str,
     top_k: int,
     session_factory: Any,
+    knowledge_view: list[str] | None = None,
 ) -> dict[str, Any]:
     with session_factory() as db:
         result = agentic_search(
@@ -303,6 +307,7 @@ def _knowledge_search(
             record_memory=False,
             execution_mode="host_cli_mcp",
             joint_diagnostic_scope=True,
+            knowledge_view=knowledge_view,
         )
     return {
         "query": query,
@@ -335,6 +340,7 @@ def invoke_host_diagnostic_tool(
             query,
             top_k,
             session_factory,
+            list(snapshot.knowledge_view),
         ),
         log_search=(
             lambda payload: search_persisted_log_evidence(

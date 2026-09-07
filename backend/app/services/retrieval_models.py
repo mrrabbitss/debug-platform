@@ -10,6 +10,9 @@ from time import perf_counter
 from typing import Any
 
 import httpx
+from app.services.model_capacity import bounded_model_call
+from app.services.knowledge_visibility import current_chunk_clause
+from app.services.knowledge_retention import pinned_generations
 from openai import OpenAI
 from sklearn.feature_extraction.text import HashingVectorizer
 from sqlalchemy import delete, func, select, update
@@ -260,6 +263,7 @@ def _load_cross_encoder(model_name: str, device: str, instruction: str):
         raise _local_model_runtime_error("reranker", model_name, exc) from exc
 
 
+@bounded_model_call("embedding")
 def embed_texts(
     profile: ModelProfile,
     texts: list[str],
@@ -451,7 +455,7 @@ def index_embeddings(
             db.commit()
             db.execute(delete(KnowledgeEmbedding).where(
                 KnowledgeEmbedding.profile_id == profile.id,
-                KnowledgeEmbedding.generation_id != generation_id,
+                KnowledgeEmbedding.generation_id.not_in({generation_id, *pinned_generations(db, "embedding_generation_id", profile_id=profile.id)}),
             ))
             db.commit()
     except Exception:
@@ -526,14 +530,14 @@ def reindex_all_embeddings(
     try:
         db.execute(delete(KnowledgeEmbedding).where(
             KnowledgeEmbedding.profile_id == profile.id,
-            KnowledgeEmbedding.generation_id != generation_id,
+            KnowledgeEmbedding.generation_id.not_in({generation_id, *pinned_generations(db, "embedding_generation_id", profile_id=profile.id)}),
         ))
         db.commit()
     except Exception:
         # Publication is already durable. Stale generations are invisible and
         # can be reclaimed by the next successful rebuild.
         db.rollback()
-    if previous_generation and previous_generation != generation_id:
+    if previous_generation and previous_generation != generation_id and previous_generation not in pinned_generations(db, "embedding_generation_id", profile_id=profile.id):
         _delete_qdrant_generation(profile, previous_generation)
     return count
 
@@ -666,6 +670,7 @@ def embedding_search(
                     KnowledgeChunk.id.in_(set(qdrant)),
                     KnowledgeDocument.active.is_(True),
                     KnowledgeDocument.review_status == "ACTIVE",
+                    current_chunk_clause(),
                 )
             ).all())
             filtered_qdrant = {
@@ -695,6 +700,7 @@ def embedding_search(
                 == profile.active_embedding_generation_id,
                 KnowledgeDocument.active.is_(True),
                 KnowledgeDocument.review_status == "ACTIVE",
+                current_chunk_clause(),
             )
         ).all()
     ranked: list[tuple[str, float]] = []
@@ -713,6 +719,7 @@ def embedding_search(
     return dict(ranked[:limit])
 
 
+@bounded_model_call("reranker")
 def rerank_documents(
     query: str,
     documents: list[str],

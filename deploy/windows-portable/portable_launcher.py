@@ -341,6 +341,12 @@ class BundledModelProcess:
             str(self.api_key_file),
             *self.spec.server_arguments,
         ]
+        cpu_threads = os.environ.get("MODEL_CPU_THREADS", "")
+        if cpu_threads:
+            if not cpu_threads.isdigit() or not 1 <= int(cpu_threads) <= 64:
+                raise PortableLayoutError("MODEL_CPU_THREADS must be between 1 and 64")
+            if "--threads" not in arguments and "-t" not in arguments:
+                arguments.extend(["--threads", cpu_threads])
         try:
             self.process = subprocess.Popen(
                 arguments,
@@ -542,6 +548,12 @@ def _required_paths() -> tuple[Path, ...]:
         / "upload-knowledge-markdown.ps1",
         PACKAGE_ROOT / "scripts" / "install_agent_skill_mcp.ps1",
         PACKAGE_ROOT / "scripts" / "install_agent_skill_mcp.bat",
+        PACKAGE_ROOT / "scripts" / "start_codeagent.ps1",
+        PACKAGE_ROOT / "scripts" / "codeagent_launcher_support.ps1",
+        PACKAGE_ROOT / "scripts" / "codeagent_launcher_http.ps1",
+        PACKAGE_ROOT / "start_codeagent.bat",
+        PACKAGE_ROOT / "portable_codeagent.py",
+        PACKAGE_ROOT / "portable_mcp.py",
         ENV_EXAMPLE_PATH,
         MANIFEST_PATH,
     )
@@ -724,12 +736,48 @@ def _open_browser_when_ready(host: str, port: int, timeout_seconds: int = 90) ->
     print(f"[WARN] The browser was not opened automatically. Visit {app_url}")
 
 
+def _watch_parent_pipe(server: Any, input_fd: int) -> None:
+    """Observe the private shutdown pipe without holding a Windows CRT fd lock.
+
+    A blocking stdin read can deadlock native DLL initialization that inspects
+    stdio during imports. PeekNamedPipe does not consume input or lock CRT stdio.
+    The parent owns this anonymous pipe; any byte or EOF requests graceful exit.
+    """
+    if os.name != "nt":
+        try:
+            os.read(input_fd, 1)
+        finally:
+            server.should_exit = True
+        return
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.PeekNamedPipe.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+    ]
+    kernel.PeekNamedPipe.restype = wintypes.BOOL
+    handle = msvcrt.get_osfhandle(input_fd)
+    while not server.should_exit:
+        available = wintypes.DWORD()
+        if not kernel.PeekNamedPipe(handle, None, 0, None, ctypes.byref(available), None):
+            server.should_exit = True
+            return
+        if available.value:
+            server.should_exit = True
+            return
+        time.sleep(0.1)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Start the self-contained GW/AP Debug Platform package."
     )
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--managed-stdin", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--check", action="store_true")
     parser.add_argument(
         "--check-models",
@@ -749,6 +797,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_PATH)
+    parser.add_argument("--server-config", type=Path, help="Machine-level LAN server profile (HTTPS gateway required).")
     args = parser.parse_args(argv)
     if not 1024 <= args.port <= 65535:
         parser.error("--port must be between 1024 and 65535")
@@ -764,6 +813,17 @@ def main(argv: list[str] | None = None) -> int:
     model_manager: BundledModelManager | None = None
     try:
         validate_layout()
+        sys.path.insert(0, str(PACKAGE_ROOT))
+        server_config = None
+        if args.server_config:
+            from portable_server_config import load_server_config
+
+            server_config = load_server_config(args.server_config.resolve())
+            args.data_root = server_config.root / "data"
+            args.env_file = server_config.env_file
+            args.port = server_config.backend_port
+            args.no_browser = True
+            server_config.apply_environment()
         data_root, env_path = ensure_local_environment(args.data_root, args.env_file)
         if args.check:
             run_self_check(data_root, env_path)
@@ -779,12 +839,16 @@ def main(argv: list[str] | None = None) -> int:
                     timeout_seconds=args.model_start_timeout,
                 )
                 model_manager.start(require_all=True)
-                print("[OK] Bundled GGUF Embedding and Reranker health checks passed.")
+                print("[OK] All installed GGUF component health checks passed.")
             return 0
 
+        sys.path.insert(0, str(PACKAGE_ROOT))
+        from portable_mcp import prepare_mcp_environment
+
+        prepare_mcp_environment(data_root, env_path)
         host = "127.0.0.1"
         check_port_available(host, args.port)
-        public_base_url = configure_server_environment(host, args.port)
+        public_base_url = server_config.origin if server_config else configure_server_environment(host, args.port)
 
         specs = () if args.no_local_retrieval else load_bundled_model_specs()
         if specs:
@@ -795,7 +859,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             # Sidecars must be ready and their ephemeral connection settings
             # exported before FastAPI imports its cached Settings instance.
-            model_manager.start()
+            model_manager.start(require_all=bool(server_config))
         else:
             for name in (
                 "BUNDLED_GGUF_API_KEY",
@@ -821,15 +885,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[INFO] Open {public_base_url}/")
         print(f"[INFO] MCP endpoint: {public_base_url}/mcp")
         print("[INFO] Press Ctrl+C to stop the platform.")
-        uvicorn.run(
+        config = uvicorn.Config(
             "app.main:app",
             host=host,
             port=args.port,
             reload=False,
             access_log=True,
         )
-        return 0
-    except (OSError, PortableLayoutError) as exc:
+        server = uvicorn.Server(config)
+        model_failure = threading.Event()
+        if server_config and model_manager:
+            def watch_models() -> None:
+                while not server.should_exit:
+                    if any(item.process is not None and item.process.poll() is not None
+                           for item in model_manager.ready.values()):
+                        print("[ERROR] A required GGUF process exited; stopping for service recovery.", file=sys.stderr)
+                        model_failure.set()
+                        server.should_exit = True
+                        return
+                    time.sleep(1)
+            threading.Thread(target=watch_models, daemon=True).start()
+        if args.managed_stdin:
+            threading.Thread(
+                target=_watch_parent_pipe, args=(server, sys.stdin.fileno()), daemon=True,
+            ).start()
+        server.run()
+        return 1 if model_failure.is_set() else 0
+    except (OSError, RuntimeError, ValueError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 1
     finally:

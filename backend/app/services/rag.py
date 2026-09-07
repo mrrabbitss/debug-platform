@@ -13,6 +13,7 @@ from app.core.db import SessionLocal
 from app.core.utils import json_loads
 from app.models import CodeSymbol, KnowledgeChunk, KnowledgeDocument, Repository
 from app.services.model_profiles import get_active_model_profile
+from app.services.knowledge_visibility import current_chunk_clause
 from app.services.retrieval_models import (
     RetrievalModelError,
     candidate_count_for_reranker,
@@ -68,6 +69,7 @@ class LocalHybridRetriever:
         top_k: int | None = None,
         include_code_symbols: bool = True,
         apply_models: bool = True,
+        knowledge_view: list[str] | None = None,
     ) -> list[RetrievalHit]:
         top_k = top_k or get_settings().retrieval_top_k
         query_tokens = tokenize(query)
@@ -99,6 +101,7 @@ class LocalHybridRetriever:
                 .where(
                     KnowledgeDocument.active.is_(True),
                     KnowledgeDocument.review_status == "ACTIVE",
+                    current_chunk_clause(),
                 )
             )
             if search_terms:
@@ -128,12 +131,16 @@ class LocalHybridRetriever:
                     .where(
                         KnowledgeDocument.active.is_(True),
                         KnowledgeDocument.review_status == "ACTIVE",
+                        current_chunk_clause(),
                         KnowledgeChunk.id.in_(missing_dense_ids),
                     )
                 ).all()
                 for chunk, document in dense_rows:
                     row_map[chunk.id] = (chunk, document)
             rows = list(row_map.values())
+            if knowledge_view:
+                from app.services.knowledge_personal import overlay_chunks
+                rows = overlay_chunks(active_db, rows, knowledge_view)
 
             symbol_query = select(CodeSymbol)
             if case_id and include_code_symbols:
@@ -179,11 +186,13 @@ class LocalHybridRetriever:
                 "title": f"{document.title}{' / ' + chunk.heading if chunk.heading else ''}",
                 "content": chunk.content,
                 "metadata": {
-                    "document_id": document.id,
                     "device_type": document.device_type,
                     "module": document.module,
                     "trust_level": document.trust_level,
                     **json_loads(document.metadata_json, {}),
+                    "document_id": document.id,
+                    "document_version": chunk.document_version,
+                    "chunk_id": chunk.id,
                 },
             })
         for symbol in symbols:

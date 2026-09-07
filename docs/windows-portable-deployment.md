@@ -51,6 +51,12 @@ start.bat --port 18080
 start.bat --data-root D:\DebugPlatformData
 ```
 
+本轮 WebSkillMcp 0.2.0 重建开始同时提供 `start_codeagent.bat`：双击后使用包内 Python
+启动后端和已选 E/R，再进入你原有 CodeAgent，不要求先开网页或导入用户级 Skill。
+默认追加 `gw-ap-debug`，不屏蔽已有 MCP，也不改 `.cac`、CLI 模型或代理。
+首次找不到程序时输入完整路径即可保存；具体组件选择与命令见
+[全 GGUF 安装指南](windows-offline-gguf-installer.md)。旧下载包不自动获得新入口。
+
 `/mcp` 与网页复用同一个 loopback 端口；启动器会按实际 `--port` 覆盖
 `MCP_PUBLIC_BASE_URL`。例如 `--port 18080` 对应
 `http://127.0.0.1:18080/mcp`，不会继续引用 `.env.example` 的默认端口。

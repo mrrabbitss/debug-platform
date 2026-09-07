@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
+import MemoryGovernancePanel from '../components/MemoryGovernancePanel.vue'
 import type {
   Analysis,
   CaseItem,
@@ -48,6 +49,9 @@ const feedbackForm = reactive({
   root_cause_correct: undefined as boolean | undefined,
   evidence_correct: undefined as boolean | undefined,
   comment: '',
+  resolution_status: 'UNKNOWN',
+  resolution_notes: '',
+  resolution_observed_at: '',
   root_cause: '',
   solution: '',
   evidence: ''
@@ -264,6 +268,9 @@ async function submitFeedback() {
         root_cause_correct: feedbackForm.root_cause_correct,
         evidence_correct: feedbackForm.evidence_correct,
         comment: feedbackForm.comment,
+        resolution_status: feedbackForm.resolution_status,
+        resolution_notes: feedbackForm.resolution_notes,
+        resolution_observed_at: feedbackForm.resolution_observed_at ? new Date(feedbackForm.resolution_observed_at).toISOString() : null,
         corrections: {
           root_cause: feedbackForm.root_cause,
           solution: feedbackForm.solution,
@@ -272,6 +279,9 @@ async function submitFeedback() {
       }
     )
     feedbackForm.comment = ''
+    feedbackForm.resolution_status = 'UNKNOWN'
+    feedbackForm.resolution_notes = ''
+    feedbackForm.resolution_observed_at = ''
     feedbackForm.root_cause = ''
     feedbackForm.solution = ''
     feedbackForm.evidence = ''
@@ -504,6 +514,19 @@ onMounted(load)
               </el-form-item>
             </div>
             <el-form-item label="反馈说明"><el-input v-model="feedbackForm.comment" type="textarea" :rows="3" /></el-form-item>
+            <el-alert title="诊断是否正确与设备故障是否已解决是两件事。仅凭模型报告请保留“尚未验证”。" type="info" :closable="false" />
+            <el-form-item label="实际处理结果">
+              <el-select v-model="feedbackForm.resolution_status">
+                <el-option label="尚未验证" value="UNKNOWN" /><el-option label="已解决" value="RESOLVED" />
+                <el-option label="仍未解决" value="NOT_RESOLVED" /><el-option label="问题复发" value="RECURRED" />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="feedbackForm.resolution_status !== 'UNKNOWN'" label="实际观察时间" required>
+              <el-date-picker v-model="feedbackForm.resolution_observed_at" type="datetime" placeholder="选择实际观察时间" />
+            </el-form-item>
+            <el-form-item v-if="feedbackForm.resolution_status !== 'UNKNOWN'" label="验证过程与结果" required>
+              <el-input v-model="feedbackForm.resolution_notes" type="textarea" :rows="3" placeholder="实际采取了什么措施，观察多长时间，哪些证据表明恢复或复发" />
+            </el-form-item>
             <el-form-item label="确认根因"><el-input v-model="feedbackForm.root_cause" type="textarea" :rows="2" /></el-form-item>
             <el-form-item label="确认方案"><el-input v-model="feedbackForm.solution" type="textarea" :rows="2" /></el-form-item>
             <el-form-item label="确认依据"><el-input v-model="feedbackForm.evidence" type="textarea" :rows="2" /></el-form-item>
@@ -529,6 +552,7 @@ onMounted(load)
           </el-table>
         </el-card>
       </el-tab-pane>
+      <el-tab-pane label="候选经验 / 记忆沉淀" name="memories" lazy><MemoryGovernancePanel /></el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="evaluationCaseDialog" title="添加检索评测用例" width="700px">

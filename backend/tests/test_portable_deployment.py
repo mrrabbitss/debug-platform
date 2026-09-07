@@ -1,6 +1,8 @@
 import importlib.util
 import os
 import sys
+import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -128,3 +130,30 @@ def test_removed_model_installer_cannot_pollute_platform_environment() -> None:
     gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "/A.py" in gitignore
     assert "/*.rar" in gitignore
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Win11 native pipe and CRT contract")
+@pytest.mark.parametrize("signal", [b"stop\n", b""])
+def test_managed_pipe_allows_stdio_inspection_and_handles_stop_or_eof(signal):
+    launcher = _load_portable_launcher()
+    read_fd, write_fd = os.pipe()
+    server = types.SimpleNamespace(should_exit=False)
+    thread = threading.Thread(target=launcher._watch_parent_pipe, args=(server, read_fd), daemon=True)
+    thread.start()
+    try:
+        # DLL startup may inspect stdin while the watcher is active. No blocking
+        # read/CRT descriptor lock is allowed here.
+        assert not os.isatty(read_fd)
+        if signal:
+            os.write(write_fd, signal)
+        os.close(write_fd)
+        write_fd = -1
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert server.should_exit is True
+    finally:
+        server.should_exit = True
+        if write_fd >= 0:
+            os.close(write_fd)
+        thread.join(timeout=5)
+        os.close(read_fd)

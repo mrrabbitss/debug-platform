@@ -176,6 +176,12 @@ def transition_document_review(
         document.reviewed_at = None
         document.review_comment = comment
     elif action == "APPROVE":
+        from app.services.knowledge_access import bind_owner
+        from app.models import KnowledgeAccess
+        bind_owner(db, document.id, reviewer)
+        access = db.get(KnowledgeAccess, document.id)
+        if not access.publisher_id:
+            access.publisher_id = access.owner_id or reviewer
         document.review_status = "ACTIVE"
         document.active = True
         document.reviewed_by = reviewer
@@ -216,11 +222,18 @@ def rollback_document(
     expected_lock_version: int | None,
     created_by: str | None,
     change_summary: str,
+    expected_draft_version: int | None = None,
 ) -> KnowledgeDocument:
     require_lock_version(document, expected_lock_version)
     if revision.document_id != document.id:
         raise ValueError("Revision does not belong to this knowledge document")
     snapshot = json_loads(revision.snapshot_json, {})
+    if document.active and document.review_status == "ACTIVE":
+        from app.services.knowledge_drafts import save_draft
+        save_draft(db, document, {key: value for key, value in snapshot.items() if key in MATERIAL_DOCUMENT_FIELDS},
+                   expected_lock_version=expected_lock_version, expected_draft_version=expected_draft_version,
+                   author=created_by)
+        return document
     for field in (
         "title",
         "source_type",
@@ -277,6 +290,9 @@ def feedback_to_dict(feedback: DiagnosisFeedback) -> dict[str, Any]:
         "root_cause_correct": feedback.root_cause_correct,
         "evidence_correct": feedback.evidence_correct,
         "comment": feedback.comment,
+        "resolution_status": feedback.resolution_status,
+        "resolution_notes": feedback.resolution_notes,
+        "resolution_observed_at": feedback.resolution_observed_at,
         "corrections": json_loads(feedback.corrections_json, {}),
         "status": feedback.status,
         "submitted_by": feedback.submitted_by,

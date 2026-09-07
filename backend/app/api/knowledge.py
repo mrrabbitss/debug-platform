@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.config import get_settings
 from app.core.db import get_db
@@ -32,6 +33,9 @@ from app.schemas import (
 from app.services.import_jobs import import_knowledge_job
 from app.services.jobs import job_runner
 from app.services.knowledge import index_document, reindex_knowledge_job
+from app.services.knowledge_drafts import attach_pending_drafts, save_draft
+from app.services.knowledge_visibility import current_chunk_clause
+from app.services.knowledge_access import bind_owner, visible_knowledge_clause
 from app.services.knowledge_governance import (
     actor_id,
     advance_document_version,
@@ -121,7 +125,8 @@ def _knowledge_response_maps(
     ).all()
     chunk_rows = db.execute(
         select(KnowledgeChunk.document_id, func.count(KnowledgeChunk.id))
-        .where(KnowledgeChunk.document_id.in_(document_ids))
+        .join(KnowledgeDocument)
+        .where(KnowledgeChunk.document_id.in_(document_ids), current_chunk_clause())
         .group_by(KnowledgeChunk.document_id)
     ).all()
     return (
@@ -132,7 +137,7 @@ def _knowledge_response_maps(
 
 def _single_knowledge_response(db: Session, document: KnowledgeDocument, *, detail: bool = False) -> dict:
     categories, chunks = _knowledge_response_maps(db, [document.id])
-    return _knowledge_to_dict(document, categories, chunks, include_content=detail)
+    return attach_pending_drafts(db, [_knowledge_to_dict(document, categories, chunks, include_content=detail)], detail=detail)[0]
 
 
 def _delete_knowledge_rows(db: Session, document_id: str) -> None:
@@ -165,6 +170,7 @@ def create_knowledge(payload: KnowledgeCreate, request: Request, db: Db) -> dict
     )
     db.add(document)
     db.flush()
+    bind_owner(db, document.id, actor_id(getattr(request.state, "principal", {})))
     category_id = payload.category_id or get_default_category_id(db, payload.source_type)
     set_document_category(db, document.id, category_id)
     index_document(db, document)
@@ -262,13 +268,15 @@ async def upload_knowledge(
 @router.get("/knowledge", response_model=list[KnowledgeOut])
 def list_knowledge(
     db: Db,
+    request: Request,
     limit: int = Query(default=200, ge=1, le=1000),
     category_id: str | None = None,
     include_descendants: bool = True,
     source_type: str | None = None,
     search: str | None = None,
 ) -> list[dict]:
-    query = select(KnowledgeDocument)
+    principal = getattr(request.state, "principal", {})
+    query = select(KnowledgeDocument).where(visible_knowledge_clause(principal))
     if category_id:
         category_ids = (
             descendant_category_ids(db, category_id) if include_descendants else {category_id}
@@ -288,7 +296,7 @@ def list_knowledge(
         query.order_by(KnowledgeDocument.updated_at.desc()).limit(limit)
     ).all())
     categories, chunks = _knowledge_response_maps(db, [document.id for document in documents])
-    return [_knowledge_to_dict(document, categories, chunks) for document in documents]
+    return attach_pending_drafts(db, [_knowledge_to_dict(document, categories, chunks) for document in documents], principal=principal)
 
 
 @router.get("/knowledge/categories", response_model=list[KnowledgeCategoryOut])
@@ -410,11 +418,14 @@ def get_fault_case_template() -> dict:
 
 
 @router.get("/knowledge/{document_id}", response_model=KnowledgeDetailOut)
-def get_knowledge(document_id: str, db: Db) -> dict:
+def get_knowledge(document_id: str, request: Request, db: Db) -> dict:
     document = db.get(KnowledgeDocument, document_id)
     if not document:
         raise HTTPException(404, "Knowledge document not found")
-    return _single_knowledge_response(db, document, detail=True)
+    principal = getattr(request.state, "principal", {})
+    from app.services.knowledge_access import require_knowledge_access
+    require_knowledge_access(db, document_id, principal)
+    return attach_pending_drafts(db, [_single_knowledge_response(db, document, detail=True)], detail=True, principal=principal)[0]
 
 
 @router.post("/knowledge/{document_id}/extract-method")
@@ -450,10 +461,24 @@ def update_knowledge(
         raise HTTPException(404, "Knowledge document not found")
     values = payload.model_dump(exclude_unset=True)
     expected_lock_version = values.pop("expected_lock_version", None)
+    expected_draft_version = values.pop("expected_draft_version", None)
     try:
         require_lock_version(document, expected_lock_version)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+    if document.active and document.review_status == "ACTIVE":
+        if "active" in values:
+            raise HTTPException(409, "Use review endpoints to archive a publication")
+        try:
+            save_draft(db, document, values, expected_lock_version=expected_lock_version,
+                       expected_draft_version=expected_draft_version,
+                       author=actor_id(getattr(request.state, "principal", {})))
+            db.commit()
+        except (ValueError, StaleDataError) as error:
+            db.rollback()
+            raise HTTPException(409, "Draft edit conflict; refresh and verify your changes") from error
+        return attach_pending_drafts(db, [_single_knowledge_response(db, document, detail=True)],
+                                     detail=True, principal=getattr(request.state, "principal", {}))[0]
     category_was_set = "category_id" in values
     category_id = values.pop("category_id", None)
     metadata = values.pop("metadata", None)

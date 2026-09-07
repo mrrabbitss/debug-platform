@@ -19,6 +19,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import Job
+from app.services.storage_capacity import require_storage_capacity
 
 
 logger = logging.getLogger(__name__)
@@ -296,6 +297,7 @@ class JobRunner:
                     self._schedule(existing.id, function, args)
                 return existing
 
+        require_storage_capacity()
         attempts = max(
             1,
             int(max_attempts or (handler.max_attempts if handler else 0)
@@ -461,6 +463,8 @@ class JobRunner:
                 )
                 .execution_options(synchronize_session=False)
             )
+            from app.services.knowledge_publication import recover_abandoned_publications
+            recover_abandoned_publications(db)
             db.commit()
             job_ids = list(db.scalars(
                 select(Job.id)

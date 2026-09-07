@@ -148,7 +148,7 @@ def test_registry_advertises_exact_stable_tool_set_and_host_inference(tmp_path: 
     assert status["inference_owner"] == "host_cli"
     assert status["backend_chat_allowed"] is False
     assert status["backend_chat_calls"] == 0
-    assert status["tool_count"] == 17
+    assert status["tool_count"] == 18
     assert status["knowledge_routing"] == {
         "inference_owner": "host_cli",
         "backend_chat_allowed": False,

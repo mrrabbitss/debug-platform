@@ -3,13 +3,50 @@
 > 本文件是项目功能范围的唯一总账（Single Source of Truth）。
 > 新需求、在研能力、已交付能力、约束和冲突处理都必须同步更新本文件，防止跨迭代遗忘或重复建设。
 
-最后更新：2026-09-03
+最后更新：2026-09-07
 
 工程执行、验证、评测和 Agent 护栏的状态与优先级单独维护在
 [Harness Engineering 路线与状态总账](HARNESS_ENGINEERING.md)。本文件只判断业务能力是否
 可用；两份总账在每次相关迭代中必须同步。
 
 ## 1. 状态说明
+
+### 局域网与知识演进 M0–M5（2026-09-07，试点候选）
+
+- 用户已批准 Win11、i7-14700 / 32 GB 的单服务器先导配置，保留现有单机模式；进度以
+  [试点交接](docs/pilot-handoff-20260907.md) 和 [实施记录](docs/lan-knowledge-iteration.md) 为准；公司实机验收仍待完成。
+- M0 `AVAILABLE`：464 文件可恢复源码快照和完整基线回归通过（416 后端测试、5 浏览器 E2E）。
+- M1/M2 `IN_PROGRESS`：HTTPS 网关 + RBAC + 普通工程师 REST/MCP 握手、GW/AP 上传、网页路由、
+  Origin 拒绝、令牌撤销通过真实本机 HTTPS 验证；纯 PowerShell 客户端包无需平台运行时。
+  完整 GGUF 服务器组合和本机备份恢复已验证；服务安装、公司网络/真实 CodeAgent、实际升级回退和发布门禁仍待验证。
+- M3 `IN_PROGRESS`：候选记忆默认留在来源案例；管理员可审核全局发布、到期、驳回或归档。
+  模型假设/引用不再自动记成真实 SUCCESS；实际结果需要观察记录与人工反馈审核。
+  复发会将相关已发布经验退回待复核。迁移、检索隔离和状态回归已通过，网页新增面板已构建。
+- M3 已增加已发布文档的独立编辑/恢复/方法提炼草稿、乐观锁审核、持久发布任务、版本化分块，
+  新向量/图谱构建完成后一起切换；构建失败、取消、并发修改保留旧版。历史引用和发布清单可读取。
+  最新 Full 18/18 通过（469 后端测试、7 浏览器 E2E），包含个人修订、LAN 首次一致性发布、原发布者或管理员审批与发布任务中断恢复。
+- 知识权限、全文分段与方法编译、人工历史资料 HIGH 入库、完整服务器备份恢复已实现并有回归。
+  个人修订先供修订者新发起的综合诊断使用；普通问答的个人覆盖、异机备份实测及公司实机验收仍未完成。
+- 本地双 Codex CLI 完整 HTTPS/MCP 诊断、进程中断后原会话恢复、会话权限和停机后数据保留已实测通过；
+  [验证范围](docs/local-multiclient-cli-validation.md) 是单机进程级分机模拟，不代表物理多机或 10 路并发推理验收。
+- 当前分发方式：服务器通过 `scripts/start_lan_server.bat` 运行现有完整目录，无需安装 Windows 服务；
+  支持复用配置、导出分机证书资料、停止后备份及运行/备份互斥。分机 ZIP 附简版指南，仍需已有 CodeAgent。
+  操作步骤见 [服务器指南](docs/服务器使用指南.md) 与 [分机指南](docs/分机使用指南.md)。
+
+### WebSkillMcp 0.2.0 本轮交付范围（2026-09-03）
+
+- CodeAgent 会话 MCP 改为追加模式，移除默认 `--strict-mcp-config`；不编辑 `.cac` 或全局
+  CLI 配置。源启动器 12 项黑盒已通过，真实魔改客户端模型 E2E 仍待公司电脑验收。
+- Win11 x64 安装器新增 Core 必选、GGUF Embedding/Reranker 可选，默认完整安装；原子
+  staging/backup 升级保留，源包哈希验证后生成选装清单。0.2.0 ZIP/Setup 已重新构建，真实
+  E/R、安装选装矩阵与包内 CLI 启动/复用验收见 `VALIDATION.md`；魔改客户端仍需实机验收。
+- 包内新增 Web/CodeAgent 双入口，使用自包含 Python/前端及已安装 E/R；默认本地模式共享
+  Windows CurrentUser 加密 MCP 令牌，不修改用户鉴权/Chat Profile/代理；CLI 入口禁止退回
+  源码 pip/.venv 准备。该运行形态不包含本地 Chat 模型。
+- 全 GGUF 继续保留 `IN_PROGRESS` 发布状态：未签名、未完成独立干净 Win11/CPU 矩阵与
+  上游等价质量 Golden；不得把已实现组件选择或本机真实推理称为所有发布门禁通过。
+- 最终包真实小型知识检索已通过：正常审核发布、14 个 768 维向量持久化、Dense + Reranker
+  实际参与且相关知识第一。该结果不等于大规模质量评测、上游等价或持久向量 ANN 召回验证。
 
 | 状态 | 含义 |
 | --- | --- |
@@ -28,12 +65,12 @@
 | Win11 自包含 Core 便携运行 | `AVAILABLE` | GitHub `Windows Portable Package` / 解压后 `start.bat` | 目标电脑无需 Python、Node、pip、npm 或 Docker；同一 FastAPI 进程托管编译前端，配置/数据默认外置到 `%LOCALAPPDATA%`；解释器禁止读取全局/用户包，文件清单逐项校验 SHA-256；该稳定 Core 版不含权重，默认 SQLite、Hashing Embedding、Reranker Disabled |
 | Win11 全 GGUF E/R 组件化离线安装器 | `IN_PROGRESS` | `scripts/build_windows_gguf_installer.bat` / `Windows Full GGUF Installer` | 已实现 Core + 固定 llama.cpp CPU + BGE F16 GGUF + Qwen3 Reranker Q8_0 的组件锁、离线 ZIP/Inno Setup、动态 loopback sidecar、临时令牌、受管 Profile、逐组件回退/恢复、哈希/provenance 与手工/Release 工作流；本地 sidecar 健康检查和平台 E/R 调用强制绕过公司代理，外部模型 Profile 的代理行为不变；Setup 临时解包后复用 staging+backup 原子发布，安装进程由命名互斥体串行化并可保守恢复唯一完整备份；当前 Win11 已完成 clean source build、真实 E/R、ZIP/Setup 首装与覆盖升级、孤儿备份恢复、卸载边界和 Full 回归；仍须代码签名并完成无开发环境 clean Win11 矩阵、上游等价 Golden 和正式 Release，不得标记为 release-ready |
 | 源码双击启动前后端 | `AVAILABLE` | `scripts/start_local.bat` | 面向开发电脑，自动准备 Python/Node 开发依赖并启动 FastAPI、Vite |
-| codeagent 源码一键启动 | `LIMITED` | 根目录 `start_codeagent.bat` | Windows 11 默认查找 `codeagent`，支持保存任意安装位置的 `-CliCommand` 与本地/远程 MCP 地址；自动准备受锁后端依赖、令牌和会话级 MCP，使用当前仓库 Skill，不覆盖全局 CLI/旧 Skill，不改变 Web Chat Profile。`-DryRun` 无副作用，`-Check` 不依赖 CLI 且不调用模型；自建后端随会话/自检退出，已有服务只复用。PowerShell 5.1 原生命令 stderr warning 按实际退出码处理，非零失败仍保留。10 项黑盒验证已通过（68.40 秒），覆盖 warning/退出码 0 与真实失败 17、模拟 Program Files 自动发现、中文/空格 `.ps1`/`.cmd` 路径、二次配置与 DPAPI 复用、真实后端 REST/MCP 握手、端点令牌绑定、仓库迁移、退出清理和既有服务/鉴权保留；客户端为模拟 CLI，当前主机未安装魔改 codeagent，不得宣称其真实模型 E2E 已测或用既有 Codex 结果替代。部署及数据边界见 `docs/agent-skill-mcp-deployment.md`。 |
+| codeagent 源码一键启动 | `LIMITED` | 根目录 `start_codeagent.bat` | Windows 11 默认查找 `codeagent`，支持保存任意安装位置的 `-CliCommand` 与本地/远程 MCP 地址；自动准备受锁后端依赖、令牌和会话级 MCP，使用当前仓库 Skill，不覆盖全局 CLI/旧 Skill，不改变 Web Chat Profile。`-DryRun` 无副作用，`-Check` 不依赖 CLI 且不调用模型；自建后端随会话/自检退出，已有服务只复用。PowerShell 5.1 原生命令 stderr warning 按实际退出码处理，非零失败仍保留。追加模式 12 项黑盒验证已通过，覆盖 warning/退出码 0 与真实失败 17、模拟 Program Files 自动发现、中文/空格 `.ps1`/`.cmd` 路径、二次配置与 DPAPI 复用、真实后端 REST/MCP 握手、端点令牌绑定、仓库迁移、退出清理和既有服务/鉴权保留；客户端为模拟 CLI，当前主机未安装魔改 codeagent，不得宣称其真实模型 E2E 已测或用既有 Codex 结果替代。部署及数据边界见 `docs/agent-skill-mcp-deployment.md`。 |
 | 本地环境检测 | `AVAILABLE` | `scripts/doctor_local.bat` | 检测版本、依赖、端口和服务根路径 |
 | 隔离运行冒烟 | `AVAILABLE` | `scripts/runtime_smoke.bat` | 使用临时数据库和独立端口验证前后端 |
 | 统一仓库验证 | `AVAILABLE` | `scripts/validate_all.bat` | Fast/Full/External 三档，保存 JSON 摘要和逐步日志 |
 | 真实 GLM Chat 功能验证 | `AVAILABLE` | `scripts/validate_glm_chat_features.bat` | `--preflight-only` 无需密钥即可检查私有故障树编译/检索入口；真实验证的密钥仅从当前进程环境读取，使用临时数据库和合成日志覆盖模型网关、日志规划、20 轮故障树 Agent、最终合成、问答、修订、知识提炼和补丁建议，安全报告不保存正文、模型回复或凭据 |
-| AP 频繁离线一键真实 GLM 演示快照 | `AVAILABLE` | 案例列表 → `导入 AP 离线演示` | 仓库源码内置两份纯合成 GW/AP 日志，以及此前通过 `wawapii.com` 成功完成的真实 GLM-5.2 脱敏运行快照；一键幂等创建持久案例、74 条解析事件、两侧三级智能筛查、66 个命中组/149 个逐行位置、真实两轮工具规划、27/27 故障树结论、321,453 Token/146,082 ms 综合诊断轨迹和带“文件名 - 行号”的报告预览。导入时不再次调用模型；API Key、原始 Prompt、记忆正文及私有 `故障树.md`/`日志分析.md` 正文未入包。两份 SHA-256 固定、仅绑定该合成案例的公开方法已通过空知识库自动化和真实 Codex 当前源码 E2E；Core ZIP 已重新构建并通过样本/方法哈希、导入、前后端和安装器 smoke。全 GGUF 新产物及独立干净电脑矩阵仍待构建/验收 |
+| AP 频繁离线一键真实 GLM 演示快照 | `AVAILABLE` | 案例列表 → `导入 AP 离线演示` | 仓库源码内置两份纯合成 GW/AP 日志，以及此前通过 `wawapii.com` 成功完成的真实 GLM-5.2 脱敏运行快照；一键幂等创建持久案例、74 条解析事件、两侧三级智能筛查、66 个命中组/149 个逐行位置、真实两轮工具规划、27/27 故障树结论、321,453 Token/146,082 ms 综合诊断轨迹和带“文件名 - 行号”的报告预览。导入时不再次调用模型；API Key、原始 Prompt、记忆正文及私有 `故障树.md`/`日志分析.md` 正文未入包。两份 SHA-256 固定、仅绑定该合成案例的公开方法已通过空知识库自动化和真实 Codex 当前源码 E2E；Core ZIP 已重新构建并通过样本/方法哈希、导入、前后端和安装器 smoke。0.2.0 全 GGUF 新产物已构建并通过本机演示/E/R smoke；独立干净电脑矩阵仍待验收 |
 | AP 频繁离线真实模型回归 | `AVAILABLE` | `scripts/seed_ap_offline_demo.bat` | 使用同一组纯合成 GW/AP 双侧日志创建可浏览案例；必须显式选择允许模型外发或仅本地模式。创建前预检本机私有方法或知识库已发布等价方法，脚本对每个后台任务设置有界超时，并校验两侧日志规划均有有效且非宽泛的 Pattern/精确关键词、两种方法角色均被读取、模型自行判定相关且在 20 轮内发起有命中的日志检索、后端以独立策略轨迹按搜索 ID 水合证据（策略调用不冒充模型成功）、故障树语义、四类跨设备假设，以及报告只显示文件行号而不泄漏内部证据 ID |
 | 仓库 Harness 契约 | `AVAILABLE` | `scripts/check_repo_harness.py` | 检查文档、CI、依赖治理和 Agent API 合同漂移 |
 | SQLite 备份恢复 | `AVAILABLE` | `scripts/backup_local.bat`、`restore_local.bat` | 带清单、哈希校验和回滚保留 |
@@ -464,3 +501,10 @@ P2 有界 Agent、任务隔离、多实例 lease 和文档进程沙箱见
 不存在时系统仍使用知识库中 `ACTIVE` 的 GW、AP 与通用联合诊断文档。两文件被 Git 忽略，正文不会
 写入 Agent 轨迹或分析证据快照。生产环境推荐把需要版本、审核和跨电脑同步的方法作为知识文档
 发布；本机私有文件适合暂不能进入仓库或数据库治理的材料。
+
+
+## 2026-09-07 个人知识修订与试点恢复增量
+
+普通工程师个人修订、管理员或原发布者审批、LAN 首次一致性发布、全文分段与质量预览、人工历史资料 HIGH 入库、完整服务器备份和独立目录升级已实现。
+增量行为、边界与尚待公司实机验收项见 [局域网实施记录](docs/lan-knowledge-iteration.md)。
+本轮 Full 结果以 VALIDATION.md 的最新记录为准；历史 Full 不能证明后续源码。

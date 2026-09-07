@@ -22,6 +22,8 @@ local_doctor_result*.txt
 hf_model_access_report*.txt
 .local_dependency_stamp
 /artifacts/validation/
+/artifacts/baselines/
+/artifacts/lan/
 /artifacts/e2e/
 /artifacts/portable/
 /artifacts/build-cache/

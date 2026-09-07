@@ -21,6 +21,14 @@ class Settings(BaseSettings):
 
     app_name: str = "GW/AP Intelligent Debug Platform"
     app_env: Literal["dev", "test", "prod"] = "dev"
+    deployment_mode: Literal["standalone", "lan_server"] = "standalone"
+    server_instance_id: str = ""
+    trusted_hosts: str = ""
+    embedding_concurrency: int = Field(default=1, ge=1, le=8)
+    reranker_concurrency: int = Field(default=1, ge=1, le=8)
+    model_queue_limit: int = Field(default=32, ge=1, le=256)
+    model_queue_timeout_seconds: int = Field(default=120, ge=1, le=1800)
+    minimum_free_storage_bytes: int = Field(default=0, ge=0)
     api_prefix: str = "/api/v1"
     database_url: str = "sqlite:///./data/gw_ap_debug.db"
     data_root: Path = Path("./data")
@@ -191,6 +199,10 @@ class Settings(BaseSettings):
                 raise ValueError("MCP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL")
         if self.mcp_enabled and not self.mcp_allowed_host_list:
             raise ValueError("MCP_ALLOWED_HOSTS is required when MCP_ENABLED=true")
+        if self.deployment_mode == "lan_server":
+            from app.core.server_policy import validate_server_settings
+
+            validate_server_settings(self)
         if (
             self.diagnostic_context_reserved_output_tokens
             + self.diagnostic_context_safety_margin_tokens

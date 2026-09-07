@@ -8,7 +8,7 @@
 ## 1. 目标与版本边界
 
 这个版本面向希望在一台 Win11 x64 电脑上双击安装、且不想单独配置 Python、Node、
-Torch、Embedding 服务或 Reranker 服务的用户。安装包计划内置：
+Torch、Embedding 服务或 Reranker 服务的用户。当前完整安装包内置：
 
 - 自包含 FastAPI/Vue/SQLite Core；
 - 固定 `llama.cpp b10729` CPU 运行时；
@@ -20,9 +20,59 @@ Torch、Embedding 服务或 Reranker 服务的用户。安装包计划内置：
   通过 `wawapii.com` 成功完成的真实 GLM-5.2 运行，导入过程不再次调用模型；
 - 模型许可证、组件锁、完整文件哈希和来源证明。
 
-该版本不包含本地 Chat 模型。日志 LLM Planning、综合诊断、案例问答和知识提炼仍需
-用户配置远程 OpenAI-compatible Chat Profile。Embedding 和 Reranker 只负责 Dense
-检索与候选重排，不能代替生成模型。
+该版本不包含本地 Chat 模型。**网页发起的生成式分析**仍需用户配置可用的 Chat Profile；
+**CodeAgent / Claude Code / Codex 的 Skill + MCP 路径**使用当前 CLI 的模型推理，不调用后端
+Chat Profile。Embedding 和 Reranker 只负责 Dense 检索与候选重排，不能代替生成模型。
+
+## 0. WebSkillMcp 0.2.0 最简安装与使用（Win11 x64）
+
+本轮是在当前 WebSkillMcp 源码上重新构建，不是复用下文 0.1.0 的历史 EXE。
+目标电脑只需要 Win11 x64；要走 CLI 路径，另外保留自己已经安装、登录成功的 CodeAgent。
+无需 Python、Node、Docker、Torch，也不要求独立显卡。
+
+1. 运行 `GWAP-Debug-Platform-Setup-0.2.0-x64.exe`，默认选择完整安装即可。
+   也可选择仅 Core、Core + Embedding、Core + Reranker；以后再次运行安装器可增减组件。
+2. 网页工作：开始菜单选择 **GWAP Debug Platform**，或双击安装目录 `start.bat`。
+3. CLI 工作：开始菜单选择 **GWAP Debug Platform - CodeAgent**，或双击
+   `start_codeagent.bat`。它自动启动包内后端和已安装的 E/R，再进入 CodeAgent；不用先开网页。
+   网页地址同样是 `http://127.0.0.1:8080/`。
+4. 第一次找不到 CodeAgent 时，输入其完整程序路径即可保存；默认已查找
+   `C:\Program Files\CodeAgentCLI`，也支持其他盘、中文、空格路径。
+5. 先要求 CLI “使用 gw-ap-debug 调用 debug_status 并列出案例”，再导入 AP 离线演示，
+   按[完整案例说明](demo-ap-frequent-offline.md)使用当前 CLI 模型新建诊断与报告。
+
+安装包只附带项目 Skill 文件，不自动导入/覆盖用户 `.cac`、`.claude`、`.codex` 中的 Skill。
+CodeAgent 由启动参数显式读取包内 Skill，MCP 为会话**追加**，原有其他 MCP 不被严格模式排除。
+原生 Claude/Codex 的可选用户级安装方式见[CLI 部署文档](agent-skill-mcp-deployment.md)。
+
+包内常用命令（和源码入口的后端部署方式不同）：
+
+```bat
+start.bat --check
+start.bat --check --check-models
+start_codeagent.bat --check
+start_codeagent.bat --cli-command "D:\Tools\CodeAgentCLI\codeagent.exe"
+start_codeagent.bat --no-local-retrieval
+```
+
+`--check-models` 检查所有**已安装**的 E/R；仅 Core 安装没有模型，使用普通 `--check`。
+CodeAgent 的 `--check` 会启动/检查服务和已安装的 E/R，但不调用 CLI 大模型。
+端口被其他程序占用时不会强杀，使用 `--port 18080`（Web 与 CLI 需传相同端口）。
+默认本地模式下 Web/CLI 自动复用 Windows 当前用户加密保存的 MCP 令牌；API Key/RBAC 和
+自定义 MCP 凭据保持原配置，受限部署仍需要合法访问令牌。RBAC 若允许 legacy-admin，
+已有 API Key 仍可能以该兼容身份连接；需要个人身份时显式提供个人令牌或关闭 legacy-admin。
+首次运行旧版未启用 MCP 的服务时，
+请正常关闭旧服务后再从新入口启动。
+
+业务数据和连接状态外置在 `%LOCALAPPDATA%\GWAPDebugPlatform`。应用升级或减少模型组件不会
+删除案例；不要把整份数据目录当作无状态缓存删除。正常退出 CodeAgent 时，只关闭本次由它
+启动的后端/E/R；如果复用已有网页服务，网页服务会继续运行。
+CLI 默认工作目录为外置 `data\workspace`，保存报告或项目配置不会污染受清单保护的程序目录。
+
+不允许运行 EXE 时，解压同版本完整 ZIP 后双击 `Install.bat`；首次回车默认完整安装，
+升级保留原组件选择。需要增加模型时必须使用原始完整 ZIP/Setup，已裁剪安装目录不含缺失权重。
+
+这仍是未签名的 Win11 测试候选，不等于已通过所有不同 CPU、企业策略和干净电脑矩阵。
 
 稳定的 [Core 便携包](windows-portable-deployment.md) 仍然保留：它不含模型权重，默认
 使用 Hashing Embedding 并关闭 Reranker。全 GGUF 版是独立交付形态，不会把 Torch 或
@@ -33,10 +83,10 @@ Sentence Transformers 再装进平台 Python 进程。
 安装后仍由 `start.bat` 作为统一入口。启动器先读取受包清单保护的
 `model-components.json`，再按以下顺序运行：
 
-1. 在两个动态 `127.0.0.1` 端口分别启动 Embedding 和 Reranker `llama-server`；
+1. 为已安装的 E/R 各启动一个动态 `127.0.0.1` 端口的 `llama-server`；仅 Core 不启动模型；
 2. 每次启动生成新的随机 Bearer Token，并通过只存在于本次运行期的 key 文件传给
    sidecar，令牌不写入模型 Profile 数据库，也不出现在命令行；
-3. 等待两个 `/health` 端点后，才向 FastAPI 进程注入
+3. 等待已安装组件的 `/health` 端点后，才向 FastAPI 进程注入对应的
    `BUNDLED_GGUF_EMBEDDING_URL`、`BUNDLED_GGUF_RERANKER_URL` 和
    `BUNDLED_GGUF_API_KEY`；
 4. 首次安装且用户没有自定义选择时，平台自动启用受管 GGUF Profile；已有明确的
@@ -100,8 +150,9 @@ Setup 调用时使用 `-NoLaunch -NoShortcuts`，并等待 PowerShell 结束；�
 的卸载文件位于独立目录，不会进入受清单保护的应用树；卸载器只删除精确的
 `%LOCALAPPDATA%\Programs\GWAPDebugPlatform`，不会删除业务数据根。
 
-当前权重约为 BGE 195.3 MiB、Qwen 609.5 MiB，另有 Core 与 CPU 运行时。本次完整构建的
-ZIP 为 937,032,215 bytes（893.62 MiB），Setup 为 902,853,773 bytes（861.03 MiB）。
+当前权重约为 BGE 195.3 MiB、Qwen 609.5 MiB，另有 Core 与 CPU 运行时。完整安装器约
+860 MiB、ZIP 约 893 MiB；当前 0.2.0 的精确大小、哈希与验收结果见
+[VALIDATION.md](../VALIDATION.md)，第 5 节保留的 0.1.0 哈希仅为历史记录。
 项目 Setup 仍未签名；代码签名会再次改变最终安装器哈希，正式发布时必须重新记录。
 
 ## 4. 受控构建
@@ -113,7 +164,7 @@ SHA-256、许可证和转换命令。准备缓存需要 Python 3.12：
 ```bat
 python scripts\model-runtime\prepare_assets.py --all
 scripts\build_windows_gguf_installer.bat -ValidateCacheOnly
-scripts\build_windows_gguf_installer.bat -Version 0.1.0
+scripts\build_windows_gguf_installer.bat -Version 0.2.0
 ```
 
 准备脚本会下载并校验固定 llama.cpp/模型/许可证，使用固定 llama.cpp converter 生成
@@ -222,10 +273,15 @@ Windows 文件元数据显示 `FileVersion=0.1.0`、
 分离和卸载数据边界。当前完整候选已经按新源码重建，并通过上表所列的真实安装、升级、
 孤儿备份恢复和卸载验证；旧候选哈希不代表当前产物。
 
-该结果证明当前两个 GGUF 与固定 llama.cpp 能完成最小真实推理，不等于以下尚未完成的
+0.2.0 最终包另已通过真实小型知识检索：两份合成文档经审核发布，14 个 768 维向量持久化，
+五个候选经过 Dense 与 Reranker，相关项排名第一；本机模型审计仅有 E/R、无 Chat 调用。
+原始产品的 CLI 自建后端及 Web 先启复用也均通过。精确结果见 `VALIDATION.md`，客户端
+仍为模拟 CLI，不冒充真实 CodeAgent 推理测试。
+
+这些结果证明当前两个 GGUF 与固定 llama.cpp 能完成真实推理和小型检索，不等于以下尚未完成的
 发布门禁：
 
-- 使用包内受管 Profile 完成知识全量索引和混合 RAG 的质量/故障注入验证；
+- 大规模知识全量索引、混合 RAG 质量、持久向量 ANN 召回及逐组件故障注入验证；
 - 对项目 `Setup.exe` 做发布代码签名并验证签名信任；
 - 一台没有开发环境和缓存的全新 Win11 x64 电脑完成安装、冷启动、升级、回退和卸载；
 - BGE GGUF 与固定上游模型的向量余弦/Recall 门槛；
@@ -244,7 +300,7 @@ Windows 文件元数据显示 `FileVersion=0.1.0`、
 start.bat --check
 ```
 
-再运行会真实加载两个模型的检查：
+安装了 E/R 时，再运行会真实加载所有已安装模型的检查（仅 Core 不使用此选项）：
 
 ```bat
 start.bat --check --check-models

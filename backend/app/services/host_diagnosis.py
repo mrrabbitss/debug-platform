@@ -81,7 +81,11 @@ def begin_host_diagnosis(
     ttl_seconds: int = 14_400,
     session_factory: Any = SessionLocal,
 ) -> dict[str, Any]:
-    snapshot = load_host_diagnostic_snapshot(case_id, session_factory=session_factory)
+    from app.services.knowledge_personal import personal_view
+    with session_factory() as db:
+        knowledge_view = personal_view(db, created_by)
+        db.commit()
+    snapshot = load_host_diagnostic_snapshot(case_id, session_factory=session_factory, knowledge_view=knowledge_view)
     context = _snapshot_payload(snapshot)
     initial_evidence = {
         str(item["evidence_id"]): item
@@ -106,6 +110,7 @@ def begin_host_diagnosis(
                     "artifacts": context["artifacts"],
                     "parse_generations": context["parse_generations"],
                     "method_manifest": context["method_manifest"],
+                    "personal_knowledge_revisions": knowledge_view,
                     "prompt_version": context["prompt_version"],
                 },
                 ttl_seconds=ttl_seconds,
@@ -171,6 +176,7 @@ def require_unchanged_host_snapshot(
     snapshot = load_host_diagnostic_snapshot(
         view.case_id,
         session_factory=session_factory,
+        knowledge_view=view.snapshot.get("personal_knowledge_revisions", []),
     )
     mismatches: list[str] = []
     if snapshot.case_snapshot_hash != view.case_snapshot_hash:

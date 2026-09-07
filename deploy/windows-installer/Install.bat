@@ -3,7 +3,11 @@ setlocal EnableExtensions
 chcp 65001 >nul
 cd /d "%~dp0"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_local.ps1" %*
+if "%~1"=="" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_local.ps1" -ChooseComponents
+) else (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_local.ps1" %*
+)
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
   echo.
@@ -12,4 +16,3 @@ if not "%EXIT_CODE%"=="0" (
   pause
 )
 exit /b %EXIT_CODE%
-

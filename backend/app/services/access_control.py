@@ -8,6 +8,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.utils import json_loads, new_id, utcnow
+from app.core.config import get_settings
 from app.models import (
     AccessToken,
     AnalysisRun,
@@ -150,7 +151,7 @@ def case_permission(db: Session, case_id: str, principal: dict[str, str]) -> str
     user_id = principal.get("id")
     if case.owner_id and case.owner_id == user_id:
         return "OWNER"
-    if case.owner_id is None:
+    if case.owner_id is None and get_settings().deployment_mode != "lan_server":
         return "SHARED"
     membership = db.scalar(select(CaseMember).where(
         CaseMember.case_id == case_id,
@@ -196,11 +197,10 @@ def authorize_case_action(
 
 def accessible_case_clause(user_id: str):
     membership_case_ids = select(CaseMember.case_id).where(CaseMember.user_id == user_id)
-    return or_(
-        Case.owner_id.is_(None),
-        Case.owner_id == user_id,
-        Case.id.in_(membership_case_ids),
-    )
+    clauses = [Case.owner_id == user_id, Case.id.in_(membership_case_ids)]
+    if get_settings().deployment_mode != "lan_server":
+        clauses.append(Case.owner_id.is_(None))
+    return or_(*clauses)
 
 
 def authorize_request(db: Session, request: Request, principal: dict[str, str]) -> None:
@@ -209,6 +209,11 @@ def authorize_request(db: Session, request: Request, principal: dict[str, str]) 
         return
     path = request.url.path
     method = request.method.upper()
+    from app.services.knowledge_access import authorize_routing_job, authorize_knowledge_request
+    parts = _api_parts(path)
+    if parts and parts[0] == "jobs" and len(parts) >= 2 and authorize_routing_job(db, parts[1], principal):
+        return
+    authorize_knowledge_request(db, parts, method, principal)
     if any(path.endswith(prefix) or f"{prefix}/" in path for prefix in ADMIN_ONLY_PREFIXES):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator role required")
     if role == "VIEWER" and any(
@@ -216,8 +221,13 @@ def authorize_request(db: Session, request: Request, principal: dict[str, str]) 
         for prefix in ENGINEER_READ_PREFIXES
     ):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Engineer or administrator role required")
-    if "/knowledge" in path and method != "GET":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only administrators may modify knowledge")
+    if "/knowledge" in path and method != "GET" and parts[0] not in {"knowledge", "knowledge-routing"}:
+        allowed = role == "ENGINEER" and (
+            (parts == ["knowledge-routing", "import"] and method == "POST")
+            or (parts == ["knowledge"] and method == "POST")
+            or (len(parts) == 2 and parts[0] == "knowledge" and method == "PATCH"))
+        if not allowed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only administrators may publish or manage shared knowledge")
     if "/system/models" in path and method != "GET":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only administrators may modify model profiles")
     if "/system/model-downloads" in path and method != "GET":

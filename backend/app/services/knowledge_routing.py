@@ -14,12 +14,12 @@ from app.core.utils import json_dumps, json_loads, mask_sensitive, utcnow
 from app.models import (
     Artifact,
     KnowledgeCategory,
-    KnowledgeChunk,
     KnowledgeDocument,
     ModelProfile,
 )
 from app.services.jobs import JobCancelledError, JobContext
 from app.services.knowledge import index_document
+from app.services.knowledge_compiler import compile_markdown, classify_complete_document
 from app.services.knowledge_governance import (
     advance_document_version,
     create_document_revision,
@@ -214,6 +214,7 @@ def knowledge_routing_context(
     excerpt_limit = per_document_budget - outline_limit
     items: list[dict[str, Any]] = []
     for document in documents:
+        compiled = compile_markdown(document.content)
         excerpt, truncated = _bounded_excerpt(document.content, excerpt_limit)
         outline, outline_truncated = _markdown_outline(
             document.content,
@@ -238,6 +239,9 @@ def knowledge_routing_context(
             "markdown_outline": outline,
             "outline_truncated": outline_truncated,
             "content_is_untrusted": True,
+            "section_manifest": {key: value for key, value in compiled.items() if key != "sections"},
+            "section_count": len(compiled["sections"]),
+            "full_section_read_required": truncated,
         })
     return {
         "prompt_version": ROUTING_PROMPT_VERSION,
@@ -359,6 +363,12 @@ def apply_knowledge_routing(
             raise ValueError(
                 f"Knowledge content changed since classification: {document.id}"
             )
+        compiled = compile_markdown(document.content)
+        covered = decision.get("covered_section_ids", [])
+        if covered and (len(covered) != len(set(covered)) or set(covered) != {row["id"] for row in compiled["sections"]}):
+            raise ValueError("Section coverage does not match the current complete document")
+        if len(document.content) > 12000 and not covered:
+            raise ValueError("Long Markdown requires complete section reads before classification")
         category_id = str(decision.get("category_id") or "")
         category = categories.get(category_id)
         if not category:
@@ -405,6 +415,8 @@ def apply_knowledge_routing(
             "model": model_snapshot,
             "human_review_required": True,
             "applied_at": applied_at,
+            "covered_section_ids": decision.get("covered_section_ids", []),
+            "complete_source_reviewed": bool(decision.get("covered_section_ids")) or len(document.content) <= 12000,
         }
         document.metadata_json = json_dumps(metadata)
         advance_document_version(
@@ -415,12 +427,8 @@ def apply_knowledge_routing(
                 f"AI-routed to {category['path']} ({reasoning_owner})"
             ),
         )
-        for chunk in db.scalars(
-            select(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id)
-        ).all():
-            chunk_metadata = json_loads(chunk.metadata_json, {})
-            chunk_metadata["source_type"] = document.source_type
-            chunk.metadata_json = json_dumps(chunk_metadata)
+        from app.services.knowledge_chunk_versions import copy_revision_chunks
+        copy_revision_chunks(db, document, document.version - 1)
         results.append({
             "document_id": document.id,
             "title": document.title,
@@ -482,6 +490,10 @@ def _publish_document(
             "model": model_snapshot,
             "human_review_required": True,
             "applied_at": utcnow().isoformat(),
+            "covered_section_ids": routing.get("covered_section_ids", []),
+            "section_classifications": routing.get("section_classifications", []),
+            "mixed_directions": routing.get("mixed_directions", False),
+            "complete_source_reviewed": routing.get("complete_source_reviewed", False),
         }
     else:
         category_id = get_default_category_id(db, "document")
@@ -517,6 +529,8 @@ def _publish_document(
     )
     db.add(document)
     db.flush()
+    from app.services.knowledge_access import bind_owner
+    bind_owner(db, document.id, actor)
     set_document_category(db, document.id, category_id)
     db.commit()
     chunk_count = index_document(db, document)
@@ -606,7 +620,7 @@ def route_markdown_knowledge_job(
                 context = knowledge_routing_context(db, [temporary.id])
                 db.rollback()
                 ctx.update(35, "Classifying Markdown against the active taxonomy")
-                decisions = asyncio.run(classify_routing_context(provider, context))
+                decisions = asyncio.run(classify_complete_document(provider, context, content, ctx))
                 category_map = {
                     item["id"]: item for item in context["categories"]
                 }

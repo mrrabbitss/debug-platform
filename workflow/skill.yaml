@@ -1,16 +1,25 @@
 name: gw-ap-debug-assistant
-version: 0.7.0
+version: 0.8.0
 description: Upload and diagnose GW/AP collectDebuginfo, and route Markdown knowledge through the internal Debug Platform API.
 mcp:
   status: IN_PROGRESS
   contract: mcp-tools.yaml
-  contract_version: 0.2.0
+  contract_version: 0.3.0
   transport: streamable_http
   path: /mcp
   authentication: Bearer
   reasoning_owner: host_cli
   backend_generative_llm_calls: forbidden
 entrypoints:
+  discover_client_server:
+    method: GET
+    path: /api/v1/system/client-info
+  list_knowledge_publications:
+    method: GET
+    path: /api/v1/knowledge/{document_id}/publications
+  read_knowledge_revision_evidence:
+    method: GET
+    path: /api/v1/knowledge/{document_id}/versions/{version}/chunks/{chunk_id}
   create_case:
     method: POST
     path: /api/v1/cases

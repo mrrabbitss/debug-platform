@@ -4,17 +4,46 @@ GW/AP Debug Platform - Offline GGUF Edition
 Recommended installation
 ------------------------
 1. Keep every extracted file in the same directory.
-2. Double-click Install.bat.
-3. The installer verifies all bundled files before replacing an older version.
+2. Double-click Install.bat and choose Full, Core, Embedding or Reranker.
+   Press Enter for Full on first installation, or the previous selection on upgrade.
+   Setup.exe offers the same choices through its component selection page.
+3. The installer verifies ALL source files (including unselected components),
+   projects a manifest for the selected components, then replaces the old version.
 4. The platform starts automatically and opens in the default browser.
 
 The package contains the application runtime, BGE GGUF Embedding, Qwen3 GGUF
 Reranker and the llama.cpp CPU runtime. The target Win11 computer does not need
 Python, Node.js, npm, pip, Torch or sentence-transformers.
 
+Component choices
+-----------------
+- Full (default): Core + BGE GGUF Embedding + Qwen3 GGUF Reranker.
+- Core: application only, with Hashing Embedding and disabled Reranker.
+- Embedding: Core + BGE; Reranker remains disabled.
+- Reranker: Core + Qwen3; Embedding uses Hashing unless configured separately.
+The shared llama.cpp CPU runtime is installed only when at least one GGUF model
+is selected. Licenses and source provenance remain available in every selection.
+The original full archive is extracted temporarily even for Core-only installs;
+selection reduces the installed footprint, not the Setup/ZIP download size.
+
+For unattended ZIP installation (no selection prompt):
+  Install.bat -Components Full -NoLaunch
+  Install.bat -Components Core -NoLaunch
+  Install.bat -Components Embedding -NoLaunch
+  Install.bat -Components Reranker -NoLaunch
+  Install.bat -Components Auto -NoLaunch
+Auto preserves the previous selection, or uses Full for a first install.
+
+To add or remove components, run the ORIGINAL full Setup/ZIP again. Do not use
+an installed Core/partial tree as a source to add components it does not contain.
+
+The Start menu contains both Web and CodeAgent launch shortcuts. CodeAgent is
+not installed or configured by this installer; its shortcut connects your own
+existing CodeAgent CLI and uses that client's model/login configuration.
+
 Local retrieval behavior
 ------------------------
-- Both native model processes bind only to dynamic 127.0.0.1 ports.
+- Installed native model processes bind only to dynamic 127.0.0.1 ports.
 - A new random API key is generated for every platform run.
 - The application waits for /health before FastAPI starts.
 - If one model cannot start, the application stays available and falls back for
@@ -29,7 +58,8 @@ start.bat --check
     Verify every packaged file and the isolated application runtime.
 
 start.bat --check --check-models
-    Also load both GGUF models and require their health checks to pass.
+    Also load the selected GGUF models and require their health checks to pass.
+    Use --check without --check-models for a Core-only installation.
 
 Data and upgrades
 -----------------
@@ -42,4 +72,3 @@ Cases, uploaded files, settings and encrypted credentials remain under:
 An application upgrade therefore does not replace runtime data. Uninstalling an
 installer-built release also preserves runtime data unless it is deleted by the
 user separately.
-

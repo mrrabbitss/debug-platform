@@ -43,3 +43,8 @@ async def verify_api_key(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Valid access token required")
     request.state.principal = principal
     authorize_request(db, request, principal)
+    if request.method in {"POST", "PUT", "PATCH"}:
+        from app.services.storage_capacity import require_storage_capacity
+
+        length = request.headers.get("content-length", "0")
+        require_storage_capacity(int(length) if length.isdecimal() else 0)

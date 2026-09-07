@@ -34,7 +34,7 @@ from app.schemas import (
 )
 from app.services.access_control import issue_access_token
 from app.services.audit import record_audit_event
-from app.services.health import readiness_report, system_status_report
+from app.services.health import readiness_report
 from app.services.knowledge_graph import domain_graph_status
 from app.services.llm import LLMError, get_active_chat_model_info, get_llm_provider
 from app.services.model_profiles import (
@@ -100,15 +100,6 @@ def auth_info() -> dict:
             settings.api_key and settings.auth_allow_legacy_admin
         ),
     }
-
-
-@router.get("/system/status")
-def system_status(db: Db) -> dict:
-    settings = get_settings()
-    report = system_status_report(db, settings.storage_root, settings.job_workers)
-    report["app"] = settings.app_name
-    report["environment"] = settings.app_env
-    return report
 
 
 @router.get("/system/me")

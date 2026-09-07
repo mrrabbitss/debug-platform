@@ -117,7 +117,7 @@ New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
 Write-Host "[INFO] Inspecting the portable build Python runtime..."
 $pythonInfoRaw = & $PythonExe -c (
     "import json, platform, sys; " +
-    "print(json.dumps({'executable':sys.executable,'base_prefix':sys.base_prefix," +
+    "print(json.dumps({'executable':getattr(sys,'_base_executable',sys.executable),'base_prefix':sys.base_prefix," +
     "'version':[sys.version_info.major,sys.version_info.minor,sys.version_info.micro]," +
     "'bits':platform.architecture()[0],'platform':sys.platform}))"
 )
@@ -251,13 +251,19 @@ Copy-FilteredTree `
     -ExcludedDirectories @("__pycache__") `
     -ExcludedExtensions @(".pyc")
 New-Item -ItemType Directory -Force -Path $installerTarget | Out-Null
-foreach ($name in @("install_agent_skill_mcp.ps1", "install_agent_skill_mcp.bat")) {
+foreach ($name in @(
+    "install_agent_skill_mcp.ps1", "install_agent_skill_mcp.bat",
+    "start_codeagent.ps1", "codeagent_launcher_support.ps1", "codeagent_launcher_http.ps1"
+)) {
     Copy-Item `
         -LiteralPath (Join-Path $projectRoot "scripts\$name") `
         -Destination (Join-Path $installerTarget $name)
 }
 
-foreach ($name in @("portable_launcher.py", "start.bat", "README.txt")) {
+foreach ($name in @(
+    "portable_launcher.py", "portable_codeagent.py", "portable_mcp.py", "portable_server_config.py",
+    "start.bat", "start_codeagent.bat", "README.txt"
+)) {
     Copy-Item `
         -LiteralPath (Join-Path $projectRoot "deploy\windows-portable\$name") `
         -Destination (Join-Path $packageRoot $name)
@@ -287,6 +293,7 @@ $buildInfo = [ordered]@{
     synthetic_demo_host_methods_bundled = $true
     agent_skill_bundled = $true
     mcp_installer_bundled = $true
+    codeagent_launcher_bundled = $true
 }
 $buildInfo | ConvertTo-Json | Set-Content `
     -LiteralPath (Join-Path $packageRoot "build-info.json") `

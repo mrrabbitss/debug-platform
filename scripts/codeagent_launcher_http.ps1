@@ -59,10 +59,18 @@ function Test-LauncherConnection {
         }
     }
     $headers = @{ Authorization = "Bearer $Token"; 'X-API-Key' = $Token }
-    $rest = Invoke-LauncherHttp -Method GET -Url "$apiBase/system/status" -Headers $headers
+    $rest = Invoke-LauncherHttp -Method GET -Url "$apiBase/system/client-info" -Headers $headers
+    # Old local packages do not expose client-info. Their administrator-only
+    # status endpoint is only a compatibility fallback, never the LAN handshake.
+    if ($rest.status -eq 404 -and $McpUri.IsLoopback) {
+        $rest = Invoke-LauncherHttp -Method GET -Url "$apiBase/system/status" -Headers $headers
+    }
     if ($rest.status -ne 200) { throw "REST verification failed with HTTP $($rest.status). The token must work for REST and MCP; a dedicated MCP token alone may not authorize REST." }
     try { $restBody = $rest.body | ConvertFrom-Json } catch { throw 'The occupied endpoint is not a Debug Platform REST service.' }
     if ($restBody.app -ne 'GW/AP Intelligent Debug Platform') { throw 'The occupied endpoint belongs to another service; it will not be stopped or reused.' }
+    if ($restBody.client_contract_version -and $restBody.supported_client_contract_majors -notcontains 1) {
+        throw 'This server requires a newer Client Connector. Update the connector before connecting.'
+    }
     $identity = Invoke-LauncherHttp -Method GET -Url "$apiBase/system/me" -Headers $headers
     if ($identity.status -ne 200) { throw "REST identity verification failed with HTTP $($identity.status)." }
     $mcpHeaders = @{ Authorization = "Bearer $Token"; Accept = 'application/json, text/event-stream' }
@@ -93,6 +101,11 @@ function Test-LauncherConnection {
                 $status.inference_owner -ne 'host_cli' -or $status.backend_chat_allowed -ne $false -or
                 $status.backend_chat_calls -ne 0) {
             throw 'MCP server identity or host-model boundary did not pass verification.'
+        }
+        if ($restBody.server_id) {
+            if ($status.server_instance_id -cne $restBody.server_id) {
+                throw 'REST and MCP returned different server identities. Check the gateway routing.'
+            }
         }
         return $status
     } finally {

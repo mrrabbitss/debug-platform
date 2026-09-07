@@ -28,6 +28,7 @@ EXPECTED_TOOLS = {
     "debug_generate_report",
     "debug_open_ui",
     "debug_get_knowledge_routing_context",
+    "debug_read_knowledge_sections",
     "debug_apply_knowledge_routing",
 }
 WRITE_TOOLS = {

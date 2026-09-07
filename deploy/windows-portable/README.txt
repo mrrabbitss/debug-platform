@@ -22,7 +22,28 @@ This package already contains a Python runtime, backend dependencies and the
 built Vue frontend. The target computer does not need Python, Node.js, pip,
 npm or Docker, and therefore does not need pip/npm proxy configuration.
 
-Claude Code / Codex Skill + MCP
+CodeAgent: one-click CLI startup
+-------------------------------
+Double-click start_codeagent.bat (or its Start menu shortcut). Keep your own
+installed and logged-in CodeAgent. The package starts its bundled backend and
+installed GGUF retrieval components, then adds gw-ap-debug to that CLI session.
+Other MCP servers are not disabled; .cac, model login and proxy settings are
+not overwritten. No separate Skill import, Python, Node or pip setup is needed.
+CLI-created files go to data\workspace, outside the immutable application tree.
+If the client cannot be found, enter its full executable/script path once.
+
+start_codeagent.bat --cli-command "D:\Tools\CodeAgentCLI\codeagent.exe"
+start_codeagent.bat --check
+start_codeagent.bat --no-local-retrieval
+
+Local unkeyed Web/CLI share a CurrentUser DPAPI-protected MCP token under
+data\.launcher. Existing API-key/RBAC settings still require valid credentials.
+Normal CLI exit stops only the backend/models started by this session. A reused
+Web server stays running. Use matching --port/--data-root/--env-file arguments
+when connecting to a customized Web launch. The CLI model owns reasoning;
+GGUF Embedding/Reranker are retrieval models, not a Chat model.
+
+Claude Code / Codex Skill + MCP (optional manual integration)
 -------------------------------
 The canonical gw-ap-debug Skill and its installer are included under
 agent-skills\gw-ap-debug and scripts\. The launcher publishes MCP on the same

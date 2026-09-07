@@ -5,7 +5,7 @@
   #error OutputRoot must point to the installer artifact directory.
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
 #endif
 
 #define AppName "GWAP Debug Platform"
@@ -44,13 +44,17 @@ VersionInfoProductName={#AppName}
 VersionInfoCompany={#AppPublisher}
 
 [Types]
-Name: "full"; Description: "完整离线安装（Core + GGUF Embedding + GGUF Reranker）"; Flags: iscustom
+Name: "full"; Description: "完整离线安装（Core + GGUF Embedding + GGUF Reranker）"
+Name: "core"; Description: "仅平台 Core（Hashing Embedding / 不启用 Reranker）"
+Name: "embedding"; Description: "Core + GGUF Embedding"
+Name: "reranker"; Description: "Core + GGUF Reranker"
+Name: "custom"; Description: "自定义组件"; Flags: iscustom
 
 [Components]
-Name: "core"; Description: "平台 Core"; Types: full; Flags: fixed
-Name: "retrieval"; Description: "本地检索运行时"; Types: full; Flags: fixed
-Name: "retrieval\embedding"; Description: "BGE GGUF Embedding"; Types: full; Flags: fixed
-Name: "retrieval\reranker"; Description: "Qwen3 GGUF Reranker"; Types: full; Flags: fixed
+Name: "core"; Description: "平台 Core（必选）"; Types: full core embedding reranker custom; Flags: fixed
+Name: "retrieval"; Description: "本地检索组件（共享 CPU 运行时按需安装）"; Types: full embedding reranker
+Name: "retrieval\embedding"; Description: "BGE GGUF Embedding"; Types: full embedding
+Name: "retrieval\reranker"; Description: "Qwen3 GGUF Reranker"; Types: full reranker
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："; Flags: unchecked
@@ -67,6 +71,8 @@ Source: "{#SourceRoot}\package-manifest.json"; DestDir: "{tmp}\GWAPDebugPlatform
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\{#AppName} - CodeAgent"; Filename: "{app}\start_codeagent.bat"; WorkingDir: "{app}"
+Name: "{autodesktop}\{#AppName} - CodeAgent"; Filename: "{app}\start_codeagent.bat"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "启动 {#AppName}"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent
@@ -105,6 +111,7 @@ var
   PayloadRoot: String;
   InstallerScript: String;
   Parameters: String;
+  ComponentSelection: String;
   ResultCode: Integer;
 begin
   if not IsExpectedAppRoot then
@@ -115,10 +122,20 @@ begin
   PowerShellPath := ExpandConstant(
     '{sys}\WindowsPowerShell\v1.0\powershell.exe'
   );
+  ComponentSelection := 'Core';
+  if WizardIsComponentSelected('retrieval\embedding') then
+    ComponentSelection := 'Embedding';
+  if WizardIsComponentSelected('retrieval\reranker') then
+  begin
+    if ComponentSelection = 'Embedding' then
+      ComponentSelection := 'Full'
+    else
+      ComponentSelection := 'Reranker';
+  end;
   Parameters :=
     '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
     InstallerScript + '" -InstallRoot "' + ExpandConstant('{app}') +
-    '" -NoLaunch -NoShortcuts';
+    '" -NoLaunch -NoShortcuts -Components ' + ComponentSelection;
 
   Log('Publishing the verified payload through install_local.ps1.');
   if not Exec(

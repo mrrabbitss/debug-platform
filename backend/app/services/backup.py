@@ -92,6 +92,8 @@ def create_backup(
     storage_root: Path,
     model_secret_key_path: Path,
     output_path: Path,
+    extra_files: dict[str, Path] | None = None,
+    server_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     database_path = sqlite_database_path(database_url)
     storage = storage_root.expanduser().resolve()
@@ -128,6 +130,15 @@ def create_backup(
                         SECRET_ARCHIVE_PATH,
                     ))
                 total_bytes = sum(int(entry["size"]) for entry in entries)
+                for name, source in (extra_files or {}).items():
+                    relative = PurePosixPath(name)
+                    if (not name.startswith("server/") or ".." in relative.parts or "\\" in name
+                            or source.is_symlink() or not source.is_file()):
+                        raise BackupError("Invalid server backup file")
+                    entries.append(_write_file_to_zip(archive, source, name))
+                if len(entries) > MAX_BACKUP_FILES:
+                    raise BackupError("Server backup contains too many files")
+                total_bytes = sum(int(entry["size"]) for entry in entries)
                 if total_bytes > MAX_BACKUP_BYTES:
                     raise BackupError(f"Backup exceeds the {MAX_BACKUP_BYTES}-byte safety limit")
                 manifest = {
@@ -142,6 +153,7 @@ def create_backup(
                     "file_count": len(entries),
                     "total_uncompressed_bytes": total_bytes,
                     "files": entries,
+                    "server": server_metadata,
                 }
                 archive.writestr(
                     MANIFEST_ARCHIVE_PATH,

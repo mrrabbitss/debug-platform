@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.route_registry import include_modular_routers
@@ -34,6 +34,7 @@ from app.services.jobs import job_runner
 from app.services.memory import (
     memory_to_dict,
     search_memories,
+    visible_memory_clause,
 )
 from app.services.parse_service import parse_artifact_job
 from app.services.report import generate_docx, generate_html_file, generate_pdf, render_html
@@ -590,10 +591,7 @@ def list_case_memories(
             limit=limit,
         )
         return [memory_to_dict(memory, score) for memory, score in results]
-    query = select(AgentMemory).where(or_(
-        AgentMemory.case_id == case_id,
-        AgentMemory.case_id.is_(None),
-    ))
+    query = select(AgentMemory).where(visible_memory_clause(case_id))
     if memory_type:
         query = query.where(AgentMemory.memory_type == memory_type)
     memories = list(db.scalars(

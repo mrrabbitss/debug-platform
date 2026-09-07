@@ -218,7 +218,21 @@ export interface KnowledgeCategory {
   children?: KnowledgeCategory[]
 }
 
+export interface KnowledgeProposal {
+    id: string
+    version: number
+    base_version: number
+    status: string
+    review_comment?: string
+    snapshot?: Partial<KnowledgeDocument>
+    created_by?: string
+}
+
 export interface KnowledgeDocument {
+  pending_draft?: KnowledgeProposal | null
+  review_drafts?: KnowledgeProposal[]
+  can_publish?: boolean
+  can_attest_history?: boolean
   id: string
   title: string
   source_type: string

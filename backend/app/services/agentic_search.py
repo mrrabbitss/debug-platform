@@ -16,7 +16,6 @@ from app.services.agentic.planner import build_search_plan
 from app.services.agent_trace import record_agent_run
 from app.services.code_graph import search_code_graph
 from app.services.commit_graph import search_commits, symbols_for_commit_paths
-from app.services.diagnostic_scope import knowledge_matches_joint_diagnostic_scope
 from app.services.knowledge_graph import (
     domain_graph_candidates,
     domain_graph_status,
@@ -28,45 +27,7 @@ from app.services.memory import (
     search_memories,
 )
 from app.services.model_profiles import get_active_model_profile
-from app.services.rag import retriever
-
-
-def _knowledge_candidates(
-    db: Session,
-    query: str,
-    *,
-    case_id: str,
-    device_type: str | None,
-    limit: int,
-    joint_diagnostic_scope: bool = False,
-) -> list[dict[str, Any]]:
-    hits = retriever.search(
-        query,
-        db=db,
-        case_id=case_id,
-        device_type=device_type,
-        top_k=limit * 2 if joint_diagnostic_scope else limit,
-        include_code_symbols=False,
-        apply_models=False,
-    )
-    return [
-        {
-            "evidence_id": hit.evidence_id,
-            "source_type": hit.source_type,
-            "title": hit.title,
-            "content": hit.content,
-            "source_score": hit.score,
-            "metadata": hit.metadata,
-            "paths": [],
-        }
-        for hit in hits
-        if (
-            not joint_diagnostic_scope
-            or knowledge_matches_joint_diagnostic_scope(
-                str(hit.metadata.get("device_type") or "") or None
-            )
-        )
-    ][:limit]
+from app.services.agentic.knowledge_candidates import knowledge_candidates as _knowledge_candidates
 
 
 def _memory_candidates(
@@ -244,6 +205,7 @@ def agentic_search(
     replay_of_run_id: str | None = None,
     created_by: str | None = None,
     joint_diagnostic_scope: bool = False,
+    knowledge_view: list[str] | None = None,
 ) -> dict[str, Any]:
     from app.models import Case
 
@@ -290,10 +252,11 @@ def agentic_search(
                     device_type=None if joint_diagnostic_scope else case.device_type,
                     limit=per_module_limit,
                     joint_diagnostic_scope=joint_diagnostic_scope,
+                    knowledge_view=knowledge_view,
                 )
                 paths: list[dict[str, Any]] = []
             elif module == "domain_graph":
-                if graph_status.get("active_generation_id"):
+                if graph_status.get("active_generation_id") and not knowledge_view:
                     candidates, paths = domain_graph_candidates(
                         db,
                         query,
@@ -303,7 +266,7 @@ def agentic_search(
                 else:
                     candidates, paths = [], []
                     stage_status = "SKIPPED"
-                    stage_reason = "No active domain knowledge graph"
+                    stage_reason = "Personal revisions use lexical retrieval and reranking; shared graph is bypassed" if knowledge_view else "No active domain knowledge graph"
             elif module == "memory":
                 candidates = _memory_candidates(
                     db,

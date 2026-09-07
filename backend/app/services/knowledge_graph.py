@@ -18,6 +18,8 @@ from app.models import (
     KnowledgeGraphState,
     KnowledgeRelation,
 )
+from app.services.knowledge_visibility import current_chunk_clause
+from app.services.knowledge_retention import retained_graph_generations
 from app.services.jobs import JobContext
 from app.services.knowledge_methods import (
     STRUCTURED_SOURCE_TYPES,
@@ -341,6 +343,7 @@ def rebuild_domain_graph_job(ctx: JobContext) -> dict[str, Any]:
                 .where(
                     KnowledgeDocument.active.is_(True),
                     KnowledgeDocument.review_status == "ACTIVE",
+                    KnowledgeDocument.confidentiality.in_(["PUBLIC", "INTERNAL"]),
                 )
                 .order_by(KnowledgeDocument.id)
             ).all())
@@ -348,6 +351,8 @@ def rebuild_domain_graph_job(ctx: JobContext) -> dict[str, Any]:
             if documents:
                 for chunk in db.scalars(
                     select(KnowledgeChunk)
+                    .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
+                    .where(current_chunk_clause())
                     .where(KnowledgeChunk.document_id.in_(
                         [document.id for document in documents]
                     ))
@@ -509,6 +514,7 @@ def rebuild_domain_graph_job(ctx: JobContext) -> dict[str, Any]:
                 .where(
                     KnowledgeDocument.active.is_(True),
                     KnowledgeDocument.review_status == "ACTIVE",
+                    KnowledgeDocument.confidentiality.in_(["PUBLIC", "INTERNAL"]),
                 )
                 .order_by(KnowledgeDocument.id)
             ).all())
@@ -554,12 +560,7 @@ def rebuild_domain_graph_job(ctx: JobContext) -> dict[str, Any]:
                 message="Domain knowledge graph rebuilt",
             )
             db.commit()
-            retained_generations = [generation_id]
-            if (
-                previous_generation
-                and previous_generation != generation_id
-            ):
-                retained_generations.append(previous_generation)
+            retained_generations = retained_graph_generations(db, generation_id, previous_generation)
             db.execute(delete(KnowledgeRelation).where(
                 KnowledgeRelation.generation_id.not_in(retained_generations)
             ))
@@ -791,8 +792,10 @@ def search_domain_graph(
         .where(
             KnowledgeEntityMention.generation_id == generation_id,
             KnowledgeEntityMention.entity_id.in_(reached_ids),
+            (KnowledgeChunk.id.is_(None) | current_chunk_clause()),
             KnowledgeDocument.active.is_(True),
             KnowledgeDocument.review_status == "ACTIVE",
+            KnowledgeDocument.confidentiality.in_(["PUBLIC", "INTERNAL"]),
         )
         .limit(5000)
     ).all()
@@ -822,6 +825,7 @@ def search_domain_graph(
                 "graph_entity_type": entity.entity_type,
                 "graph_entity_name": entity.canonical_name,
                 "graph_generation_id": generation_id,
+                "document_version": document.version,
                 "graph_status": state.status,
             },
             "paths": graph_path,

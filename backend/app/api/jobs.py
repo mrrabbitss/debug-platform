@@ -13,7 +13,10 @@ router = APIRouter()
 Db = Annotated[Session, Depends(get_db)]
 
 
-def _protect_system_job(request: Request, job: Job) -> None:
+def _protect_system_job(request: Request, job: Job, db: Session) -> None:
+    from app.services.knowledge_access import authorize_routing_job
+    if authorize_routing_job(db, job.id, getattr(request.state, "principal", {})):
+        return
     if (
         job.kind in {"download_model_files", "route_markdown_knowledge"}
         and getattr(request.state, "principal", {}).get("role") != "ADMIN"
@@ -26,7 +29,7 @@ def get_job(job_id: str, request: Request, db: Db) -> Job:
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(404, "Job not found")
-    _protect_system_job(request, job)
+    _protect_system_job(request, job, db)
     return job
 
 
@@ -35,7 +38,7 @@ def cancel_job(job_id: str, request: Request, db: Db) -> Job:
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(404, "Job not found")
-    _protect_system_job(request, job)
+    _protect_system_job(request, job, db)
     try:
         return job_runner.request_cancel(db, job_id)
     except ValueError as exc:
@@ -47,7 +50,7 @@ def retry_job(job_id: str, request: Request, db: Db) -> Job:
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(404, "Job not found")
-    _protect_system_job(request, job)
+    _protect_system_job(request, job, db)
     try:
         return job_runner.retry(db, job_id)
     except ValueError as exc:

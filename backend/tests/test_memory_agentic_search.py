@@ -87,7 +87,7 @@ def test_memory_lifecycle_deduplicates_searches_and_tracks_reuse(tmp_path: Path)
         first = upsert_memory(
             db,
             memory_type="PROCEDURAL",
-            case_id=None,
+            case_id=case.id,
             source_kind="manual",
             source_id="METHOD-1",
             title="Authentication timeout procedure",
@@ -98,7 +98,7 @@ def test_memory_lifecycle_deduplicates_searches_and_tracks_reuse(tmp_path: Path)
         second = upsert_memory(
             db,
             memory_type="PROCEDURAL",
-            case_id=None,
+            case_id=case.id,
             source_kind="manual",
             source_id="METHOD-2",
             title="Authentication timeout procedure",
@@ -165,7 +165,7 @@ def test_agentic_search_hybrid_fusion_and_round_memory(tmp_path: Path) -> None:
         upsert_memory(
             db,
             memory_type="PROCEDURAL",
-            case_id=None,
+            case_id=case.id,
             source_kind="analysis_method",
             source_id="DOC-method",
             title="WLAN authentication retry procedure",

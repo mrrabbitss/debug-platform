@@ -89,7 +89,7 @@ function Assert-LauncherCliFlags {
     try { $help = Invoke-LauncherNative -Path $Path -Arguments @('--help') }
     catch { throw 'CodeAgent --help failed. Check -CliCommand and its runtime dependencies.' }
     if ($help.exit_code -ne 0) { throw 'CodeAgent --help failed. Check -CliCommand and its runtime dependencies.' }
-    foreach ($flag in @('--mcp-config', '--strict-mcp-config', '--append-system-prompt')) {
+    foreach ($flag in @('--mcp-config', '--append-system-prompt')) {
         if (-not $help.output.Contains($flag)) { throw "This CodeAgent build does not advertise $flag. A Claude-compatible build is required." }
     }
 }

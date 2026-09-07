@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Case, KnowledgeDocument
+from app.core.utils import json_loads
 from app.services.diagnostic_scope import knowledge_matches_joint_diagnostic_scope
 from app.services.text_files import read_text_file
 
@@ -75,6 +76,7 @@ class DiagnosticMethodDocument:
     content: str
     content_sha256: str
     role: str
+    personal_revision_id: str | None = None
 
     def public_snapshot(self) -> dict[str, Any]:
         snapshot = asdict(self)
@@ -114,16 +116,24 @@ def _document_role(source_type: str) -> str:
 def load_applicable_diagnostic_methods(
     db: Session,
     case: Case,
+    *, knowledge_view: list[str] | None = None,
 ) -> list[DiagnosticMethodDocument]:
     rows = list(db.scalars(
         select(KnowledgeDocument)
         .where(
             KnowledgeDocument.active.is_(True),
             KnowledgeDocument.review_status == "ACTIVE",
+            KnowledgeDocument.confidentiality.in_(["PUBLIC", "INTERNAL"]),
             KnowledgeDocument.source_type.in_(DIAGNOSTIC_SOURCE_TYPES),
         )
         .order_by(KnowledgeDocument.source_type, KnowledgeDocument.title, KnowledgeDocument.id)
     ).all())
+    if knowledge_view:
+        from app.services.knowledge_personal import working_documents
+        working = working_documents(db, knowledge_view)
+        replaced = {document.id for document in working}
+        rows = [row for row in rows if row.id not in replaced]
+        rows.extend(row for row in working if row.source_type in DIAGNOSTIC_SOURCE_TYPES)
     result: list[DiagnosticMethodDocument] = []
     for row in rows:
         # A managed WLAN is one diagnostic system: an AP symptom may originate
@@ -143,6 +153,7 @@ def load_applicable_diagnostic_methods(
             content=content,
             content_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
             role=_document_role(row.source_type),
+            personal_revision_id=json_loads(row.metadata_json, {}).get("personal_revision_id"),
         ))
     known_hashes = {document.content_sha256 for document in result}
     repository_root = Path(__file__).resolve().parents[3]

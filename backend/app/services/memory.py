@@ -4,7 +4,7 @@ import re
 from collections import Counter
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.utils import json_dumps, json_loads, mask_sensitive, new_id, utcnow
@@ -61,6 +61,9 @@ def upsert_memory(
     ))
     if existing:
         existing.occurrence_count += 1
+        if existing.review_status == "PUBLISHED":
+            # A new model pass must not overwrite an approved human-reviewed item.
+            return existing
         existing.title = title
         existing.content = content
         existing.source_kind = source_kind
@@ -125,7 +128,7 @@ def extract_memories_from_analysis(
         *(hypothesis_lines or ["- 未形成明确假设"]),
         f"涉及模块：{', '.join(result.get('suspected_modules', [])) or '未知'}",
     ])
-    outcome = "SUCCESS" if hypotheses else "PARTIAL"
+    outcome = "UNKNOWN"
     episodic_confidence = max(
         [float(item.get("confidence_score", 0.0)) for item in hypotheses] or [0.35]
     )
@@ -161,7 +164,7 @@ def extract_memories_from_analysis(
         memories.append(upsert_memory(
             db,
             memory_type="PROCEDURAL",
-            case_id=None,
+            case_id=case.id,
             source_kind="analysis_run",
             source_id=run.id,
             title=mask_sensitive(
@@ -172,9 +175,9 @@ def extract_memories_from_analysis(
                 "device_type": case.device_type,
                 "device_model": mask_sensitive(case.device_model or "") or None,
                 "suspected_modules": result.get("suspected_modules", []),
-                "sanitized_for_global_reuse": True,
+                "sanitized_for_review": True,
             },
-            evidence=[],
+            evidence=_hypothesis_evidence(result),
             outcome=outcome,
             confidence=max(0.5, episodic_confidence),
         ))
@@ -260,7 +263,7 @@ def extract_memories_from_chat(
             "device_model": case.device_model,
         },
         evidence=evidence,
-        outcome="SUCCESS" if citations else "PARTIAL",
+        outcome="UNKNOWN",
         confidence=0.75 if citations else 0.45,
     )]
     procedural_intent = any(
@@ -278,7 +281,7 @@ def extract_memories_from_chat(
             content=answer[:12000],
             context={"question": question[:1000]},
             evidence=evidence,
-            outcome="SUCCESS" if citations else "PARTIAL",
+            outcome="UNKNOWN",
             confidence=0.65,
         ))
     failure_signal = not citations or any(
@@ -403,6 +406,13 @@ def memory_to_dict(memory: AgentMemory, score: float | None = None) -> dict[str,
         "context": json_loads(memory.context_json, {}),
         "evidence": json_loads(memory.evidence_json, []),
         "outcome": memory.outcome,
+        "review_status": memory.review_status,
+        "scope": memory.scope,
+        "review_version": memory.review_version,
+        "reviewed_by": memory.reviewed_by,
+        "reviewed_at": memory.reviewed_at,
+        "review_comment": memory.review_comment,
+        "expires_at": memory.expires_at,
         "confidence": memory.confidence,
         "occurrence_count": memory.occurrence_count,
         "reuse_count": memory.reuse_count,
@@ -415,6 +425,13 @@ def memory_to_dict(memory: AgentMemory, score: float | None = None) -> dict[str,
     return result
 
 
+def visible_memory_clause(case_id: str | None):
+    published = and_(AgentMemory.scope == "GLOBAL", AgentMemory.review_status == "PUBLISHED")
+    scope = or_(AgentMemory.case_id == case_id, published) if case_id else published
+    return and_(scope, AgentMemory.review_status.not_in(["REJECTED", "ARCHIVED"]),
+                or_(AgentMemory.expires_at.is_(None), AgentMemory.expires_at > utcnow()))
+
+
 def search_memories(
     db: Session,
     query: str,
@@ -423,10 +440,7 @@ def search_memories(
     memory_types: set[str] | None = None,
     limit: int = 20,
 ) -> list[tuple[AgentMemory, float]]:
-    scope = AgentMemory.case_id.is_(None)
-    if case_id:
-        scope = or_(AgentMemory.case_id == case_id, AgentMemory.case_id.is_(None))
-    statement = select(AgentMemory).where(scope)
+    statement = select(AgentMemory).where(visible_memory_clause(case_id))
     if memory_types:
         statement = statement.where(AgentMemory.memory_type.in_({
             value.upper() for value in memory_types if value.upper() in MEMORY_TYPES
@@ -469,10 +483,11 @@ def search_memories(
         overlap = len(set(query_tokens).intersection(tokens)) / max(len(set(query_tokens)), 1)
         score += overlap * 2.0
         score += memory.confidence * 0.5
-        score += min(memory.occurrence_count, 5) * 0.05
-        score += min(memory.reuse_count, 10) * 0.02
-        if memory.outcome == "SUCCESS":
-            score += 0.2
+        if memory.review_status == "PUBLISHED":
+            score += min(memory.occurrence_count, 5) * 0.05
+            score += min(memory.reuse_count, 10) * 0.02
+            if memory.outcome == "SUCCESS":
+                score += 0.2
         if score > 0.25:
             scored.append((memory, score))
     return sorted(scored, key=lambda item: item[1], reverse=True)[:limit]

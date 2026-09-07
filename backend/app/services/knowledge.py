@@ -94,23 +94,32 @@ def chunk_document(content: str, max_chars: int = 1800, overlap_chars: int = 180
 
 
 def index_document(db: Session, document: KnowledgeDocument) -> int:
+    current_version = (KnowledgeChunk.document_id == document.id) & (KnowledgeChunk.document_version == document.version)
+    existing = list(db.scalars(select(KnowledgeChunk).where(current_version).order_by(KnowledgeChunk.chunk_index)))
+    chunks = chunk_document(document.content)
+    if existing and [(row.heading, row.content) for row in existing] == chunks:
+        # Idempotent reindex must not invalidate persisted report evidence IDs.
+        index_active_embeddings(db, existing)
+        return len(existing)
+    if existing and document.active:
+        raise ValueError("Published chunks are immutable; prepare a reviewed revision instead")
     document.metadata_json = json_dumps(enrich_knowledge_metadata(
         document.source_type,
         document.content,
         json_loads(document.metadata_json, {}),
     ))
-    old_chunk_ids = select(KnowledgeChunk.id).where(KnowledgeChunk.document_id == document.id)
+    old_chunk_ids = select(KnowledgeChunk.id).where(current_version)
     db.execute(delete(KnowledgeEmbedding).where(KnowledgeEmbedding.chunk_id.in_(old_chunk_ids)))
-    db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id))
-    chunks = chunk_document(document.content)
+    db.execute(delete(KnowledgeChunk).where(current_version))
     for index, (heading, content) in enumerate(chunks):
         db.add(KnowledgeChunk(
             id=new_id("CHK"), document_id=document.id, chunk_index=index, heading=heading,
+            document_version=document.version,
             content=content, token_estimate=max(1, len(content) // 3),
             metadata_json=json_dumps({"title": document.title, "source_type": document.source_type}),
         ))
     db.commit()
-    persisted = db.scalars(select(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id)).all()
+    persisted = db.scalars(select(KnowledgeChunk).where(current_version)).all()
     try:
         indexed_vectors = index_active_embeddings(db, persisted)
         metadata = json_loads(document.metadata_json, {})

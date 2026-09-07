@@ -72,6 +72,10 @@ if ($Port -eq 0) {
 }
 
 Write-Host "[INFO] Verifying the packaged Skill/MCP installer in dry-run mode..."
+& $python -B -s (Join-Path $packagePath "portable_codeagent.py") --dry-run --port $Port
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged CodeAgent launcher dry-run failed with exit code $LASTEXITCODE."
+}
 & powershell.exe `
     -NoLogo `
     -NoProfile `
@@ -286,7 +290,9 @@ try {
             -UseBasicParsing `
             -Uri "$baseUrl/api/v1/artifacts/$($artifact.id)/content?path=$encodedPath&start_line=$($firstHit.line_start)&line_count=1" `
             -TimeoutSec 30
-        if ($sourceResponse.StatusCode -ne 200 -or [int]$sourceResponse.Headers["X-Start-Line"] -ne [int]$firstHit.line_start) {
+        # Windows PowerShell returns a string; PowerShell 7 returns string[].
+        $sourceStartLine = @($sourceResponse.Headers["X-Start-Line"])[0]
+        if ($sourceResponse.StatusCode -ne 200 -or [int]$sourceStartLine -ne [int]$firstHit.line_start) {
             throw "Bundled demo evidence cannot jump to its original source line."
         }
     }

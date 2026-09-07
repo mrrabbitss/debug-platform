@@ -1,6 +1,6 @@
 schema_version: "1.0"
 name: gw-ap-debug-mcp
-version: "0.2.0"
+version: "0.3.0"
 status: IN_PROGRESS
 description: >-
   Stable MVP contract for Claude Code and Codex host reasoning over the Debug
@@ -15,7 +15,7 @@ transport:
   knowledge_markdown_upload: /api/v1/knowledge-routing/import
 
 knowledge_routing:
-  authorization: admin
+  authorization: engineer_owner_or_admin
   rest_import: /api/v1/knowledge-routing/import
   accepted_extensions:
     - .md
@@ -27,11 +27,12 @@ knowledge_routing:
   web:
     reasoning_owner: platform_llm
     model_source: selected_or_active_platform_chat_profile
-    model_input: bounded_masked_markdown_excerpt
+    model_input: complete_markdown_in_bounded_masked_section_pages
   cli:
     reasoning_owner: host_cli
     upload_plane: rest_multipart
     context_tool: debug_get_knowledge_routing_context
+    sections_tool: debug_read_knowledge_sections
     apply_tool: debug_apply_knowledge_routing
     backend_generative_llm_calls: forbidden
 
@@ -69,8 +70,9 @@ authorization:
   case_membership_exceptions:
     - debug_status
     - debug_list_cases
-  admin_only_non_case_tools:
+  owner_scoped_non_case_tools:
     - debug_get_knowledge_routing_context
+    - debug_read_knowledge_sections
     - debug_apply_knowledge_routing
   run_scope_is_pinned_to_case: true
   run_receipt_writes_require_active_diagnosis_intent: true
@@ -184,13 +186,19 @@ tools:
 
   - name: debug_get_knowledge_routing_context
     access: read
-    case_scope: global_knowledge_drafts
-    authorization: admin
+    case_scope: owned_knowledge_drafts
+    authorization: engineer_owner_or_admin
     purpose: Return the active leaf taxonomy plus bounded masked excerpts and optimistic concurrency fields for selected Markdown drafts; the host CLI model performs classification.
+
+  - name: debug_read_knowledge_sections
+    access: read
+    case_scope: owned_knowledge_drafts
+    authorization: engineer_owner_or_admin
+    purpose: Read all masked Markdown sections through bounded pages pinned to a content hash; no generative backend calls.
 
   - name: debug_apply_knowledge_routing
     access: write
     write_effect: knowledge_draft_routing
-    case_scope: global_knowledge_drafts
-    authorization: admin
+    case_scope: owned_knowledge_drafts
+    authorization: engineer_owner_or_admin
     purpose: Atomically apply allowlisted host-model category decisions to independent inactive DRAFT documents without publishing them.
