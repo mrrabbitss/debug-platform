@@ -32,8 +32,9 @@ commit. Do not describe an unverified feature as available.
    from `docs/README.md`.
 2. Run `git status --short --branch` and preserve unrelated user changes.
 3. On Win11, run `scripts\doctor_local.bat` when environment health is unclear.
-4. Use the smallest validation mode that provides useful feedback, then run the
-   full mode before publishing a material change.
+4. Per the user's 2026-09-08 instruction, do not repeat previously passed regression
+   suites or automatically run Full validation. Reuse recorded evidence and state
+   its scope; run regression suites or manually trigger CI only when the user asks.
 
 ## Canonical commands
 
@@ -85,8 +86,8 @@ when those services are unavailable on the development computer.
 ## Definition of done
 
 - Tests cover the changed behavior and a relevant regression path.
-- `scripts\validate_all.bat Full` passes, or an unavailable external dependency
-  is stated and then verified by GitHub Actions.
+- Report existing validation evidence and its limits. Do not rerun Full or manually
+  trigger GitHub Actions without a user request.
 - `scripts\check_repo_harness.py` passes.
 - Documentation, capability inventory and workflow contract are synchronized.
 - The diff contains no generated runtime data, credentials or unrelated edits.

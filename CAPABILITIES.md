@@ -31,6 +31,7 @@
   [验证范围](docs/local-multiclient-cli-validation.md) 是单机进程级分机模拟，不代表物理多机或 10 路并发推理验收。
 - 当前分发方式：服务器通过 `scripts/start_lan_server.bat` 运行现有完整目录，无需安装 Windows 服务；
   新克隆仓库运行根目录 `setup_server.bat` 自动完成首次构建；失败停止，已有完整目录校验后复用。
+  首次构建的 Hugging Face 模型下载固定传入 `https://hf-mirror.com`，不自动回退直连。
   支持复用配置、导出分机证书资料、停止后备份及运行/备份互斥。分机 ZIP 附简版指南，仍需已有 CodeAgent。
   操作步骤见 [服务器指南](docs/服务器使用指南.md) 与 [分机指南](docs/分机使用指南.md)。
 

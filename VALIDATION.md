@@ -1,6 +1,22 @@
 # Validation Record
 
-## Latest: one-command server preparation (2026-09-07)
+## Latest: required mirror restored to server setup (2026-09-08)
+
+- Server setup now passes `--hf-endpoint https://hf-mirror.com` to the existing model
+  preparation script. No model pins, checksums or cache paths changed. The downloader
+  has no automatic retry against the original Hugging Face origin.
+- Focused setup regression: **9 tests PASS**, including an assertion on the actual
+  model-preparation subprocess arguments.
+- Real mirror download of the pinned **190-byte** Embedding pooling configuration and its
+  SHA-256 check PASS. Evidence: `artifacts/validation/mirror-fix-20260908/result.json`.
+  This checks a small public file from this computer, not complete weights or the company server's network.
+- Previous commit `7ea106f` CI run `34118911828` completed successfully; this is baseline
+  evidence only, not CI verification of the mirror fix.
+- Full run `20260908-092529-full` was interrupted at the user's request during backend
+  regression. It is not a passing Full result. No further regression or CI run was requested;
+  the user asked that previously passed regression suites not be repeated automatically.
+
+## Previous: one-command server preparation (2026-09-07)
 
 - Full run `20260907-193858-full` passed its first **10 stages**, including backend
   **478 passed / 1 skipped**, coverage **80.48%**, and frontend typecheck/build. It stopped

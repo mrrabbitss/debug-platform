@@ -88,6 +88,8 @@ catch { $script:validationFailed = $true }
         calls = trace["calls"]
         assert calls[0]["arguments"] == ["--no-pause"]
         assert "--all" in calls[1]["arguments"]
+        model_arguments = calls[1]["arguments"]
+        assert model_arguments[model_arguments.index("--hf-endpoint") + 1] == "https://hf-mirror.com"
         assert "-SkipSetupExe" in calls[2]["arguments"]
         assert "--portable" in calls[3]["arguments"]
         assert (target / "verified.txt").read_text() == "synthetic package"

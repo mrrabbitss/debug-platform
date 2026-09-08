@@ -88,7 +88,8 @@ function Invoke-ServerSetup {
         $venvPython = Join-Path $root '.venv/Scripts/python.exe'
         $commands = @(
             @{ file=(Join-Path $root 'scripts/bootstrap_local.bat'); args=@('--no-pause') },
-            @{ file=$python; args=@('-B', (Join-Path $root 'scripts/model-runtime/prepare_assets.py'), '--all') },
+            @{ file=$python; args=@('-B', (Join-Path $root 'scripts/model-runtime/prepare_assets.py'), '--all',
+                '--hf-endpoint', 'https://hf-mirror.com') },
             @{ file='powershell.exe'; args=@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 (Join-Path $root 'scripts/build_windows_gguf_installer.ps1'), '-Version', '0.3.1', '-SkipSetupExe',
                 '-PythonExe', $python, '-OutputRoot', 'artifacts/installer/release-build') },
