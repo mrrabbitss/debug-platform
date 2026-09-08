@@ -29,9 +29,9 @@
   个人修订先供修订者新发起的综合诊断使用；普通问答的个人覆盖、异机备份实测及公司实机验收仍未完成。
 - 本地双 Codex CLI 完整 HTTPS/MCP 诊断、进程中断后原会话恢复、会话权限和停机后数据保留已实测通过；
   [验证范围](docs/local-multiclient-cli-validation.md) 是单机进程级分机模拟，不代表物理多机或 10 路并发推理验收。
-- 当前分发方式：服务器通过 `scripts/start_lan_server.bat` 运行现有完整目录，无需安装 Windows 服务；
-  新克隆仓库运行根目录 `setup_server.bat` 自动完成首次构建；失败停止，已有完整目录校验后复用。
-  首次构建的 Hugging Face 模型下载固定传入 `https://hf-mirror.com`，不自动回退直连。
+- 当前分发方式：服务器提供完整离线 EXE，内置 Python、GGUF E/R 和 HTTPS 网关，安装后从桌面启动，无需安装 Windows 服务；
+  已移除现场下载构建入口 `setup_server.bat` / `scripts/setup_lan_server.ps1`。
+  程序与业务数据分开，数据默认位于 `%LOCALAPPDATA%\GWAPDebugServer`，也可用 `GWAP_SERVER_DATA_ROOT` 指向已有目录。
   支持复用配置、导出分机证书资料、停止后备份及运行/备份互斥。分机 ZIP 附简版指南，仍需已有 CodeAgent。
   操作步骤见 [服务器指南](docs/服务器使用指南.md) 与 [分机指南](docs/分机使用指南.md)。
 

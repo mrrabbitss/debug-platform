@@ -1,0 +1,12 @@
+# 服务器离线安装包 0.3.2
+
+交付文件：`GWAP-Debug-Server-Setup-0.3.2-x64.exe`（920,859,824 字节，约 921 MB）。
+
+将 EXE 复制到服务器，双击安装，完成后从桌面“GWAP 服务器”启动。
+内置 Python、完整 Embedding/Reranker 和 HTTPS 网关，无需下载模型或安装开发环境。
+操作步骤见[服务器使用指南](../../../docs/服务器使用指南.md)，校验值见 [SHA256.txt](SHA256.txt)。
+
+EXE 独立交付，不存入 Git。本机构建文件位于 `artifacts/installer/server-release-0.3.2-final`。
+分机仍使用 [2026-09-07 的快速安装包](../20260907/README.md)。
+
+程序与数据分开；已有服务器数据的接续方式见指南。此次只做打包和文件完整性检查，未重复回归。

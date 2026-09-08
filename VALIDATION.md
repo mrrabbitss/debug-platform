@@ -1,6 +1,25 @@
 # Validation Record
 
-## Latest: required mirror restored to server setup (2026-09-08)
+## Latest: complete offline server installer (2026-09-08)
+
+- Inno Setup compilation completed successfully: `GWAP-Debug-Server-Setup-0.3.2-x64.exe`,
+  **920,859,824 bytes**, SHA-256 `05e231fdf135c3efb5d7640e426bcb06e75638feb16f3160c81436eea1b0a074`.
+  EXE, checksum and guide: `artifacts/installer/server-release-0.3.2-final`.
+  Assembled payload has **10,149 manifest entries**; backend source and bundled runner/guide
+  comparison is recorded in that directory's `source-comparison.json`.
+- Removed `setup_server.bat`, `scripts/setup_lan_server.ps1` and their dedicated test file
+  at the user's request. Server deployment now uses a separately delivered offline EXE.
+- Rebuilt the current Core/frontend and assembled the pinned cached GGUF Embedding/Reranker,
+  Python runtime and HTTPS gateway. Package manifests, model/cache sizes and SHA-256 hashes,
+  and app-local Microsoft runtime signatures were checked during assembly.
+- Installer source reuses the existing `install_local.ps1` atomic publisher with `Full`
+  components, separate server application identity and external business data. Start/backup
+  wrappers invoke the existing LAN runner with explicit package/data locations.
+- No regression suites, repeated model inference, installed-server acceptance or CI run were
+  performed for this change, per the user's instruction. Prior acceptance records below retain
+  their original scope; packaging integrity does not establish a new clean-machine acceptance.
+
+## Previous: required mirror restored to server setup (2026-09-08)
 
 - Server setup now passes `--hf-endpoint https://hf-mirror.com` to the existing model
   preparation script. No model pins, checksums or cache paths changed. The downloader

@@ -52,8 +52,11 @@ def build(portable: Path, output: Path, cache: Path) -> dict:
             (runtime / name).write_bytes(archive.read(name))
     shutil.copyfile(downloads["winsw"], runtime / "WinSW-x64.exe")
     for path in (ROOT / "deploy/windows-server").iterdir():
-        if path.is_file():
+        if path.is_file() and path.suffix != ".iss":
             shutil.copyfile(path, target / path.name)
+    shutil.copyfile(ROOT / "scripts/run_lan_server.py", target / "scripts/run_lan_server.py")
+    shutil.copyfile(ROOT / "deploy/windows-server/start_server.bat", target / "start.bat")
+    shutil.copyfile(ROOT / "docs/服务器使用指南.md", target / "服务器使用指南.md")
     shutil.copyfile(ROOT / "scripts/file_hash.ps1", target / "file_hash.ps1")
     entries = [{"path": path.relative_to(target).as_posix(), "size": path.stat().st_size, "sha256": digest(path)}
                for path in sorted(target.rglob("*")) if path.is_file() and path != target / "package-manifest.json"]
@@ -68,10 +71,35 @@ def build(portable: Path, output: Path, cache: Path) -> dict:
             "notice": "Package integrity is not server acceptance; run LAN/GGUF verification before distribution."}
 
 
+def compile_installer(package: Path, output: Path, compiler: Path) -> dict:
+    """Compile a complete offline EXE using the existing atomic payload publisher."""
+    output.mkdir(parents=True, exist_ok=True)
+    info = json.loads((package / "build-info.json").read_text(encoding="utf-8-sig"))
+    version = info["package_version"]
+    installer = output / f"GWAP-Debug-Server-Setup-{version}-x64.exe"
+    if installer.exists():
+        raise ValueError("Installer already exists; choose a new output directory")
+    subprocess.run([str(compiler.resolve()), f"/DSourceRoot={package.resolve()}",
+                    f"/DOutputRoot={output.resolve()}", f"/DAppVersion={version}",
+                    str(ROOT / "deploy/windows-server/ServerInstaller.iss")], check=True)
+    checksum = digest(installer)
+    (output / "SHA256.txt").write_text(f"{checksum}  {installer.name}\n", encoding="ascii")
+    shutil.copyfile(ROOT / "docs/服务器使用指南.md", output / "服务器使用指南.md")
+    return {"installer": str(installer.resolve()), "sha256": checksum,
+            "bytes": installer.stat().st_size}
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--portable", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cache", type=Path, default=ROOT / "artifacts/build-cache/lan-runtime")
+    parser.add_argument("--installer-output", type=Path)
+    parser.add_argument("--iscc", type=Path)
     arguments = parser.parse_args()
-    print(json.dumps(build(arguments.portable, arguments.output, arguments.cache), indent=2))
+    if arguments.installer_output and not arguments.iscc:
+        parser.error("--installer-output requires --iscc")
+    result = build(arguments.portable, arguments.output, arguments.cache)
+    if arguments.installer_output:
+        result.update(compile_installer(arguments.output, arguments.installer_output, arguments.iscc))
+    print(json.dumps(result, indent=2))
