@@ -5,7 +5,7 @@ function Invoke-LauncherHttp {
     Add-Type -AssemblyName System.Net.Http
     $handler = [Net.Http.HttpClientHandler]::new()
     $handler.AllowAutoRedirect = $false
-    if (([Uri]$Url).IsLoopback) { $handler.UseProxy = $false }
+    if (([Uri]$Url).IsLoopback -or ([Uri]$Url).GetLeftPart([UriPartial]::Authority) -eq $env:DEBUGPLATFORM_DIRECT_ORIGIN) { $handler.UseProxy = $false }
     $client = [Net.Http.HttpClient]::new($handler)
     $client.Timeout = [TimeSpan]::FromSeconds($Timeout)
     $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new($Method), $Url)

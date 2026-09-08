@@ -62,6 +62,11 @@ def run(args):
     environment = {k: v for k, v in os.environ.items() if not k.startswith(
         ("MCP_", "BUNDLED_", "LLM_", "DATABASE_", "AUTH_", "SERVER_", "MODEL_"))}
     environment.update(PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1")
+    deployment_path = package / "deployment.json"
+    deployment = json.loads(deployment_path.read_text(encoding="utf-8-sig")) if deployment_path.is_file() else {}
+    if deployment.get("simple_engineer_login") is True:
+        environment.update(SIMPLE_ENGINEER_LOGIN="true",
+                           SIMPLE_LOGIN_CA_FILE=str(data / "gateway/pki/authorities/local/root.crt"))
     with exclusive_runner(data):
         logs = data / "logs"
         logs.mkdir(exist_ok=True)
@@ -75,7 +80,7 @@ def run(args):
             if not config_path.is_file():
                 if args.backup:
                     raise RuntimeError("No configured server to back up.")
-                address = args.public_url or input("Server HTTPS address (example https://192.168.1.100:8443): ").strip()
+                address = args.public_url or deployment.get("server_url") or input("Server HTTPS address (example https://192.168.1.100:8443): ").strip()
                 admin("configure", "--public-url", address, "--data-root", data, "--backend-port", args.backend_port)
             config = json.loads(config_path.read_text(encoding="utf-8"))
             if args.public_url and args.public_url.rstrip("/") != config["public_url"].rstrip("/"):

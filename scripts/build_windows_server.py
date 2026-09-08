@@ -9,6 +9,7 @@ import subprocess
 import urllib.request
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,7 +19,16 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def build(portable: Path, output: Path, cache: Path) -> dict:
+def build(portable: Path, output: Path, cache: Path, deployment_config: Path | None = None) -> dict:
+    deployment = None
+    if deployment_config:
+        deployment = json.loads(deployment_config.read_text(encoding="utf-8-sig"))
+        uri = urlsplit(deployment.get("server_url", ""))
+        if (set(deployment) != {"schema_version", "server_url", "simple_engineer_login"}
+                or deployment["schema_version"] != 1 or type(deployment["simple_engineer_login"]) is not bool
+                or uri.scheme != "https" or not uri.hostname or uri.username or uri.password
+                or uri.path or uri.query or uri.fragment):
+            raise ValueError("Invalid deployment profile")
     portable = portable.resolve()
     python = portable / "runtime/python/python.exe"
     # Source manifest verification runs without starting backend or reading user data.
@@ -58,6 +68,8 @@ def build(portable: Path, output: Path, cache: Path) -> dict:
     shutil.copyfile(ROOT / "deploy/windows-server/start_server.bat", target / "start.bat")
     shutil.copyfile(ROOT / "docs/服务器使用指南.md", target / "服务器使用指南.md")
     shutil.copyfile(ROOT / "scripts/file_hash.ps1", target / "file_hash.ps1")
+    if deployment is not None:
+        (target / "deployment.json").write_text(json.dumps(deployment, indent=2), encoding="utf-8")
     entries = [{"path": path.relative_to(target).as_posix(), "size": path.stat().st_size, "sha256": digest(path)}
                for path in sorted(target.rglob("*")) if path.is_file() and path != target / "package-manifest.json"]
     manifest = json.loads((target / "package-manifest.json").read_text(encoding="utf-8-sig"))
@@ -79,7 +91,7 @@ def compile_installer(package: Path, output: Path, compiler: Path) -> dict:
     installer = output / f"GWAP-Debug-Server-Setup-{version}-x64.exe"
     if installer.exists():
         raise ValueError("Installer already exists; choose a new output directory")
-    subprocess.run([str(compiler.resolve()), f"/DSourceRoot={package.resolve()}",
+    subprocess.run([str(compiler.resolve()), "/Q", f"/DSourceRoot={package.resolve()}",
                     f"/DOutputRoot={output.resolve()}", f"/DAppVersion={version}",
                     str(ROOT / "deploy/windows-server/ServerInstaller.iss")], check=True)
     checksum = digest(installer)
@@ -96,10 +108,11 @@ if __name__ == "__main__":
     parser.add_argument("--cache", type=Path, default=ROOT / "artifacts/build-cache/lan-runtime")
     parser.add_argument("--installer-output", type=Path)
     parser.add_argument("--iscc", type=Path)
+    parser.add_argument("--deployment-config", type=Path, help="Local deployment profile; never commit internal server addresses")
     arguments = parser.parse_args()
     if arguments.installer_output and not arguments.iscc:
         parser.error("--installer-output requires --iscc")
-    result = build(arguments.portable, arguments.output, arguments.cache)
+    result = build(arguments.portable, arguments.output, arguments.cache, arguments.deployment_config)
     if arguments.installer_output:
         result.update(compile_installer(arguments.output, arguments.installer_output, arguments.iscc))
     print(json.dumps(result, indent=2))

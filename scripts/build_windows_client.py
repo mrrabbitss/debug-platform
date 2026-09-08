@@ -7,14 +7,24 @@ import json
 import shutil
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ("start_codeagent.ps1", "codeagent_launcher_support.ps1", "codeagent_launcher_http.ps1", "file_hash.ps1")
 
 
-def build(destination: Path) -> dict:
+def build(destination: Path, deployment_config: Path | None = None) -> dict:
     sources: dict[str, Path] = {}
     sources["分机使用指南.md"] = ROOT / "docs/分机使用指南.md"
+    if deployment_config:
+        deployment = json.loads(deployment_config.read_text(encoding="utf-8-sig"))
+        uri = urlsplit(deployment.get("server_url", ""))
+        if (set(deployment) != {"schema_version", "server_url", "simple_engineer_login"}
+                or deployment["schema_version"] != 1 or type(deployment["simple_engineer_login"]) is not bool
+                or uri.scheme != "https" or not uri.hostname or uri.username or uri.password
+                or uri.path or uri.query or uri.fragment):
+            raise ValueError("Invalid deployment profile")
+        sources["deployment.json"] = deployment_config
     for source in (ROOT / "deploy/windows-client").rglob("*"):
         if source.is_file():
             sources[source.relative_to(ROOT / "deploy/windows-client").as_posix()] = source
@@ -47,5 +57,6 @@ def build(destination: Path) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/lan/client")
+    parser.add_argument("--deployment-config", type=Path, help="Local deployment profile; never commit internal server addresses")
     args = parser.parse_args()
-    print(json.dumps(build(args.output), indent=2))
+    print(json.dumps(build(args.output, args.deployment_config), indent=2))

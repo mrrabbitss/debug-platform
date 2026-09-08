@@ -1,4 +1,9 @@
+<script setup lang="ts">
+import EngineerLoginGate from './components/EngineerLoginGate.vue'
+</script>
+
 <template>
+  <EngineerLoginGate>
   <el-container class="app-shell">
     <el-aside width="230px" class="sidebar">
       <div class="brand">GW/AP Debug</div>
@@ -22,4 +27,5 @@
       <el-main class="main-content"><router-view /></el-main>
     </el-container>
   </el-container>
+  </EngineerLoginGate>
 </template>

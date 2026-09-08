@@ -10,3 +10,8 @@ api.interceptors.request.use((config) => {
   if (key) config.headers['X-API-Key'] = key
   return config
 })
+
+api.interceptors.response.use(response => response, error => {
+  if (error.response?.status === 401) window.dispatchEvent(new Event('gwap-auth-expired'))
+  return Promise.reject(error)
+})

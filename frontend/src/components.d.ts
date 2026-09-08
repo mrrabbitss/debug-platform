@@ -58,6 +58,7 @@ declare module 'vue' {
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     ElTree: typeof import('element-plus/es')['ElTree']
     ElTreeSelect: typeof import('element-plus/es')['ElTreeSelect']
+    EngineerLoginGate: typeof import('./components/EngineerLoginGate.vue')['default']
     KnowledgeDraftActions: typeof import('./components/KnowledgeDraftActions.vue')['default']
     KnowledgeQuality: typeof import('./components/KnowledgeQuality.vue')['default']
     LogBrowserPanel: typeof import('./components/diagnosis/LogBrowserPanel.vue')['default']

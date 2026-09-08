@@ -7,6 +7,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 
 from app.api.routes import router
+from app.api.simple_login import router as simple_login_router
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.migrations import run_database_migrations
@@ -79,6 +80,7 @@ if settings.trusted_hosts:
         www_redirect=False,
     )
 app.include_router(router, prefix=settings.api_prefix, dependencies=[Depends(verify_api_key)])
+app.include_router(simple_login_router, prefix=settings.api_prefix)
 configure_debugplatform_mcp(app, settings)
 
 if settings.static_frontend_root is not None:

@@ -95,6 +95,7 @@ def auth_info() -> dict:
     settings = get_settings()
     return {
         "mode": settings.auth_mode,
+        "simple_engineer_login": settings.simple_engineer_login and settings.deployment_mode == "lan_server",
         "token_header": "X-API-Key",
         "legacy_admin_enabled": bool(
             settings.api_key and settings.auth_allow_legacy_admin

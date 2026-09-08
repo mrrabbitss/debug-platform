@@ -85,6 +85,8 @@ def authenticate_access_token(db: Session, raw_token: str) -> dict[str, str] | N
     if not row:
         return None
     token, user = row
+    if token.name == "browser-handoff":
+        return None
     if not secrets.compare_digest(token.token_hash, digest):
         return None
     if token.expires_at and _as_utc(token.expires_at) <= utcnow():

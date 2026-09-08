@@ -1,6 +1,27 @@
 # Validation Record
 
-## Latest: complete offline server installer (2026-09-08)
+## Latest: trusted LAN personal-code login, 0.3.3 (2026-09-08)
+
+- New identity API checks in an isolated database PASS: strict lowercase-letter/eight-ASCII-digit
+  format, stable identity on repeated sign-in, fixed ENGINEER role, rejection of administrator
+  and disabled accounts, administrator-route denial, and once-only browser handoff. Handoff
+  credentials are not accepted as ordinary REST/MCP access tokens.
+  Evidence: `artifacts/lan/simple-login-0.3.3/identity-check.json`.
+- Frontend typecheck/production build PASS. The first build hit a transient write error on the
+  generated `components.d.ts`; the repeat completed. Windows PowerShell parsed the new connector
+  scripts and compiled the certificate helper; no certificate was installed in this computer's trust store.
+- Built the current backend/frontend and packaged cached complete GGUF E/R with regression/model
+  smoke disabled. Server payload integrity and exact backend source/runner/guide comparison PASS.
+- Server EXE: **920,864,664 bytes**, SHA-256
+  `395080f4a8f6f4c31a352f9dc131c847c0acb5adc8b518900018b82a294175de`.
+  Client package `7894265020d4f9d9`: **24 files / 44,249 ZIP bytes**, SHA-256
+  `84b650d4063c26cebead518c26ac83ddd6c446822c01003b7ad48c435e73a4d9`.
+  Both files and separate guides are in `artifacts/lan/simple-login-0.3.3/delivery`.
+- Internal deployment address is confined to ignored local profiles and dedicated artifacts.
+  No historical regression suite or CI was run. Actual company-server certificate provisioning,
+  Windows certificate-store installation and physical client-to-server login remain target-machine acceptance.
+
+## Previous: complete offline server installer (2026-09-08)
 
 - Inno Setup compilation completed successfully: `GWAP-Debug-Server-Setup-0.3.2-x64.exe`,
   **920,859,824 bytes**, SHA-256 `05e231fdf135c3efb5d7640e426bcb06e75638feb16f3160c81436eea1b0a074`.

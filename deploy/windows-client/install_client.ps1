@@ -27,14 +27,22 @@ try {
         [ordered]@{ ok=$true; target=$target; platform_runtime=$false; global_cli_changes=$false; writes_files=$false } | ConvertTo-Json
         exit 0
     }
-    if ([IO.Directory]::Exists($target)) { throw 'This client version is already installed. Use its Start.bat; existing files were left unchanged.' }
-    [IO.Directory]::CreateDirectory($target) | Out-Null
-    foreach ($entry in $manifest.files) {
-        $destination = Join-Path $target $entry.path
-        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
-        Copy-Item -LiteralPath (Join-Path $sourceRoot $entry.path) -Destination $destination
+    if ([IO.Directory]::Exists($target)) {
+        foreach ($entry in $manifest.files) {
+            $existing = Join-Path $target $entry.path
+            if (-not [IO.File]::Exists($existing) -or (Get-Sha256Hex $existing) -ine $entry.sha256) {
+                throw 'Installed files differ from this package; they were not overwritten.'
+            }
+        }
+    } else {
+        [IO.Directory]::CreateDirectory($target) | Out-Null
+        foreach ($entry in $manifest.files) {
+            $destination = Join-Path $target $entry.path
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $sourceRoot $entry.path) -Destination $destination
+        }
+        Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $target 'client-manifest.json')
     }
-    Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $target 'client-manifest.json')
     if (-not $NoShortcut) {
         $shell = New-Object -ComObject WScript.Shell
         $shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'GWAP CodeAgent.lnk'))
@@ -42,7 +50,16 @@ try {
         $shortcut.WorkingDirectory = $target
         $shortcut.Description = 'Connect CodeAgent to the GW/AP platform; preserves existing CLI configuration'
         $shortcut.Save()
+        $webShortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'GWAP Platform.lnk'))
+        $webShortcut.TargetPath = Join-Path $target 'Open Platform.bat'
+        $webShortcut.WorkingDirectory = $target
+        $webShortcut.Save()
     }
     Write-Host ('[OK] Client installed: ' + $target)
-    Write-Host '[INFO] Open GWAP CodeAgent, enter the server HTTPS address and your personal token once.'
+    if ([IO.File]::Exists((Join-Path $target 'deployment.json'))) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $target 'start_client.ps1') -EnrollOnly
+        if ($LASTEXITCODE -ne 0) { throw 'Files were installed. Start the server, then open GWAP Platform to finish registration.' }
+    } else {
+        Write-Host '[INFO] Open GWAP CodeAgent, enter the server HTTPS address and your personal token once.'
+    }
 } catch { Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }

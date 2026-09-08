@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     api_key: str | None = None
     auth_mode: Literal["local", "api_key", "rbac"] = "local"
     auth_allow_legacy_admin: bool = True
+    simple_engineer_login: bool = False
+    simple_login_ca_file: Path | None = None
     mcp_enabled: bool = True
     mcp_bearer_token: str = ""
     mcp_allowed_hosts: str = "127.0.0.1:*,localhost:*,[::1]:*"
