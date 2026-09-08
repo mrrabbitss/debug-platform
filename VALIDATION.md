@@ -1107,3 +1107,11 @@ company environment before production use.
 Use `scripts\validate_all.bat Fast` during development,
 `scripts\validate_all.bat Full` before publishing, and
 `scripts\validate_all.bat External` on a Docker-capable workstation.
+# 2026-09-08 0.3.3 Embedding 超长输入定点修复
+
+- 故障：知识按 1800 字符分块，超过内置 BGE 512-token 上限时，llama.cpp 返回 physical batch size 错误。
+- 新增 4 项定点检查通过：Unicode 原文逐字完整、特殊 token 边界、输入顺序/尾部参与加权/归一化、无法切分输入明确失败。未运行既有回归套件。
+- 随原 0.3.3 包的真实 CPU BGE 模型复现 541-token 错误；修复后 541、2252、7-token 输入均返回有限、归一化的 768 维向量。短输入与独立原调用 cosine=0.9999997325（批内数值差异最大约 0.000204）。记录：`artifacts/lan/embedding-hotfix/result.json`。
+- 小补丁在隔离目录验证首次安装、重复安装、模拟清单写入失败回滚和运行锁拒绝；数据哨兵保持原样。
+- `GWAP-Server-Embedding-Fix-0.3.3.zip`：13,632 字节；SHA-256 `c000c6581836b28f9d796a23bb0376a851415ce3218bf1fa3a54bdf1baa073e1`。
+- 限制：长输入采用完整分窗后 token 加权向量，不代表长文检索质量评测通过；公司服务器应用补丁与实际知识上传尚待用户验证。未重跑 Full，未手动触发 CI。

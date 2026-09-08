@@ -28,6 +28,7 @@ from app.models import (
     ModelProfile,
 )
 from app.services.audit import record_model_egress
+from app.services.bundled_embedding_windows import create_windowed_embeddings
 from app.services.model_profiles import (
     MANAGED_LOCAL_PROVIDER,
     get_active_model_profile,
@@ -346,7 +347,14 @@ def embed_texts(
             ):
                 request["dimensions"] = int(config["dimension"])
             try:
-                response = client.embeddings.create(**request)
+                response = (
+                    create_windowed_embeddings(
+                        client, managed_http_client, request,
+                        timeout=float(config.get("timeout_seconds") or 120),
+                    )
+                    if managed_http_client is not None
+                    else client.embeddings.create(**request)
+                )
             finally:
                 if managed_http_client is not None:
                     managed_http_client.close()

@@ -12,5 +12,11 @@
 
 同一码对应同一账号，属于内网互信的自报身份方式；管理员仍从独立入口登录。
 
-专用包包含部署地址，只在本地交付，不存入 Git。文件位于 `artifacts/lan/simple-login-0.3.3/delivery`。
+专用包按用户要求发布在 GitHub Release 附件中，不存入 Git 源码。原始文件位于 `artifacts/lan/simple-login-0.3.3/delivery`。
 本次仅检查新增身份流程并完成构建，没有重复历史回归；公司实机连接尚待验收。
+
+## Embedding 知识上传修复
+
+原 EXE 保持不变。另提供 `GWAP-Server-Embedding-Fix-0.3.3.zip`（13,632 字节），修复长知识块超过内置 BGE 512-token 上限的问题。
+停止服务器，解压后双击 `Apply-Embedding-Fix.bat`；重新启动后，在网页系统设置中重建向量索引。
+分机无需更新，已配置的内部端口和业务数据保持不变。校验值见 Release 附件 `Embedding-Fix-SHA256.txt`。
