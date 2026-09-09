@@ -30,3 +30,13 @@ GitHub附件将同一分机ZIP命名为 `GWAP-Client-0.4.0.zip`，内容与上�
 验证清单见[VALIDATION.md](../../../../VALIDATION.md)，需求与接续见[实施记录](../../../../docs/workbench-iteration-20260908.md)。
 本轮按用户要求分发已有本地验证产物，提交对应源码；未重复历史回归或Full、未运行External或手动CI。
 真实公司Chat模型、公司网络/实机安装、Word实际分页与代码签名未在本轮验收；本地检查通过不等于正式发布/合并门禁全部完成。
+
+## GitHub发布结果
+
+`v0.4.0` 已于2026-09-09发布并标为Latest，对应源码提交 `bd9c9dab340d3c982971a72294d3bab913fc7745`。
+服务器、分机、两份指南、版本说明、SHA256及交付清单共7个附件，GitHub返回的大小和SHA-256均与本地一致。
+记录位于忽略的 `artifacts/lan/workbench-0.4.0/github-release/published-verification.json`。
+
+发布事件自动触发的[完整GGUF重打包](https://github.com/mrrabbitss/debug-platform/actions/runs/34299969071)在Python环境准备阶段失败：
+Windows 2022 runner找不到指定的Python 3.12.12 x64，应用构建/验证尚未执行。
+本次附件来自已核验的本地构建包，没有手动重跑CI，不宣称新CI通过。

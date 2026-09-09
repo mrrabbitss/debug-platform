@@ -46,6 +46,14 @@ The separately distributed server guide now explicitly documents same-Windows-us
 upgrade without uninstall, stopped-server backup and database-aware rollback. These are
 installer/source checks, not a new physical-machine 0.3.3-to-0.4.0 upgrade acceptance run.
 
+The user-requested GitHub Release `v0.4.0` was published on 2026-09-09 at source commit
+`bd9c9dab340d3c982971a72294d3bab913fc7745`. All seven attachment sizes and GitHub SHA-256
+digests match local files. The release event automatically started
+[Windows Full GGUF Installer](https://github.com/mrrabbitss/debug-platform/actions/runs/34299969071),
+which failed at Python setup because Python 3.12.12 x64 was unavailable for Windows 2022.
+No application build or validation step ran in that job, and it was not manually retried.
+The uploaded local artifacts remain the delivery evidence; this is not a green CI result.
+
 ## Earlier: trusted LAN personal-code login, 0.3.3 (2026-09-08)
 
 - New identity API checks in an isolated database PASS: strict lowercase-letter/eight-ASCII-digit
