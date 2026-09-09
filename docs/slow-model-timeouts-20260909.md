@@ -42,7 +42,18 @@ Codex 自身模型流等待由其 provider 配置控制，可在实际使用的 
 新配置验证修复了 Windows PowerShell 5.1 将首次安装的“条目不存在” stderr 当异常的问题，及原子配置替换的空备份路径兼容问题。
 仓库护栏 24/24 通过（197 Python / 36 Vue），API 契约仍为 38 项、MCP 工具 18 项。
 新增 Python 无 Ruff 问题；3 个被调整的旧模块各有一条既有 E402，确认本轮未增加。
-包内启动与清单核对结果在构建结束后补充。
+完整包已构建：服务器 10,200 项清单由构建器验证，276 个应用/前端文件及 22 个配套源码文件逐字节匹配；
+分机 26 项清单、源码及 ZIP CRC 核对通过。随包 Python 在新建的隔离目录启动成功，网页入口可读，
+空白验证数据库迁移到 0024；未启动模型推理，也未运行以前通过的功能测试。
+
+服务器 EXE：`GWAP-Debug-Server-Setup-0.5.0-x64.exe`，921,020,150 字节，SHA-256
+`1129ff90a7947341ae8eda0b611d32696a149d5a478c584ed04f18753a957511`。
+分机发布名 `GWAP-Client-0.5.0.zip`，49,691 字节，SHA-256
+`8ed2a944a331780a059142758b948d8579f9bbe5520454d1f6d1f287ba9ae4eb`。EXE 的产品版本已核对为 0.5.0。
+完整交付证据保存在 Git 外 `artifacts/lan/expert-0.5.0/`，源码提交与远端附件校验信息见
+[GitHub Release](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.0) 的 delivery-manifest.json。
+构建时基线为 7f02fa9，未跟踪的用户文章保留且未打包；最终标签额外含分机打包清单与交付文档，
+应用及已打包脚本均与最终源码核对一致。
 
 上一轮真实 API / Codex CLI 结果沿用[已保留证据](expert-live-model-validation-20260909.md)：
 CLI 使用 gpt-5.6-terra 完成诊断、报告和专家归类；API 知识整理、提炼、审核、日志规划、问答与重启保留通过，

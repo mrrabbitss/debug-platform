@@ -11,7 +11,12 @@ configuration with `tool_timeout_sec=7200`; unrelated server/model settings were
 Four CodeAgent environment scenarios passed, including restoration, and eight PowerShell scripts parsed.
 Repository harness: 24/24 PASS, 197 Python / 36 Vue, 38 allowlisted operations.
 Three existing E402 diagnostics in touched legacy modules are unchanged; new Python files have none.
-Build and artifact evidence will be recorded in [this iteration](docs/slow-model-timeouts-20260909.md).
+New offline delivery verified: 10,200 server manifest entries; 276 application/frontend plus 22
+companion source files byte-matched; 26 client manifest entries and ZIP CRC checked. Packaged Python
+started against fresh isolated data, served the web entry and migrated the database to 0024.
+No model inference or previous functional tests were run. EXE version is 0.5.0; hashes and delivery
+scope are in [this iteration](docs/slow-model-timeouts-20260909.md). Physical upgrade and company
+multi-machine acceptance are not covered. Existing CI was not manually dispatched.
 
 ## Previous: real API / Codex CLI acceptance and targeted repairs (2026-09-09)
 
