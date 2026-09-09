@@ -69,3 +69,14 @@ CLI 使用 gpt-5.6-terra 完成诊断、报告和专家归类；API 知识整理
 0.3.3 / 0.4.0 服务器无需卸载：停止、备份，以原 Windows 账号覆盖安装，再等待数据库迁移至 0024 和 READY。
 升级沿用数据目录、身份、证书、端口和模型配置；不自动清空共享知识。
 分机解压新版后运行 Install.bat，用原识别码更新。详见[服务器指南](服务器使用指南.md)与[分机指南](分机使用指南.md)。
+
+## GitHub 发布完成
+
+[0.5.0 Release](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.0) 已公开发布并设置为最新版本，
+7 个附件的名称、大小、SHA-256、发布正文及标签提交均与本地交付清单一致；标签为
+`bfaef6bc367f82058cb97640a457f4655b45e760`。校验记录在 Git 外
+`artifacts/lan/expert-0.5.0/github-release/published-verification.json`。
+
+发布自动触发[完整 GGUF 工作流](https://github.com/mrrabbitss/debug-platform/actions/runs/34341280002)，
+按用户不重复验证的要求已取消。该运行在 Python 选择步骤报错，后续应用/模型验证及产物上传均未执行；
+不将取消或已有本地证据表述为新 CI 通过。未修改工作流、未手动重新运行，未合并主分支。

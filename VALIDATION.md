@@ -17,6 +17,9 @@ started against fresh isolated data, served the web entry and migrated the datab
 No model inference or previous functional tests were run. EXE version is 0.5.0; hashes and delivery
 scope are in [this iteration](docs/slow-model-timeouts-20260909.md). Physical upgrade and company
 multi-machine acceptance are not covered. Existing CI was not manually dispatched.
+Release v0.5.0 is published/latest; all seven remote asset sizes and SHA-256 values plus the tag commit
+matched the delivery plan. Automatic release workflow 34341280002 was cancelled per the no-repeat request;
+its Python-selection step failed and all application/model checks were skipped. No new CI pass is claimed.
 
 ## Previous: real API / Codex CLI acceptance and targeted repairs (2026-09-09)
 
