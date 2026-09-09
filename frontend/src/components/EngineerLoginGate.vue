@@ -90,7 +90,7 @@ onUnmounted(() => window.removeEventListener('gwap-auth-expired', expired))
   <main v-else class="login-page">
     <form class="login-card" @submit.prevent="login">
       <h1>GW/AP 诊断平台</h1>
-      <p>{{ administrator ? '管理员登录' : '输入个人识别码即可进入，首次使用自动开通工程师账号。' }}</p>
+      <p>{{ administrator ? '管理员登录。初始令牌只在首次安装时生成；如已过期，请停止服务器后在本机运行“恢复管理员访问”。' : '输入个人识别码即可进入，首次使用自动开通工程师账号。' }}</p>
       <template v-if="ready">
         <label v-if="!administrator">个人识别码
           <input v-model="code" maxlength="9" placeholder="例如 a12345678" autocomplete="off" autocapitalize="none" spellcheck="false" autofocus />

@@ -30,6 +30,7 @@ export interface WorkbenchConfig {
   preferences: { chat_profile_id?: string | null }
   model_selection?: { profile_id?: string | null; error?: string | null }
   principal: Partial<Principal>
+  bundled_knowledge?: { status: string; message: string; folder: string; progress?: number; operation_id?: string } | null
 }
 
 export function useWorkbench() {

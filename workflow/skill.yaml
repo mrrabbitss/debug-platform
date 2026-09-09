@@ -327,6 +327,8 @@ model_policy:
   running_request_model: fixed_profile_and_configuration_fingerprint
   secret_values_in_responses: forbidden
 constraints:
+  - Installer-owned default Skill imports are restricted to an empty knowledge corpus and a hash-verified release bundle; existing knowledge, publication/deletion history and completed initialization records prevent reseeding. This adds no agent publication permission.
+  - Administrator recovery is a local stopped-server operation for an existing active ADMIN account. It is not a Web or MCP endpoint, cannot create or elevate accounts, and never returns credential content to an agent API.
   - rest_only_endpoints document owner-scoped contributions and ADMIN/EXPERT Web management; they are not agent entrypoints and add no MCP tools or MCP write permissions.
   - ADMIN assigns EXPERT through user administration. EXPERT may manage knowledge, shared Chat models and indexes and read audit records; user roles, account disabling, other users' credentials and global Embedding/Reranker/GGUF configuration remain ADMIN-only.
   - Workbench bootstrap and model APIs expose only shared or caller-owned Chat profiles. ENGINEER may create, edit, test, delete and use their own private Chat API; ADMIN/EXPERT profiles default to shared but may be private. No principal, including ADMIN, may list or use someone else's private profile; API Key values are never returned.

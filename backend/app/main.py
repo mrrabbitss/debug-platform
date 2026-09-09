@@ -21,6 +21,7 @@ from app.services.static_frontend import mount_static_frontend
 from app.services.storage_capacity import StorageCapacityError
 from app.services.model_capacity import ModelCapacityError
 from app.services.workbench import WorkbenchConfigurationError
+from app.services.bundled_knowledge import initialize_packaged_knowledge
 
 
 @asynccontextmanager
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
         seed_model_profiles(db)
         assign_uncategorized_documents(db)
         ensure_builtin_embedding_index(db)
+        initialize_packaged_knowledge(db)
     job_runner.resume_incomplete()
     try:
         async with AsyncExitStack() as stack:

@@ -11,6 +11,7 @@ from app.models import KnowledgeDocument, ModelProfile
 from app.workbench_models import WorkbenchRecord
 from app.services.workbench import categories, KNOWLEDGE_ROLES, knowledge_scope, make_record, record_payload
 from app.services.problem_categories import categories_with_status, change_category
+from app.services.bundled_knowledge import packaged_knowledge_status
 from app.services.model_access import (
     ModelAccessError, model_profile_payload, require_model_identity, resolve_user_chat_profile, visible_model_clause,
 )
@@ -49,6 +50,7 @@ def bootstrap(request: Request, db: Db):
     return {"principal": identity, "categories": categories_with_status(db), "knowledge_roles": KNOWLEDGE_ROLES,
             "preferences": json_loads(pref.payload_json, {}) if pref else {},
             "model_selection": selection,
+            "bundled_knowledge": packaged_knowledge_status(db) if identity.get("role") in {"ADMIN", "EXPERT"} else None,
             "models": [{**model_profile_payload(db, identity, row), "active": row.is_active} for row in db.scalars(
                 select(ModelProfile).where(ModelProfile.task_type == "chat", ModelProfile.enabled.is_(True),
                     visible_model_clause(identity)).order_by(ModelProfile.is_active.desc(), ModelProfile.name))]}

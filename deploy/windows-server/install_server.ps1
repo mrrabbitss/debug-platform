@@ -68,6 +68,6 @@ try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'server_maintenance.ps1') -Action ConfigureBackup -DataRoot $DataRoot
     if ($LASTEXITCODE) { throw 'Server installed but automatic backup configuration failed; configure backup before using real data.' }
     Write-Host ('[OK] Server installed. Address: ' + $PublicUrl)
-    Write-Host ('[INFO] One-day administrator token: ' + $tokenPath + ' (open locally, then create personal accounts).')
+    Write-Host ('[INFO] Seven-day administrator token: ' + $tokenPath + ' (open locally, then create personal accounts).')
     Write-Host '[INFO] Internal-CA mode requires clients to trust the exported public root certificate. Never copy its private key.'
 } catch { Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }

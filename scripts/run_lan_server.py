@@ -106,6 +106,7 @@ def run(args):
                     connection.close()
             if needs_admin:
                 admin("initialize-admin", "--config", config_path)
+            initial_admin_created = needs_admin
             processes = []
             try:
                 for command in (
@@ -133,8 +134,14 @@ def run(args):
                                 shutil.copyfile(certificate, share / "root.crt")
                                 digest = hashlib.sha256(certificate.read_bytes()).hexdigest()
                                 (share / "root.crt.sha256").write_text(digest + "\n", encoding="ascii")
+                            admin_notice = (
+                                f"Initial administrator credential: {data / 'config/bootstrap-token.txt'}\n"
+                                "It is valid for seven days. Sign in once, create a personal administrator token, then revoke the initial credential."
+                                if initial_admin_created else
+                                "Administrator login uses an existing administrator token. The initial credential is only created once and may have expired; it is never replaced on startup."
+                            )
                             print(f"READY: {config['public_url']}\nData: {data}\nClient files: {share}\n"
-                                  f"Initial admin token: {data / 'config/bootstrap-token.txt'}\n"
+                                  f"{admin_notice}\n"
                                   "Keep this window open. Press Ctrl+C to stop.", flush=True)
                     if not ready and time.monotonic() - started > 420:
                         raise RuntimeError("Startup timed out. Inspect logs/script-server.log.")

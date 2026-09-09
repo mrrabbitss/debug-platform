@@ -28,7 +28,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install_server.ps1 -Pu
 防火墙只为 Domain/Private 网络、本地子网开放指定 HTTPS 端口；不开放数据库和模型端口。
 已有同名服务或非空数据目录会拒绝覆盖，**当前不要把首次安装脚本当升级器使用**。
 
-4. 管理员从 `config\bootstrap-token.txt` 读取一天有效的初始令牌，在网页登录。
+4. 管理员从 `config\bootstrap-token.txt` 读取七天有效的新初始令牌，在网页登录。0.5.0 及更早的一天令牌不会因升级延期；过期时停止服务，在命令提示符设置 `set GWAP_SERVER_DATA_ROOT=C:\ProgramData\GWAPDebugServer`（或实际目录）后运行 `Recover Administrator Access.bat`。
    建立个人账户及访问令牌后撤销初始令牌。令牌不要放入公司群、脚本或版本库。
 5. 若使用自签 CA，导出公钥证书并给客户端核对指纹：
 

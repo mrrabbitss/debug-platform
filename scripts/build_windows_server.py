@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import urllib.request
 import zipfile
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -19,7 +20,33 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def build(portable: Path, output: Path, cache: Path, deployment_config: Path | None = None) -> dict:
+def stage_knowledge_bundle(source: Path, target: Path) -> dict:
+    """Bind every approved source byte to the installer manifest; never use a DB export."""
+    sys.path.insert(0, str(ROOT / "backend"))
+    from app.services.bundled_knowledge import BUNDLE_ID
+    from app.services.knowledge_reset import read_bundle
+    bundle = read_bundle(source.resolve())
+    folder = target / "bundled-knowledge"
+    folder.mkdir()
+    (folder / "hilink-diag.zip").write_bytes(bundle["raw"])
+    with zipfile.ZipFile(source) as archive:
+        for item in bundle["files"]:
+            destination = folder / item["path"]
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            raw = archive.read(item["path"])
+            if hashlib.sha256(raw).hexdigest() != item["source_sha256"]:
+                raise ValueError("Skill source changed during packaging")
+            destination.write_bytes(raw)
+    manifest = {"schema_version": 1, "bundle_id": BUNDLE_ID, "archive": "hilink-diag.zip",
+                "approval_origin": "INSTALLER_DEFAULT", "source_sha256": bundle["source_sha256"],
+                "files": [{key: item[key] for key in ("path", "bytes", "source_sha256", "role")}
+                          for item in bundle["manifest"]]}
+    (folder / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest
+
+
+def build(portable: Path, output: Path, cache: Path, deployment_config: Path | None = None,
+          knowledge_bundle: Path | None = None) -> dict:
     deployment = None
     if deployment_config:
         deployment = json.loads(deployment_config.read_text(encoding="utf-8-sig"))
@@ -70,16 +97,20 @@ def build(portable: Path, output: Path, cache: Path, deployment_config: Path | N
     shutil.copyfile(ROOT / "scripts/file_hash.ps1", target / "file_hash.ps1")
     if deployment is not None:
         (target / "deployment.json").write_text(json.dumps(deployment, indent=2), encoding="utf-8")
+    knowledge = stage_knowledge_bundle(knowledge_bundle, target) if knowledge_bundle else None
     entries = [{"path": path.relative_to(target).as_posix(), "size": path.stat().st_size, "sha256": digest(path)}
                for path in sorted(target.rglob("*")) if path.is_file() and path != target / "package-manifest.json"]
     manifest = json.loads((target / "package-manifest.json").read_text(encoding="utf-8-sig"))
     manifest["files"] = entries
     manifest["lan_services"] = {"caddy": lock["caddy"]["version"], "winsw": lock["winsw"]["version"],
                                 "profile": "i7-14700-32gb-pilot", "windows_services_tested": False}
+    if knowledge:
+        manifest["bundled_knowledge"] = knowledge
     (target / "package-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     subprocess.run([str(target / "runtime/python/python.exe"), "-B", "-s", "-c",
                     "import sys; sys.path.insert(0,'.'); import portable_launcher as p; p.validate_layout(); p.verify_package_manifest()"], cwd=target, check=True)
     return {"directory": str(target), "files": len(entries), "runtime_hashes_verified": True,
+            "bundled_skill_files": len(knowledge["files"]) if knowledge else 0,
             "notice": "Package integrity is not server acceptance; run LAN/GGUF verification before distribution."}
 
 
@@ -109,10 +140,11 @@ if __name__ == "__main__":
     parser.add_argument("--installer-output", type=Path)
     parser.add_argument("--iscc", type=Path)
     parser.add_argument("--deployment-config", type=Path, help="Local deployment profile; never commit internal server addresses")
+    parser.add_argument("--knowledge-bundle", type=Path, help="Release-owner-approved complete Skill ZIP to initialize empty servers")
     arguments = parser.parse_args()
     if arguments.installer_output and not arguments.iscc:
         parser.error("--installer-output requires --iscc")
-    result = build(arguments.portable, arguments.output, arguments.cache, arguments.deployment_config)
+    result = build(arguments.portable, arguments.output, arguments.cache, arguments.deployment_config, arguments.knowledge_bundle)
     if arguments.installer_output:
         result.update(compile_installer(arguments.output, arguments.installer_output, arguments.iscc))
     print(json.dumps(result, indent=2))

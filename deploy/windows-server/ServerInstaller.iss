@@ -44,6 +44,8 @@ Name: "{group}\启动服务器"; Filename: "{app}\start_server.bat"; WorkingDir:
 Name: "{autodesktop}\GWAP 服务器"; Filename: "{app}\start_server.bat"; WorkingDir: "{app}"
 Name: "{group}\备份服务器（先停止服务器）"; Filename: "{app}\backup_server.bat"; WorkingDir: "{app}"
 Name: "{group}\打开数据目录"; Filename: "{app}\open_server_data.bat"; WorkingDir: "{app}"
+Name: "{group}\恢复管理员访问（先停止服务器）"; Filename: "{app}\Recover Administrator Access.bat"; WorkingDir: "{app}"
+Name: "{group}\查看内置组网 Skill"; Filename: "{app}\bundled-knowledge\hilink-diag"; Check: DirExists(ExpandConstant('{app}\bundled-knowledge\hilink-diag'))
 Name: "{group}\服务器使用指南"; Filename: "{app}\服务器使用指南.md"
 
 [Run]

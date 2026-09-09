@@ -355,7 +355,8 @@ def _existing(db, operation_id, source_hash, preview_hash):
 
 def confirm_reset(db, *, operation_id: str, data_root: Path | str, source_zip: Path | str,
         actor: str, expected_source_sha256: str, expected_preview_hash: str,
-        confirmed: bool, model_egress_approved: bool, archive_root: Path | str | None = None):
+        confirmed: bool, model_egress_approved: bool, archive_root: Path | str | None = None,
+        approval_origin: str = "INTERACTIVE"):
     """Back up first, then commit approval and outbox job together. Never dispatch here."""
     if confirmed is not True:
         raise ResetError("Explicit confirmation of the complete preview is required")
@@ -366,6 +367,12 @@ def confirm_reset(db, *, operation_id: str, data_root: Path | str, source_zip: P
         return existing
     _assert_idle(db)
     preview = preview_reset(db, operation_id=operation_id, data_root=data_root, source_zip=source_zip, actor=actor)
+    if approval_origin not in {"INTERACTIVE", "INSTALLER_DEFAULT"}:
+        raise ResetError("Unsupported approval origin")
+    if approval_origin == "INSTALLER_DEFAULT":
+        from app.services.bundled_knowledge import has_existing_knowledge
+        if has_existing_knowledge(db):
+            raise ResetError("Installer defaults may only initialize an empty knowledge corpus")
     if preview["source_sha256"] != expected_source_sha256 or preview["preview_hash"] != expected_preview_hash:
         raise ResetError("Source, corpus or target changed; review a fresh preview")
     bundle = read_bundle(source_zip)
@@ -405,12 +412,13 @@ def confirm_reset(db, *, operation_id: str, data_root: Path | str, source_zip: P
             "preview_hash": expected_preview_hash, "approved_plan": plan, "approved_by": actor,
             "approved_at": utcnow().isoformat(), "approval_type": "HUMAN_DIRECT_IMPORT",
             "model_egress_approved": model_egress_approved, "archive_zip": str(directory / "source.zip"),
-            "backup": backup, "job_id": job.id}
+            "backup": backup, "job_id": job.id, "approval_origin": approval_origin}
         row = WorkbenchRecord(id=operation_key(operation_id), kind=KIND, owner_id=actor, payload_json=json_dumps(value))
         db.add_all([row, job, AuditEvent(id=new_id("AUD"), actor_id=actor, actor_type="user",
             action="knowledge.reset.approved", resource_type=KIND, resource_id=row.id,
             details_json=json_dumps({"operation_id": operation_id, "source_sha256": expected_source_sha256,
-                "preview_hash": expected_preview_hash, "backup_sha256": backup["sha256"], "content_recorded": False}))])
+                "preview_hash": expected_preview_hash, "backup_sha256": backup["sha256"],
+                "approval_origin": approval_origin, "content_recorded": False}))])
         db.commit()
         return row, job
     except Exception:

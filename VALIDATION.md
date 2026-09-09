@@ -1,6 +1,25 @@
 # Validation Record
 
-## Latest: 0.5.0 slow-model waiting and delivery (2026-09-09)
+## Latest: 0.5.1 bundled Skill and local administrator recovery (2026-09-09)
+
+New installer-only checks: five passed in `backend/tests/test_installer_bundled_knowledge.py`.
+They cover all six files, template/dependency binding, preservation of later human edits/deletions,
+nonempty-corpus protection, interrupted initial-index recovery and invalid bundle/external-index deferral.
+One test assertion initially used the wrong dependency-helper signature; only that failed case was rerun.
+The separate administrator recovery checks and package verification are recorded in the
+[installation repair record](docs/installer-skill-admin-fix-20260909.md).
+Recovery: initial 3 passed (7.61s), then only 10 added cases passed (18.21s). Frontend type checking
+and production bundle passed; a transient generated-declaration write error required only the failed Vite step again.
+Repository harness 24/24 PASS, 198 Python / 36 Vue, 38 agent operations.
+2026-09-10 package acceptance: 10,210 manifest files and 277 application/frontend files matched.
+Bundled Python started a fresh prod/RBAC instance, created an administrator, published all six original
+Skill documents, and retained them on restart. A synthetic expired bootstrap returned 401, and the
+offline recovery credential authenticated as ADMIN. Running-server recovery was refused.
+This used deterministic local hashing, no GGUF inference repetition or Chat requests; temporary credentials were revoked and removed.
+No previous passing suites, real Chat/CLI model calls, Full/External or manual CI were rerun.
+The actual deployed login error remains unconfirmed because this machine has no installed server data.
+
+## Previous: 0.5.0 slow-model waiting and delivery (2026-09-09)
 
 Only new waiting behavior and release assembly are in scope. Seven new checks in
 `backend/tests/test_slow_model_timeouts.py` passed (1.34 seconds): legacy environment defaults,
