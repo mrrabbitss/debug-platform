@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.core.timeouts import AI_JOB_TIMEOUT_SECONDS
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.diagnostic_models import LogTriageRun
@@ -124,7 +125,7 @@ def submit_log_triage(
             else None
         ),
         max_attempts=1,
-        timeout_seconds=20 * 60,
+        timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
         resource_limits={"max_input_bytes": 16 * 1024},
     )
     return triage, run, job
@@ -485,7 +486,7 @@ def _mark_triage_failure(
                 stop_reason=stop_reason,
                 output_summary={"error_type": stop_reason},
                 duration_ms=int((perf_counter() - started) * 1000),
-                budget_ms=20 * 60 * 1000,
+                budget_ms=AI_JOB_TIMEOUT_SECONDS * 1000,
             )
         db.commit()
 
@@ -672,7 +673,7 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
                     output_summary=summary,
                     duration_ms=int((perf_counter() - started) * 1000),
                     evidence_ids=[row["id"] for row in match_rows[:1000]],
-                    budget_ms=20 * 60 * 1000,
+                    budget_ms=AI_JOB_TIMEOUT_SECONDS * 1000,
                 )
             db.commit()
         return job_result

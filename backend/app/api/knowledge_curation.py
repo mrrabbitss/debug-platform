@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.core.timeouts import AI_JOB_TIMEOUT_SECONDS
 from app.core.db import get_db
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import (
@@ -54,7 +55,7 @@ job_runner.register(
     ("session_id",),
     cancellable=True,
     max_attempts=3,
-    timeout_seconds=1800,
+    timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
 )
 
 
@@ -199,7 +200,7 @@ async def create_curation_session(
                 media_type=item["media_type"],
                 source_role=item["source_role"],
             ))
-        job = Job(id=new_id("JOB"), kind="curate_knowledge_folder", status="QUEUED", max_attempts=3, timeout_seconds=1800,
+        job = Job(id=new_id("JOB"), kind="curate_knowledge_folder", status="QUEUED", max_attempts=3, timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
                   input_json=json_dumps({"session_id": session.id}))
         db.add(job)
         db.flush()
@@ -277,7 +278,7 @@ def retry_curation_session(
     session.model_profile_id = profile.id
     session.model_snapshot_json = json_dumps(snapshot)
     session.source_manifest_json = json_dumps(manifest)
-    job = Job(id=new_id("JOB"), kind="curate_knowledge_folder", status="QUEUED", max_attempts=3, timeout_seconds=1800,
+    job = Job(id=new_id("JOB"), kind="curate_knowledge_folder", status="QUEUED", max_attempts=3, timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
               input_json=json_dumps({"session_id": session.id, "retry_at": utcnow().isoformat()}))
     db.add(job)
     db.flush()

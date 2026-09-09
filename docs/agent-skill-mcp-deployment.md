@@ -1,5 +1,9 @@
 # Windows 11 Claude Code / Codex Skill + MCP 部署
 
+0.5.0 的慢模型配置见[等待策略](slow-model-timeouts-20260909.md)：新安装的 Codex 平台 MCP 工具
+等待 7200 秒，CodeAgent 分机会话的模型请求与流等待至少 900000 毫秒，平台 MCP 等待 7200000 毫秒。
+旧 Codex 配置可通过 `install_agent_skill_mcp.ps1 -Client Codex -Replace` 更新；模型 provider 配置不自动覆盖。
+
 本方案在不改变现有网页调用链的前提下，为 Claude Code 和 Codex 增加第二条诊断入口：
 
 ```text

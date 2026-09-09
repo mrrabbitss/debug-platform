@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm.exc import StaleDataError
 
 from app.api.workbench import Db, admin
+from app.core.timeouts import AI_JOB_TIMEOUT_SECONDS
 from app.core.utils import json_loads
 from app.models import Job
 from app.schemas import JobOut
@@ -23,9 +24,9 @@ from app.services.jobs import job_runner
 
 router = APIRouter(prefix="/workbench/assistant", tags=["knowledge-assistant"])
 job_runner.register("assistant_plan", plan_job, ("session_id", "request_version"),
-                    cancellable=True, max_attempts=1, timeout_seconds=3600)
+                    cancellable=True, max_attempts=1, timeout_seconds=AI_JOB_TIMEOUT_SECONDS)
 job_runner.register("assistant_publish", publication_job, ("session_id", "request_version", "reviewer"),
-                    cancellable=True, max_attempts=3, timeout_seconds=3600)
+                    cancellable=True, max_attempts=3, timeout_seconds=AI_JOB_TIMEOUT_SECONDS)
 
 
 def actor(request, db):

@@ -1,8 +1,11 @@
 import axios from 'axios'
 
+export const NORMAL_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
+export const SYNCHRONOUS_AI_TIMEOUT_MS = 2 * 60 * 60 * 1000
+
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || '/api/v1',
-  timeout: 180000
+  timeout: NORMAL_REQUEST_TIMEOUT_MS
 })
 
 api.interceptors.request.use((config) => {

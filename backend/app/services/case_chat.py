@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.core.timeouts import AI_JOB_TIMEOUT_SECONDS
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id
 from app.models import AnalysisRun, Case, ConversationMessage
@@ -336,7 +337,7 @@ def case_chat_job(
                 },
                 duration_ms=int((perf_counter() - started) * 1000),
                 evidence_ids=[str(item["evidence_id"]) for item in citations],
-                budget_ms=15 * 60 * 1000,
+                budget_ms=AI_JOB_TIMEOUT_SECONDS * 1000,
             )
             db.commit()
         return {

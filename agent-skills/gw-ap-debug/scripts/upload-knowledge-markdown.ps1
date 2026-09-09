@@ -21,8 +21,8 @@ param(
     [ValidateRange(1, 30)]
     [int]$PollIntervalSeconds = 2,
 
-    [ValidateRange(1, 3600)]
-    [int]$MaxWaitSeconds = 900,
+    [ValidateRange(1, 7200)]
+    [int]$MaxWaitSeconds = 7200,
 
     [switch]$NoWait,
     [switch]$DryRun
@@ -166,6 +166,7 @@ if ([string]::IsNullOrWhiteSpace($Token)) {
 Add-Type -AssemblyName System.Net.Http
 $handler = [System.Net.Http.HttpClientHandler]::new()
 $client = [System.Net.Http.HttpClient]::new($handler)
+$client.Timeout = [TimeSpan]::FromHours(2)
 $multipart = $null
 try {
     $client.DefaultRequestHeaders.Authorization =

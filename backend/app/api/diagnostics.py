@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.timeouts import AI_JOB_TIMEOUT_SECONDS
 from app.core.db import get_db
 from app.core.utils import json_loads, new_id
 from app.diagnostic_models import (
@@ -59,7 +60,7 @@ job_runner.register(
     ("case_id", "message_id", "agent_run_id"),
     cancellable=True,
     max_attempts=1,
-    timeout_seconds=15 * 60,
+    timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
 )
 job_runner.register(
     "analysis_revision",
@@ -67,7 +68,7 @@ job_runner.register(
     ("revision_id", "message_id", "agent_run_id"),
     cancellable=True,
     max_attempts=1,
-    timeout_seconds=20 * 60,
+    timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
     resource_limits={"max_input_bytes": 32 * 1024},
 )
 job_runner.register(
@@ -76,7 +77,7 @@ job_runner.register(
     ("triage_run_id",),
     cancellable=True,
     max_attempts=1,
-    timeout_seconds=20 * 60,
+    timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
     resource_limits={"max_input_bytes": 16 * 1024},
 )
 
@@ -205,7 +206,7 @@ def submit_case_chat(
             },
             deduplicate=False,
             max_attempts=1,
-            timeout_seconds=20 * 60,
+            timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
             resource_limits={"max_input_bytes": 32 * 1024},
         )
         revision.job_id = job.id
@@ -231,7 +232,7 @@ def submit_case_chat(
         },
         deduplicate=False,
         max_attempts=1,
-        timeout_seconds=15 * 60,
+        timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
         resource_limits={"max_input_bytes": 64 * 1024},
     )
     message.job_id = job.id

@@ -4,7 +4,7 @@ import type {
   KnowledgeRoutingJobResult,
   ModelProfile
 } from '../types'
-import { api } from './client'
+import { api, NORMAL_REQUEST_TIMEOUT_MS, SYNCHRONOUS_AI_TIMEOUT_MS } from './client'
 
 export interface ImportMarkdownKnowledgeInput {
   files: File[]
@@ -35,7 +35,7 @@ export async function importMarkdownKnowledge(
   return (await api.post<KnowledgeRoutingImportResponse>(
     '/knowledge-routing/import',
     data,
-    { timeout: 15 * 60 * 1000 }
+    { timeout: NORMAL_REQUEST_TIMEOUT_MS }
   )).data
 }
 
@@ -43,7 +43,7 @@ export async function waitForKnowledgeRoutingJob(
   initialJob: Job,
   onUpdate?: (job: Job) => void
 ): Promise<{ job: Job; result: KnowledgeRoutingJobResult }> {
-  const deadline = Date.now() + 15 * 60 * 1000
+  const deadline = Date.now() + SYNCHRONOUS_AI_TIMEOUT_MS
   let job = initialJob
   onUpdate?.(job)
   while (!['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(job.status)) {

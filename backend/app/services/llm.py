@@ -8,6 +8,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
+from app.core.timeouts import chat_timeout_seconds
 from app.core.utils import json_loads
 from app.models import ModelProfile
 from app.services.audit import record_model_egress
@@ -128,7 +129,10 @@ class OpenAICompatibleProvider(LLMProvider):
         self.max_tokens = configured_max_tokens if configured_max_tokens > 0 else None
         self.thinking_mode = _thinking_mode(config)
         self.thinking_enabled = self.thinking_mode == "enabled"
-        timeout_seconds = float(config.get("timeout_seconds", settings.llm_timeout_seconds))
+        timeout_seconds = chat_timeout_seconds(
+            config.get("timeout_seconds", settings.llm_timeout_seconds),
+            default=settings.llm_timeout_seconds,
+        )
         self.last_usage: dict[str, int | None] = {}
         self.last_duration_ms = 0
         self.last_outcome = "NOT_CALLED"

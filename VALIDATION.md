@@ -1,6 +1,19 @@
 # Validation Record
 
-## Latest: real API / Codex CLI acceptance and targeted repairs (2026-09-09)
+## Latest: 0.5.0 slow-model waiting and delivery (2026-09-09)
+
+Only new waiting behavior and release assembly are in scope. Seven new checks in
+`backend/tests/test_slow_model_timeouts.py` passed (1.34 seconds): legacy environment defaults,
+operator overrides, and model profile timeout propagation into both SDK and HTTP transport.
+No real model request was made; prior successful suites and API/CLI steps are not rerun.
+Frontend production build passed. The installed Codex binary parsed the isolated generated MCP
+configuration with `tool_timeout_sec=7200`; unrelated server/model settings were preserved.
+Four CodeAgent environment scenarios passed, including restoration, and eight PowerShell scripts parsed.
+Repository harness: 24/24 PASS, 197 Python / 36 Vue, 38 allowlisted operations.
+Three existing E402 diagnostics in touched legacy modules are unchanged; new Python files have none.
+Build and artifact evidence will be recorded in [this iteration](docs/slow-model-timeouts-20260909.md).
+
+## Previous: real API / Codex CLI acceptance and targeted repairs (2026-09-09)
 
 The user explicitly requested real third-party Chat API and Codex CLI tests. Both use isolated
 current-source servers, production RBAC identities, separate SQLite databases and synthetic data.

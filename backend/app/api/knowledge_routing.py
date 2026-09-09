@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
+from app.core.timeouts import AI_JOB_TIMEOUT_SECONDS
 from app.core.db import get_db
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import Artifact
@@ -30,7 +31,7 @@ job_runner.register(
     ("artifact_id", "document_id"),
     cancellable=True,
     max_attempts=1,
-    timeout_seconds=900,
+    timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
 )
 
 

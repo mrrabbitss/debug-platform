@@ -7,6 +7,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from app.core.timeouts import AI_JOB_TIMEOUT_SECONDS
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.diagnostic_models import AnalysisRevision
@@ -405,7 +406,7 @@ def analysis_revision_job(
                 duration_ms=int((perf_counter() - started) * 1000),
                 evidence_ids=[str(item["evidence_id"]) for item in evidence[:1000]],
                 approval_status="PENDING_HUMAN_APPROVAL",
-                budget_ms=20 * 60 * 1000,
+                budget_ms=AI_JOB_TIMEOUT_SECONDS * 1000,
             )
             db.commit()
         record_audit_event(

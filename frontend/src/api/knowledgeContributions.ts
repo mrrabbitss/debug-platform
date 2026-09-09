@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, SYNCHRONOUS_AI_TIMEOUT_MS } from './client'
 
 export interface ContributionCandidate {
   title: string
@@ -39,7 +39,7 @@ export const contributionsApi = {
   update: async (id: string, input: Record<string, unknown>, review: boolean) => (await api.patch<KnowledgeContribution>(`${root}/${id}${review ? '/review-draft' : ''}`, input)).data,
   submit: async (item: KnowledgeContribution) => (await api.post<KnowledgeContribution>(`${root}/${item.id}/submit`, { expected_version: item.version })).data,
   remove: async (item: KnowledgeContribution) => { await api.delete(`${root}/${item.id}`, { params: { expected_version: item.version } }) },
-  chat: async (item: KnowledgeContribution, instruction: string, consent: boolean) => (await api.post<KnowledgeContribution>(`${root}/${item.id}/review-chat`, { expected_version: item.version, instruction, consent_model_egress: consent }, { timeout: 5 * 60 * 1000 })).data,
+  chat: async (item: KnowledgeContribution, instruction: string, consent: boolean) => (await api.post<KnowledgeContribution>(`${root}/${item.id}/review-chat`, { expected_version: item.version, instruction, consent_model_egress: consent }, { timeout: SYNCHRONOUS_AI_TIMEOUT_MS })).data,
   review: async (item: KnowledgeContribution, action: 'APPROVE' | 'RETURN' | 'REJECT', comment: string) => (await api.post<KnowledgeContribution>(`${root}/${item.id}/review`, { expected_version: item.version, expected_content_hash: item.content_hash, action, comment })).data,
   retry: async (item: KnowledgeContribution) => { if (!item.publication_job_id) throw new Error('缺少发布任务，请刷新状态'); await api.post(`/jobs/${item.publication_job_id}/retry`); return (await api.get<KnowledgeContribution>(`${root}/${item.id}`)).data }
 }

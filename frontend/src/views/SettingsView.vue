@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api } from '../api/client'
+import { api, SYNCHRONOUS_AI_TIMEOUT_MS } from '../api/client'
 import type {
   Job,
   ModelDownloadCatalog,
@@ -60,7 +60,7 @@ const form = reactive({
   max_tokens: 0,
   context_window_tokens: 0,
   context_reserved_output_tokens: 0,
-  timeout_seconds: 300,
+  timeout_seconds: 900,
   max_retries: 2,
   dimension: undefined as number | undefined,
   batch_size: 16,
@@ -280,7 +280,7 @@ function resetForm(task: ModelTask) {
   form.max_tokens = 0
   form.context_window_tokens = 0
   form.context_reserved_output_tokens = 0
-  form.timeout_seconds = 300
+  form.timeout_seconds = 900
   form.max_retries = 2
   form.dimension = undefined
   form.batch_size = 16
@@ -324,7 +324,8 @@ function openEdit(profile: ModelProfile) {
   form.max_tokens = Number(profile.config.max_tokens ?? 0)
   form.context_window_tokens = Number(profile.config.context_window_tokens ?? 0)
   form.context_reserved_output_tokens = Number(profile.config.context_reserved_output_tokens ?? 0)
-  form.timeout_seconds = Number(profile.config.timeout_seconds ?? 300)
+  const savedTimeout = Number(profile.config.timeout_seconds ?? 900)
+  form.timeout_seconds = profile.task_type === 'chat' && savedTimeout === 300 ? 900 : savedTimeout
   form.max_retries = Number(profile.config.max_retries ?? 2)
   form.dimension = profile.config.dimension ? Number(profile.config.dimension) : undefined
   form.batch_size = Number(profile.config.batch_size ?? 16)
@@ -418,7 +419,9 @@ async function saveProfile() {
 async function testProfile(profile: ModelProfile) {
   testingId.value = profile.id
   try {
-    const { data } = await api.post(`/system/models/${profile.id}/test`)
+    const { data } = await api.post(`/system/models/${profile.id}/test`, undefined, {
+      timeout: SYNCHRONOUS_AI_TIMEOUT_MS
+    })
     if (profile.task_type === 'embedding') {
       ElMessage.success(`连接正常，向量维度 ${data.dimension}`)
     } else if (profile.task_type === 'reranker') {
@@ -734,7 +737,7 @@ onMounted(load)
           <el-form-item label="候选文档数"><el-input-number v-model="form.candidate_count" :min="5" :max="100" /></el-form-item>
           <el-form-item v-if="form.mode !== 'builtin'" label="排序指令"><el-input v-model="form.instruction" type="textarea" :rows="3" /></el-form-item>
         </template>
-        <el-form-item v-if="form.mode === 'api'" label="超时秒数"><el-input-number v-model="form.timeout_seconds" :min="5" :max="600" /></el-form-item>
+        <el-form-item v-if="form.mode === 'api'" label="超时秒数"><el-input-number v-model="form.timeout_seconds" :min="5" :max="7200" /></el-form-item>
         <el-form-item label="启用"><el-switch v-model="form.enabled" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button data-testid="model-profile-save" type="primary" :loading="saving" @click="saveProfile">保存</el-button></template>

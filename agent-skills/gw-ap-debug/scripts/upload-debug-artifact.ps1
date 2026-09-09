@@ -89,6 +89,7 @@ if ([string]::IsNullOrWhiteSpace($token)) {
 Add-Type -AssemblyName System.Net.Http
 $handler = [System.Net.Http.HttpClientHandler]::new()
 $client = [System.Net.Http.HttpClient]::new($handler)
+$client.Timeout = [TimeSpan]::FromHours(2)
 $fileStream = $null
 $multipart = $null
 try {
@@ -136,4 +137,3 @@ finally {
     $client.Dispose()
     $handler.Dispose()
 }
-

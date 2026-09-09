@@ -2,6 +2,9 @@
 
 最后更新：2026-09-09
 
+本轮按用户要求提高慢模型等待并准备 0.5.0 交付，见[等待与交付记录](docs/slow-model-timeouts-20260909.md)。
+新增 7 项离线配置检查通过；复用原真实模型和既有回归证据，不重复运行已通过套件或真实模型。
+
 追加[真实 API / Codex CLI 功能验证](docs/expert-live-model-validation-20260909.md)，使用全合成
 资料、独立生产 RBAC 源码进程和数据库。Codex CLI 明确选择 gpt-5.6-terra，完成 ENGINEER
 诊断和 EXPERT 知识归类，平台 Chat 出站为零。发现的发布缓存、审核 JSON 结构和日志任务

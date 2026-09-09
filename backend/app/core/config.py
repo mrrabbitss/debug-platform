@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.timeouts import CHAT_REQUEST_TIMEOUT_SECONDS, chat_timeout_seconds
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -88,8 +90,14 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_model: str = ""
     llm_temperature: float = 0.1
-    llm_timeout_seconds: int = 300
+    llm_timeout_seconds: int = CHAT_REQUEST_TIMEOUT_SECONDS
     llm_max_retries: int = 2
+
+    @field_validator("llm_timeout_seconds")
+    @classmethod
+    def upgrade_default_chat_timeout(cls, value: int) -> int:
+        return int(chat_timeout_seconds(value))
+
     diagnostic_agent_max_total_tokens: int = Field(
         default=2_000_000, ge=1, le=100_000_000
     )

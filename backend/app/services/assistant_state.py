@@ -2,6 +2,7 @@
 import hashlib
 import json
 from sqlalchemy import select, update
+from app.core.timeouts import AI_JOB_TIMEOUT_SECONDS
 from app.core.config import get_settings
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import Job, KnowledgeGraphState, UserAccount
@@ -85,7 +86,7 @@ def enqueue(db, row, value, kind, *, reviewer=None):
         arguments["reviewer"] = reviewer
     job = Job(id=new_id("JOB"), kind=kind, status="QUEUED", input_json=json_dumps(arguments),
               idempotency_key=digest({**arguments, "record_version": row.version}),
-              max_attempts=3 if kind == "assistant_publish" else 1, timeout_seconds=3600,
+              max_attempts=3 if kind == "assistant_publish" else 1, timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
               available_at=utcnow(), resource_limits_json="{}")
     value["job_id"] = job.id
     value.update(worker_token=None, worker_job_id=None, worker_attempt=None)

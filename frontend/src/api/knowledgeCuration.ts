@@ -6,7 +6,7 @@ import type {
   KnowledgeCurationSession,
   ModelProfile
 } from '../types'
-import { api } from './client'
+import { api, SYNCHRONOUS_AI_TIMEOUT_MS } from './client'
 import type { KnowledgeContribution } from './knowledgeContributions'
 
 export interface KnowledgeCurationCreateInput {
@@ -96,7 +96,7 @@ export async function refineKnowledgeCuration(
   return (await api.post<KnowledgeCurationSession>(
     `/knowledge-curations/${sessionId}/chat`,
     { instruction, expected_draft_version: expectedDraftVersion },
-    { timeout: 5 * 60 * 1000 }
+    { timeout: SYNCHRONOUS_AI_TIMEOUT_MS }
   )).data
 }
 

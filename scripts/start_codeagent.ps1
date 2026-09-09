@@ -151,13 +151,33 @@ try {
     [IO.Directory]::CreateDirectory($sessionRoot) | Out-Null
     $sessionFile = Join-Path $sessionRoot ('session-' + [guid]::NewGuid().ToString('N') + '.json')
     Write-LauncherJson $sessionFile @{ mcpServers = @{ 'gw-ap-debug' = @{
-        type = 'http'; url = $mcpUri.AbsoluteUri; headers = @{ Authorization = 'Bearer ${DEBUGPLATFORM_MCP_TOKEN}' }
+        type = 'http'; url = $mcpUri.AbsoluteUri; timeout = 7200000
+        headers = @{ Authorization = 'Bearer ${DEBUGPLATFORM_MCP_TOKEN}' }
     } } }
     foreach ($name in @('DEBUGPLATFORM_MCP_URL', 'DEBUGPLATFORM_MCP_TOKEN')) {
         $previousClientEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
     }
     $env:DEBUGPLATFORM_MCP_URL = $mcpUri.AbsoluteUri
     $env:DEBUGPLATFORM_MCP_TOKEN = $token
+    # Claude-compatible clients consume these documented process variables.
+    # Keep any longer user values and restore the launching process on exit.
+    foreach ($entry in @(
+        @{ Name = 'API_TIMEOUT_MS'; Minimum = 900000; Default = 900000 },
+        @{ Name = 'CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS'; Minimum = 900000; Default = 900000 },
+        @{ Name = 'CLAUDE_STREAM_IDLE_TIMEOUT_MS'; Minimum = 900000; Default = 900000 },
+        @{ Name = 'CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS'; Minimum = 900000; Default = 900000 }
+    )) {
+        $name = $entry.Name
+        $previous = [Environment]::GetEnvironmentVariable($name, 'Process')
+        $previousClientEnvironment[$name] = $previous
+        $milliseconds = 0L
+        if ([long]::TryParse($previous, [ref]$milliseconds) -and $milliseconds -gt 0) {
+            $milliseconds = [Math]::Max($milliseconds, [long]$entry.Minimum)
+        } else {
+            $milliseconds = [long]$entry.Default
+        }
+        [Environment]::SetEnvironmentVariable($name, [string]$milliseconds, 'Process')
+    }
     $prompt = "For GW/AP diagnosis and Markdown knowledge routing, explicitly read and follow the current project Skill at: $skillPath . Use its real directory for helper scripts. Do not substitute another same-named user Skill. The active CodeAgent model owns reasoning; use the gw-ap-debug MCP evidence plane and verify debug_status before work."
     # Add the platform server for this session without disabling the client's existing MCPs.
     $cliArguments = @('--mcp-config', $sessionFile, '--append-system-prompt', $prompt)
