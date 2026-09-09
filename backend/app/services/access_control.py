@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.utils import json_loads, new_id, utcnow
 from app.core.config import get_settings
+from app.diagnostic_models import LogTriageRun
 from app.models import (
     AccessToken,
     AnalysisRun,
@@ -137,6 +138,9 @@ def resolve_request_case_id(db: Session, request: Request) -> str | None:
     if resource == "jobs":
         job = db.get(Job, resource_id)
         data: dict[str, Any] = json_loads(job.input_json, {}) if job else {}
+        if job and job.kind == "log_triage":
+            triage = db.get(LogTriageRun, str(data.get("triage_run_id") or ""))
+            return triage.case_id if triage else None
         if data.get("case_id"):
             return str(data["case_id"])
         if data.get("artifact_id"):

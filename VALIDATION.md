@@ -1,6 +1,45 @@
 # Validation Record
 
-## Latest: expert roles, model ownership and knowledge collaboration (2026-09-09)
+## Latest: real API / Codex CLI acceptance and targeted repairs (2026-09-09)
+
+The user explicitly requested real third-party Chat API and Codex CLI tests. Both use isolated
+current-source servers, production RBAC identities, separate SQLite databases and synthetic data.
+Base commit is `5f11eac`; these repairs are on the same `codex/expert-knowledge-iteration` branch.
+See the [combined record](docs/expert-live-model-validation-20260909.md) and
+[CLI evidence](docs/expert-cli-live-handoff-20260909.md) for retained evidence and limitations.
+
+| New repair checks | Result | Coverage |
+| --- | --- | --- |
+| First publication with no graph state | 1 passed | Real SQLite and background JobRunner: refresh the state after claiming its generation, complete one approved publication |
+| AI review JSON contract and bounded correction | 4 passed | Missing/wrong fields corrected once; repeated invalid output preserves original/history; concurrent human edit cannot be overwritten |
+| Log-triage job case permissions | 7 passed | Owner/editor/viewer reads, owner cancellation, viewer write rejection, foreign/missing triage cannot borrow a supplied case ID |
+
+These checks are in `test_assistant_live_publication.py`, `test_review_live_schema.py` and
+`test_triage_live_job_access.py`. CLI used explicit `--model gpt-5.6-terra` twice; both real runs
+completed with exit code 0. The engineer diagnosis persisted two planning rounds, five current-case
+citations and an HTML report; expert routing remained inactive DRAFT, engineer routing was denied,
+and backend Chat egress was zero. Five nonterminal CLI error events recovered, but their original
+text was intentionally not retained, so no more specific attribution is claimed.
+
+API requests specify `glm-5.2`. Two direct responses identify themselves as `glm-5.3`; the gateway's
+internal model routing is not independently verified. Earlier successful reading, extraction and
+review are reused when continuing from copied synthetic databases. The initial verifier missed
+the mandatory triage call and selected the user message instead of the assistant reply; both
+assertions were corrected. No historical suite, Full, External or manual CI was rerun.
+
+Final API acceptance is **PARTIAL**, not PASS. Full-folder organization/publication, ordinary
+extraction, two-turn review/publication, log triage, interactive chat, draft routing and restart
+persistence passed. Comprehensive diagnosis stopped once on an upstream `InternalServerError`
+(126947ms) and again on invalid Skill-reading output. Neither failure produced a model diagnosis
+or its report. CLI full diagnosis/report PASS does not stand in for the failed API path.
+Canonical API evidence is `artifacts/validation/expert-api-live-20260909-f/`, with c/d/e predecessor
+artifacts retaining the successful real model work. All seven published document contents and
+versions survived restart. API credential fields and active test tokens are zero after cleanup;
+CLI credentials are also revoked. No new package, release, Full or green CI gate is claimed.
+Repository harness passed 24/24 (196 Python / 36 Vue boundaries), changed Python sources passed
+Ruff and AST checks, and 108 changed-source/evidence files had zero credential-pattern matches.
+
+## Earlier: expert roles, model ownership and knowledge collaboration (2026-09-09)
 
 Source branch: `codex/expert-knowledge-iteration`, based on `6523cca`. This is a local source and
 integration delivery; the existing 0.4.0 release artifacts were not replaced. Unrelated local writing

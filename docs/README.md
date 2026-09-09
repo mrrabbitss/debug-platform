@@ -6,6 +6,8 @@
 
 ## 架构与演进
 
+- [专家迭代真实 API 与 Codex CLI 验证](expert-live-model-validation-20260909.md)
+- [真实 Codex CLI 诊断与专家归类证据](expert-cli-live-handoff-20260909.md)
 - [专家角色、模型共享与知识协作迭代](expert-knowledge-iteration-20260909.md)
 - [个人及共享 Chat 模型实现与验证](model-sharing-handoff-20260909.md)
 - [知识贡献与审核实现](knowledge-review-handoff-20260909.md)

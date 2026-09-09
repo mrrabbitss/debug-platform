@@ -108,7 +108,11 @@ class PublicationFence:
     def check(self, db):
         row, value = locked_session(db, self.session_id)
         require_approval(db, row, value, self.ctx, self.version, self.reviewer, {"BUILDING"})
-        state = db.get(KnowledgeGraphState, "domain")
+        # ``prepare`` claims this generation with a Core UPDATE.  When the
+        # graph row was created in that same Session, SQLAlchemy's identity
+        # map can still hold its pre-claim value.  Re-read it so a worker does
+        # not mistake its own committed-in-progress claim for a takeover.
+        state = db.get(KnowledgeGraphState, "domain", populate_existing=True)
         if not state or state.building_generation_id != self.graph_id or value.get("building_generation_id") != self.graph_id:
             raise JobLeaseLostError("发布构建已被取消或接管")
         profile = get_active_model_profile("embedding", db)
