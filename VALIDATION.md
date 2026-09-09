@@ -18,6 +18,10 @@ offline recovery credential authenticated as ADMIN. Running-server recovery was 
 This used deterministic local hashing, no GGUF inference repetition or Chat requests; temporary credentials were revoked and removed.
 No previous passing suites, real Chat/CLI model calls, Full/External or manual CI were rerun.
 The actual deployed login error remains unconfirmed because this machine has no installed server data.
+Release v0.5.1 is published/latest. All seven remote attachment sizes/SHA-256 values, normalized
+release-note text and tag `7c659b51be65210451e2a53e420b73e9571709d0` were verified.
+Automatic release workflow 34375760371 failed during Python selection before cancellation could apply;
+all application/model build and validation steps were skipped. No new CI pass or main-branch merge is claimed.
 
 ## Previous: 0.5.0 slow-model waiting and delivery (2026-09-09)
 
