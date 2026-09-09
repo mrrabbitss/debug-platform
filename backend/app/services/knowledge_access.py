@@ -1,25 +1,67 @@
-"""Published knowledge is readable; management requires ADMIN regardless of ownership."""
+"""Knowledge management capabilities and owner-scoped contribution evidence."""
 from fastapi import HTTPException
-from sqlalchemy import and_, select
+from sqlalchemy import and_, exists, select
 
 from app.core.utils import json_loads
 from app.knowledge_acl_models import KnowledgeAccess
-from app.models import Job, KnowledgeDocument
+from app.models import Job, KnowledgeCurationSession, KnowledgeDocument
 
 
 KNOWLEDGE_MANAGEMENT_JOB_KINDS = frozenset({
     "publish_knowledge_revision", "route_markdown_knowledge", "import_knowledge",
     "curate_knowledge_folder", "reindex_knowledge", "rebuild_domain_graph",
     "assistant_plan", "assistant_publish",
+    "publish_knowledge_contribution",
+    "knowledge_reset",
 })
 KNOWLEDGE_READ_PATHS = {(), ("categories",), ("templates", "fault-case"), ("graph", "status")}
 DOCUMENT_READ_PATHS = {(), ("sections",), ("revisions",), ("publications",)}
 
 
+def is_knowledge_manager(principal: dict) -> bool:
+    return principal.get("role") in {"ADMIN", "EXPERT"}
+
+
 def require_knowledge_admin(principal: dict) -> None:
-    """Shared domain gate for REST and MCP, including former personal contributions."""
-    if principal.get("role") != "ADMIN":
-        raise HTTPException(403, "Only administrators may manage knowledge")
+    """Kept as the common REST/MCP management gate for backwards compatibility."""
+    if not is_knowledge_manager(principal):
+        raise HTTPException(403, "Only administrators and experts may manage knowledge")
+
+
+def require_contributor(principal: dict) -> None:
+    if principal.get("role") not in {"ADMIN", "EXPERT", "ENGINEER"} or not principal.get("id"):
+        raise HTTPException(403, "An authenticated contributor account is required")
+
+
+def knowledge_kind(document) -> str:
+    """A persisted discriminator wins; a filename never grants Skill permissions."""
+    metadata = json_loads(getattr(document, "metadata_json", "{}"), {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    if metadata.get("content_kind") in {"KNOWLEDGE", "SKILL"}:
+        return metadata["content_kind"]
+    if (getattr(document, "source_type", "") in {"analysis_skill", "analysis_method", "fault_tree", "report_template"}
+            or metadata.get("knowledge_role") in {"log_analysis", "diagnosis", "fault_tree", "report_template"}
+            or metadata.get("bundle_manifest")):
+        return "SKILL"
+    return "KNOWLEDGE"
+
+
+def require_curation_access(db, session_id: str, principal: dict, *, write=False):
+    require_contributor(principal)
+    session = db.get(KnowledgeCurationSession, session_id)
+    if not session:
+        raise HTTPException(404, "Knowledge curation session not found")
+    if session.created_by == principal.get("id"):
+        return session
+    if not write and is_knowledge_manager(principal):
+        from app.knowledge_contribution_models import KnowledgeContribution
+        submitted = db.scalar(select(KnowledgeContribution.id).where(
+            KnowledgeContribution.source_curation_id == session_id,
+            KnowledgeContribution.status.not_in(["DRAFT", "DELETED"])))
+        if submitted:
+            return session
+    raise HTTPException(404, "Knowledge curation session not found")
 
 
 def _published_visible(document) -> bool:
@@ -32,8 +74,12 @@ def shared_knowledge_clause():
 
 
 def visible_knowledge_clause(principal):
-    if principal.get("role") == "ADMIN":
-        return True
+    if is_knowledge_manager(principal):
+        from app.knowledge_contribution_models import KnowledgeContribution
+        return ~exists(select(KnowledgeContribution.id).where(
+            KnowledgeContribution.published_document_id == KnowledgeDocument.id,
+            KnowledgeContribution.owner_id != str(principal.get("id") or ""),
+            KnowledgeContribution.status.in_(["DRAFT", "DELETED"])))
     return and_(KnowledgeDocument.active.is_(True), KnowledgeDocument.review_status == "ACTIVE", shared_knowledge_clause())
 
 
@@ -49,7 +95,14 @@ def require_knowledge_access(db, document_id: str, principal: dict, *, write=Fal
     document = db.get(KnowledgeDocument, document_id)
     if not document:
         raise HTTPException(404, "Knowledge document not found")
-    if principal.get("role") == "ADMIN":
+    if is_knowledge_manager(principal):
+        from app.knowledge_contribution_models import KnowledgeContribution
+        private_draft = db.scalar(select(KnowledgeContribution.id).where(
+            KnowledgeContribution.published_document_id == document.id,
+            KnowledgeContribution.owner_id != str(principal.get("id") or ""),
+            KnowledgeContribution.status.in_(["DRAFT", "DELETED"])))
+        if private_draft:
+            raise HTTPException(404, "Knowledge document not found")
         return document
     if not _published_visible(document):
         raise HTTPException(403, "No access to this knowledge scope")
@@ -57,7 +110,7 @@ def require_knowledge_access(db, document_id: str, principal: dict, *, write=Fal
 
 
 def can_publish(db, document, principal: dict) -> bool:
-    return principal.get("role") == "ADMIN"
+    return is_knowledge_manager(principal)
 
 
 def require_publisher(db, document, principal: dict):
@@ -65,10 +118,15 @@ def require_publisher(db, document, principal: dict):
 
 
 def authorize_knowledge_request(db, parts, method, principal):
-    """Only administrators manage knowledge, including all legacy contribution routes."""
+    """Legacy writes remain privileged; curation is isolated at its own boundary."""
     if not parts or parts[0] not in {"knowledge", "knowledge-routing", "knowledge-curations"}:
         return
-    if principal.get("role") == "ADMIN":
+    if parts[0] == "knowledge-curations":
+        require_contributor(principal)
+        if len(parts) > 1:
+            require_curation_access(db, parts[1], principal, write=method.upper() != "GET")
+        return
+    if is_knowledge_manager(principal):
         return
     if method.upper() != "GET":
         require_knowledge_admin(principal)
@@ -83,10 +141,20 @@ def authorize_knowledge_request(db, parts, method, principal):
     require_knowledge_access(db, parts[1], principal)
 
 
-def authorize_routing_job(db, job_id: str, principal: dict) -> bool:
+def authorize_routing_job(db, job_id: str, principal: dict, *, method="GET") -> bool:
     job = db.get(Job, job_id)
     if not job or job.kind not in KNOWLEDGE_MANAGEMENT_JOB_KINDS:
         return False
+    data = json_loads(job.input_json, {})
+    if job.kind == "curate_knowledge_folder":
+        require_curation_access(db, data.get("session_id", ""), principal, write=method.upper() != "GET")
+        return True
+    if job.kind == "publish_knowledge_contribution":
+        if method.upper() != "GET":
+            require_knowledge_admin(principal)
+        from app.services.knowledge_contributions import require_contribution
+        require_contribution(db, data.get("contribution_id", ""), principal)
+        return True
     require_knowledge_admin(principal)
     return True
 
@@ -94,7 +162,7 @@ def authorize_routing_job(db, job_id: str, principal: dict) -> bool:
 def can_read_revision(db, document, revision, principal):
     if revision.document_id != document.id:
         return False
-    if principal.get("role") == "ADMIN":
+    if is_knowledge_manager(principal):
         return True
     if not _published_visible(document):
         return False

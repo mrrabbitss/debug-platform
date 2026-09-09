@@ -42,7 +42,7 @@ function Initialize-ClientIdentity {
         try { $token = Read-LauncherToken $tokenPath $endpoint } catch { }
         if ($token) {
             $response = Invoke-LauncherHttp GET ($ServerUrl + '/api/v1/system/me') @{'X-API-Key'=$token}
-            if ($response.status -eq 200 -and ($response.body | ConvertFrom-Json).role -eq 'ENGINEER') { return $token }
+            if ($response.status -eq 200 -and ($response.body | ConvertFrom-Json).role -in @('ENGINEER', 'EXPERT')) { return $token }
             if ($response.status -notin @(200,401,403)) { throw 'Server is temporarily unavailable. Saved identity was retained.' }
         }
     }
@@ -55,7 +55,7 @@ function Initialize-ClientIdentity {
         throw "无法开通工程师身份（HTTP $($response.status)）：$detail"
     }
     $identity = $response.body | ConvertFrom-Json
-    if ($identity.role -ne 'ENGINEER' -or $identity.personal_code -cne $PersonalCode -or -not $identity.token) {
+    if ($identity.role -notin @('ENGINEER', 'EXPERT') -or $identity.personal_code -cne $PersonalCode -or -not $identity.token) {
         throw 'The server returned an unexpected identity.'
     }
     Save-LauncherToken $tokenPath $identity.token $endpoint
@@ -63,6 +63,6 @@ function Initialize-ClientIdentity {
     $configPath = Join-Path $StateDirectory 'config.json'
     $previous = Read-LauncherJson $configPath
     Write-LauncherJson $configPath @{schema_version=1; mcp_url=$endpoint; cli_command=$previous.cli_command}
-    Write-Host ('[OK] 工程师身份已保存：' + $PersonalCode)
+    Write-Host ('[OK] 个人身份已保存：' + $PersonalCode)
     return [string]$identity.token
 }

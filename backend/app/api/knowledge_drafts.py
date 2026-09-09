@@ -13,14 +13,14 @@ from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeDraft, Knowle
 from app.schemas import JobOut
 from app.services.knowledge_drafts import draft_for_document, draft_payload, review_draft
 from app.services.knowledge_governance import actor_id
-from app.services.knowledge_publication import publication_job
+from app.services.knowledge_publication import publication_job, enqueue_publication
 from app.services.jobs import job_runner
 
 router = APIRouter(tags=["knowledge-publications"])
 Db = Annotated[Session, Depends(get_db)]
 job_runner.register("publish_knowledge_revision", publication_job,
                     ("document_id", "draft_id", "draft_version", "reviewer"),
-                    cancellable=True, max_attempts=1, timeout_seconds=1800)
+                    cancellable=True, max_attempts=3, timeout_seconds=1800)
 
 
 class DraftReview(BaseModel):
@@ -44,11 +44,12 @@ def review_proposal(document_id: str, payload: DraftReview, request: Request, db
             if draft.version != payload.expected_version or draft.status != "IN_REVIEW":
                 raise ValueError("Proposal changed or is not in review")
             draft.review_comment = payload.comment
+            job = enqueue_publication(db, document, draft, actor_id(principal))
             db.commit()
-            arguments = {"document_id": document_id, "draft_id": draft.id,
-                         "draft_version": draft.version, "reviewer": actor_id(principal)}
-            job = job_runner.submit(db, "publish_knowledge_revision", publication_job,
-                                    *arguments.values(), input_data=arguments)
+            try:
+                job_runner._schedule(job.id)
+            except RuntimeError:
+                pass
             return {"job": JobOut.model_validate(job).model_dump(), "previous_publication_active": True}
         review_draft(db, draft, action=payload.action, expected_version=payload.expected_version,
                      reviewer=actor_id(principal), comment=payload.comment)
@@ -67,7 +68,7 @@ def list_publications(document_id: str, request: Request, db: Db) -> list[dict]:
     rows = [json_loads(row.manifest_json, {}) for row in db.scalars(
         select(KnowledgePublication).where(KnowledgePublication.document_id == document_id)
         .order_by(KnowledgePublication.created_at.desc()).limit(100))]
-    if principal.get("role") != "ADMIN":
+    if principal.get("role") not in {"ADMIN", "EXPERT"}:
         rows = [{**row, "document_versions": {document_id: row["document_version"]},
                  "chunk_ids": {document_id: row.get("chunk_ids", {}).get(document_id, [])}} for row in rows]
     return rows

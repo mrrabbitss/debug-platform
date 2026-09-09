@@ -12,6 +12,7 @@ from app.models import Artifact
 from app.schemas import JobOut
 from app.services.jobs import job_runner
 from app.services.knowledge_governance import actor_id
+from app.services.model_access import ModelAccessError
 from app.services.knowledge_routing import (
     MAX_ROUTING_DOCUMENTS,
     resolve_routing_model,
@@ -35,7 +36,7 @@ job_runner.register(
 
 def _require_admin(request: Request) -> dict[str, Any]:
     principal = getattr(request.state, "principal", {}) or {}
-    if principal.get("role") != "ADMIN":
+    if principal.get("role") not in {"ADMIN", "EXPERT"}:
         raise HTTPException(403, "Administrator role required")
     return principal
 
@@ -73,7 +74,7 @@ async def import_markdown_for_routing(
         default="platform_llm"
     ),
     model_profile_id: str | None = Form(default=None),
-    consent_model_egress: bool = Form(default=False),
+    consent_model_egress: bool = Form(default=True),
     trust_level: str = Form(default="MEDIUM"),
     confidentiality: str = Form(default="INTERNAL"),
 ) -> dict[str, Any]:
@@ -94,12 +95,16 @@ async def import_markdown_for_routing(
             raise HTTPException(400, "Only .md and .markdown files are supported")
 
     selected_profile_id: str | None = None
+    selected_model_snapshot: dict[str, Any] = {}
     if reasoning_owner == "platform_llm":
         try:
-            profile, _provider, _snapshot = resolve_routing_model(
+            profile, _provider, selected_model_snapshot = resolve_routing_model(
                 db,
                 model_profile_id,
+                principal,
             )
+        except ModelAccessError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(409, str(exc)) from exc
         if profile.mode == "api" and not consent_model_egress:
@@ -137,6 +142,7 @@ async def import_markdown_for_routing(
                     "relative_path": relative_path,
                     "reasoning_owner": reasoning_owner,
                     "model_profile_id": selected_profile_id,
+                    "model_snapshot": selected_model_snapshot,
                     "model_egress_consent": bool(consent_model_egress),
                     "model_egress_consent_at": (
                         utcnow().isoformat() if consent_model_egress else None

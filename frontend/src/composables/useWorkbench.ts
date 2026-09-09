@@ -2,11 +2,33 @@ import { ref, computed } from 'vue'
 import { api } from '../api/client'
 import type { Principal } from '../types'
 
+export interface ProblemCategory {
+  id: string
+  name: string
+  version?: number
+  active?: boolean
+  skill_count?: number
+  has_skill?: boolean
+  has_general_skill?: boolean
+  skill_warning?: string
+  skill_status?: string | { mode?: string; status?: string; count?: number; message?: string; warning?: string | null }
+}
+
+export interface WorkbenchModel {
+  id: string
+  name: string
+  active: boolean
+  visibility?: 'SHARED' | 'PRIVATE'
+  owner_id?: string | null
+  can_manage?: boolean
+}
+
 export interface WorkbenchConfig {
-  categories: { id: string; name: string }[]
+  categories: ProblemCategory[]
   knowledge_roles: Record<string, string>
-  models: { id: string; name: string; active: boolean }[]
+  models: WorkbenchModel[]
   preferences: { chat_profile_id?: string | null }
+  model_selection?: { profile_id?: string | null; error?: string | null }
   principal: Partial<Principal>
 }
 
@@ -15,8 +37,10 @@ export function useWorkbench() {
   const configLoading = ref(false)
   const configError = ref('')
   const isAdmin = computed(() => config.value.principal.role === 'ADMIN')
-  const canSubmit = computed(() => ['ADMIN', 'ENGINEER'].includes(config.value.principal.role || ''))
-  const caseCategories = computed(() => config.value.categories.filter(item => item.id !== 'general'))
+  const canManageKnowledge = computed(() => ['ADMIN', 'EXPERT'].includes(config.value.principal.role || ''))
+  const canSubmit = computed(() => ['ADMIN', 'EXPERT', 'ENGINEER'].includes(config.value.principal.role || ''))
+  const roleLabel = computed(() => ({ ADMIN: '管理员', EXPERT: '专家', ENGINEER: '普通用户', VIEWER: '只读用户' })[config.value.principal.role || 'VIEWER'])
+  const caseCategories = computed(() => config.value.categories.filter(item => item.id !== 'general' && item.active !== false))
   async function loadConfig() {
     configLoading.value = true
     configError.value = ''
@@ -27,7 +51,7 @@ export function useWorkbench() {
   function categoryName(id?: string) {
     return config.value.categories.find(item => item.id === id)?.name || ({ network: '组网问题', connection: '连接问题', unknown: '未知', general: '通用知识' } as Record<string, string>)[id || 'unknown'] || id
   }
-  return { config, isAdmin, canSubmit, caseCategories, configLoading, configError, loadConfig, categoryName }
+  return { config, isAdmin, canManageKnowledge, canSubmit, roleLabel, caseCategories, configLoading, configError, loadConfig, categoryName }
 }
 
 export function failure(error: any): string {

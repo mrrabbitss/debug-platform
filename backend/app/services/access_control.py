@@ -22,7 +22,8 @@ from app.models import (
 )
 
 
-VALID_ROLES = {"ADMIN", "ENGINEER", "VIEWER"}
+VALID_ROLES = {"ADMIN", "EXPERT", "ENGINEER", "VIEWER"}
+MANAGEMENT_ROLES = frozenset({"ADMIN", "EXPERT"})
 VALID_CASE_PERMISSIONS = {"EDITOR", "VIEWER"}
 ADMIN_ONLY_PREFIXES = (
     "/evaluation",
@@ -151,7 +152,7 @@ def case_permission(db: Session, case_id: str, principal: dict[str, str]) -> str
     case = db.get(Case, case_id)
     if not case:
         return None
-    if principal.get("role") == "ADMIN":
+    if principal.get("role") in MANAGEMENT_ROLES:
         return "OWNER"
     user_id = principal.get("id")
     if case.owner_id and case.owner_id == user_id:
@@ -187,7 +188,7 @@ def authorize_case_action(
     if not permission:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No access to this case")
     role = principal.get("role", "VIEWER")
-    if write and (role not in {"ADMIN", "ENGINEER"} or permission == "VIEWER"):
+    if write and (role not in {"ADMIN", "EXPERT", "ENGINEER"} or permission == "VIEWER"):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Case permission is read-only",
@@ -218,20 +219,31 @@ def authorize_request(db: Session, request: Request, principal: dict[str, str]) 
     from app.services.knowledge_access import authorize_routing_job, authorize_knowledge_request
     parts = _api_parts(request.url.path)
     path = "/" + "/".join(parts)
-    if parts and parts[0] == "jobs" and len(parts) >= 2 and authorize_routing_job(db, parts[1], principal):
+    if parts and parts[0] == "jobs" and len(parts) >= 2 and authorize_routing_job(db, parts[1], principal, method=method):
         return
     authorize_knowledge_request(db, parts, method, principal)
-    if any(path == prefix or path.startswith(prefix + "/") for prefix in ADMIN_ONLY_PREFIXES):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator role required")
+    if role != "EXPERT" and any(path == prefix or path.startswith(prefix + "/") for prefix in ADMIN_ONLY_PREFIXES):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator or expert role required")
     if parts and parts[0] == "system":
-        readable = path in SYSTEM_READ_PATHS or (role == "ENGINEER" and path in ENGINEER_READ_PATHS)
+        # Profile routes enforce ownership, task type and shared-default rights
+        # against the actual row. All identities may configure their own Chat API.
+        profile_route = path == "/system/models" or path.startswith("/system/models/")
+        if profile_route or path in {"/system/model", "/system/model/test"}:
+            return
+        readable = path in SYSTEM_READ_PATHS or (role in {"ENGINEER", "EXPERT"} and path in ENGINEER_READ_PATHS)
+        readable = readable or (role == "EXPERT" and path == "/system/audit")
         if method != "GET" or not readable:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator role required for system configuration")
     if parts and parts[0] == "workbench":
+        if role == "EXPERT":
+            return
         readable = method == "GET" and path in WORKBENCH_READ_PATHS
         personal_write = role == "ENGINEER" and (method, path) in WORKBENCH_ENGINEER_OPERATIONS
+        personal_write = personal_write or (method == "PUT" and path == "/workbench/preferences")
         if not (readable or personal_write):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator role required for workbench management")
+        if personal_write:
+            return
     if role == "VIEWER" and method != "GET":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Viewer role is read-only")
 

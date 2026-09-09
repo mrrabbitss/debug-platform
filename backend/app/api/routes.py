@@ -60,7 +60,7 @@ job_runner.register(
 def create_case(payload: CaseCreate, request: Request, db: Db) -> Case:
     from app.services.workbench import validate_case_options
     try:
-        validate_case_options(db, payload.model_dump())
+        validate_case_options(db, payload.model_dump(), principal=getattr(request.state, "principal", {}))
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     principal = getattr(request.state, "principal", {})
@@ -77,7 +77,9 @@ def _require_case_owner(request: Request, db: Session, case_id: str) -> Case:
     if not case:
         raise HTTPException(404, "Case not found")
     principal = getattr(request.state, "principal", {})
-    if principal.get("role") != "ADMIN" and case_permission(db, case_id, principal) != "OWNER":
+    if (principal.get("role") != "ADMIN"
+            and (case_permission(db, case_id, principal) != "OWNER"
+                 or (principal.get("role") == "EXPERT" and case.owner_id != principal.get("id")))):
         raise HTTPException(403, "Only an administrator or case owner may manage members")
     return case
 
@@ -159,7 +161,7 @@ def remove_case_member(case_id: str, user_id: str, request: Request, db: Db) -> 
 def list_cases(request: Request, db: Db, limit: int = Query(default=100, ge=1, le=500)) -> list[Case]:
     query = select(Case)
     principal = getattr(request.state, "principal", {})
-    if principal.get("type") == "user_token" and principal.get("role") != "ADMIN":
+    if principal.get("type") == "user_token" and principal.get("role") not in {"ADMIN", "EXPERT"}:
         query = query.where(accessible_case_clause(str(principal["id"])))
     return list(db.scalars(query.order_by(Case.created_at.desc()).limit(limit)).all())
 
@@ -185,10 +187,10 @@ def get_case_access(case_id: str, request: Request, db: Db) -> dict:
 
 
 @router.patch("/cases/{case_id}", response_model=CaseOut)
-def update_case(case_id: str, payload: CaseUpdate, db: Db) -> Case:
+def update_case(case_id: str, payload: CaseUpdate, request: Request, db: Db) -> Case:
     from app.services.workbench import validate_case_options
     try:
-        validate_case_options(db, payload.model_dump(exclude_unset=True))
+        validate_case_options(db, payload.model_dump(exclude_unset=True), principal=getattr(request.state, "principal", {}))
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     case = db.get(Case, case_id)

@@ -25,7 +25,7 @@ router = APIRouter(prefix="/workbench/assistant", tags=["knowledge-assistant"])
 job_runner.register("assistant_plan", plan_job, ("session_id", "request_version"),
                     cancellable=True, max_attempts=1, timeout_seconds=3600)
 job_runner.register("assistant_publish", publication_job, ("session_id", "request_version", "reviewer"),
-                    cancellable=True, max_attempts=1, timeout_seconds=3600)
+                    cancellable=True, max_attempts=3, timeout_seconds=3600)
 
 
 def actor(request, db):
@@ -69,7 +69,13 @@ def finish(db, row, job=None):
             job_runner._schedule(job.id)
         except RuntimeError:
             pass
-    return record_payload(row)
+    return public_session(row)
+
+
+def public_session(row):
+    value = record_payload(row)
+    value.pop("model_snapshot", None)
+    return value
 
 
 @router.post("")
@@ -111,7 +117,11 @@ async def create_session(request: Request, db: Db, files: list[UploadFile] = Fil
         "files": items, "messages": [{"role": "user", "content": message}], "request_version": 1,
         "model_egress_approved": model_egress_approved, "mode": mode, "coverage": {}, "selected_paths": []}
     row = make_record(db, "assistant", identity, {})
-    job = transitions.start_reading(db, row, value, identity, reset=True)
+    try:
+        job = transitions.start_reading(db, row, value, identity, reset=True)
+    except ValueError as error:
+        db.rollback()
+        raise HTTPException(getattr(error, "status_code", 409), str(error)) from error
     return finish(db, row, job)
 
 
@@ -128,7 +138,7 @@ def sessions(request: Request, db: Db):
 @router.get("/{session_id}")
 def read_session(session_id: str, request: Request, db: Db):
     actor(request, db)
-    value = record_payload(session_record(db, session_id))
+    value = public_session(session_record(db, session_id))
     if value.get("job_id"):
         job = db.get(Job, value["job_id"])
         value["job"] = JobOut.model_validate(job).model_dump() if job else None
@@ -173,6 +183,13 @@ def converse(session_id: str, payload: ConversationInput, request: Request, db: 
 @router.post("/{session_id}/confirm")
 def confirm(session_id: str, payload: Confirmation, request: Request, db: Db):
     identity = actor(request, db)
+    current = session_record(db, session_id)
+    value = json_loads(current.payload_json, {})
+    if (value.get("status") in {"APPROVED", "BUILDING", "PUBLISH_FAILED", "PUBLISHED"}
+            and value.get("approval_request_version") == payload.version
+            and value.get("approved_by") == identity
+            and (payload.review_digest is None or payload.review_digest == value.get("approved_digest"))):
+        return public_session(current)
     return transition(db, session_id, payload.version,
         lambda row, value: transitions.approve(db, row, value, identity, payload.review_digest))
 

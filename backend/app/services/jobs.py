@@ -465,10 +465,8 @@ class JobRunner:
                 )
                 .execution_options(synchronize_session=False)
             )
-            from app.services.knowledge_publication import recover_abandoned_publications
-            recover_abandoned_publications(db)
-            from app.services.assistant_state import recover_abandoned_assistant_sessions
-            recover_abandoned_assistant_sessions(db)
+            from app.services.workflow_recovery import recover_persisted_workflows
+            recover_persisted_workflows(db)
             db.commit()
             job_ids = list(db.scalars(
                 select(Job.id)

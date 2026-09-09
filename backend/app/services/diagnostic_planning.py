@@ -199,6 +199,9 @@ def run_diagnostic_planning(
         if not current_case:
             raise ValueError("Case not found")
         methods = load_applicable_diagnostic_methods(db, current_case, **({"knowledge_view": knowledge_view} if knowledge_view else {}))
+    from app.services.problem_categories import skill_status
+    from app.services.workbench import case_category
+    skill_coverage = skill_status(case_category.get() or case.problem_category, methods)
     patterns = compile_diagnostic_patterns(methods)
     fault_tree_items = compile_fault_tree_items(methods)
     triage_evidence, triage_coverage = _triage_evidence(case.id, session_factory)
@@ -408,6 +411,9 @@ def run_diagnostic_planning(
                 **triage_coverage,
                 "required_document_ids": [method.id for method in methods],
                 "all_documents_read": True,
+                "read_attestation_source": "LOCAL_TOOL_ONLY",
+                "model_reading": {"complete": False, "reason": fallback_stop_reason},
+                "skill_status": skill_coverage,
             },
             "method_catalog": [method.public_snapshot() for method in methods],
             "fault_tree_coverage": fallback_coverage,
@@ -443,6 +449,15 @@ def run_diagnostic_planning(
             supplemental_results=[],
         )
 
+    from app.services.diagnostic_skill_reading import read_skills
+    document_observation = read_skills(ctx, provider=provider, case=case, agent_run_id=agent_run_id,
+        methods=methods, context_policy=context_policy, budget=agent_budget, session_factory=session_factory)
+    reading = document_observation["model_reading"]
+    remaining_tokens = agent_budget.max_total_tokens - reading["tokens"]
+    remaining_time = agent_budget.max_duration_ms - reading["duration_ms"]
+    if remaining_tokens < 1 or remaining_time < 1000:
+        raise ValueError("全文阅读后本次诊断预算已用尽；阅读记录已保存")
+    planning_budget = agent_budget.model_copy(update={"max_total_tokens": remaining_tokens, "max_duration_ms": remaining_time})
     (
         prior_rounds,
         supplemental_results,
@@ -464,13 +479,11 @@ def run_diagnostic_planning(
             session_factory=session_factory,
             tool_registry=tool_registry,
             tool_context=tool_context,
-            document_observation=(
-                read_invocation.output if read_invocation else {"documents": []}
-            ),
+            document_observation=document_observation,
             fault_tree_items=fault_tree_items,
             diagnostic_patterns=patterns,
             request_round=request_planning_round,
-            budget=agent_budget,
+            budget=planning_budget,
             context_policy=context_policy,
             spill_store=spill_store,
         )
@@ -496,7 +509,9 @@ def run_diagnostic_planning(
             **triage_coverage,
             "required_document_ids": [method.id for method in methods],
             "all_documents_read": read_invocation is not None or not methods,
-            "read_attestation_source": "TOOL_RUNTIME",
+            "read_attestation_source": "PINNED_CHAT_SEGMENT_RECEIPTS",
+            "model_reading": reading,
+            "skill_status": skill_coverage,
         },
         "method_catalog": [method.public_snapshot() for method in methods],
         "fault_tree_coverage": fault_tree_coverage,

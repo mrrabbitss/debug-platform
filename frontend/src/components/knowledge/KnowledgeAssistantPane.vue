@@ -12,7 +12,8 @@ const { history, session, selectedFiles, message, mode, consent, busy, loading, 
 const operation = ref<AssistantOperation | null>(null), sourcePath = ref('')
 const actionName = (value: string) => ({ create:'新增', merge:'合并', replace:'替换', link:'关联', skip:'跳过 / 保留' } as Record<string, string>)[value] || value
 const categoryName = (id: string) => props.categories.find(item => item.id === id)?.name || id
-const statusName = (value: string) => ({ READING:'正在阅读与整理', REVIEW:'等待核对', APPROVED:'等待发布', BUILDING:'正在构建索引', PUBLISHED:'已发布', FAILED:'整理失败', CANCELLED:'已取消', PAUSED:'已暂停' } as Record<string, string>)[value] || value
+const contentKindName = (value?: string) => value === 'SKILL' ? '诊断 Skill' : value === 'KNOWLEDGE' ? '普通知识' : '类型待核对'
+const statusName = (value: string) => ({ READING:'正在阅读与整理', REVIEW:'等待核对', APPROVED:'已审批，等待发布', BUILDING:'已审批，正在构建索引', PUBLISHED:'已发布', PUBLISH_FAILED:'已审批，发布失败', FAILED:'整理失败', CANCELLED:'已取消', PAUSED:'已暂停' } as Record<string, string>)[value] || value
 watch(() => session.value?.version, () => { operation.value = null })
 watch(() => session.value?.id, () => { sourcePath.value = ''; mode.value = 'auto' })
 onMounted(loadHistory)
@@ -42,9 +43,11 @@ onMounted(loadHistory)
             <el-button :disabled="busy" @click="refresh()">刷新进度</el-button>
             <template v-if="running"><el-button :disabled="busy" @click="control('pause')">暂停</el-button><el-button :disabled="busy" type="warning" plain @click="control('cancel')">取消本次任务</el-button></template>
             <el-button v-if="['FAILED','CANCELLED','PAUSED'].includes(session.status)" :disabled="busy||!consent" type="primary" plain @click="control('retry')">{{ session.status==='FAILED'?'重试整理':'继续整理' }}</el-button>
+            <el-button v-if="session.status==='PUBLISH_FAILED'" :disabled="busy || !!message.trim()" type="primary" @click="control('retry')">重试已审批的发布</el-button>
           </div>
           <el-alert v-if="session.error || session.job?.error_message" type="warning" :closable="false" :title="session.error || session.job?.error_message || ''" class="inline-alert" />
           <el-alert v-if="session.status==='PAUSED'" type="info" :closable="false" title="会话与阅读进度已保存。开启模型授权后，点击继续整理。" class="inline-alert" />
+          <el-alert v-if="session.status==='PUBLISH_FAILED'" type="warning" :closable="false" title="精确版本的审批已保留，重试会恢复同一次发布，无需再次确认。发送内容修改要求后，需要核对新的变更清单。" class="inline-alert" />
           <p v-if="running" class="field-hint">{{ session.job?.message || '任务已保存，正在准备处理资料' }}</p>
           <el-progress v-if="running" :percentage="Math.max(0,Math.min(100,session.job?.progress || 0))" />
           <div v-for="(item,index) in session.messages" :key="index" class="conversation-message" :class="{assistant:item.role==='assistant'}"><span class="message-author">{{ item.role==='user'?'你的要求':'整理助手' }}</span>{{ item.content }}</div>
@@ -57,7 +60,7 @@ onMounted(loadHistory)
             <el-table :data="session.plan" class="assistant-plan">
               <el-table-column type="index" label="#" width="45" />
               <el-table-column label="文档与目标版本" min-width="190"><template #default="{row}"><strong>{{ row.title || row.source_paths?.[0] || '来源资料' }}</strong><div class="operation-target">{{ row.target_id ? '已有文档 · v'+row.expected_version : row.action==='skip'?'保留来源':'新文档' }}</div><div class="field-hint">{{ row.source_paths?.join('、') }}</div></template></el-table-column>
-              <el-table-column label="分类 / 用途" min-width="150"><template #default="{row}">{{ row.categories.map(categoryName).join('、') }}<div class="field-hint">{{ roles[row.role] }}</div></template></el-table-column>
+              <el-table-column label="类型 / 分类 / 用途" min-width="170"><template #default="{row}"><el-tag size="small" effect="plain">{{ contentKindName(row.content_kind) }}</el-tag><div>{{ row.categories.map(categoryName).join('、') }}</div><div class="field-hint">{{ roles[row.role] }}</div></template></el-table-column>
               <el-table-column label="操作" width="100"><template #default="{row}"><el-tag effect="plain" size="small">{{ actionName(row.action) }}</el-tag></template></el-table-column>
               <el-table-column prop="reason" label="理由" min-width="180" />
               <el-table-column width="100"><template #default="{row}"><el-button link type="primary" @click="operation=row as AssistantOperation">查看差异</el-button></template></el-table-column>
@@ -78,7 +81,7 @@ onMounted(loadHistory)
     <el-dialog :model-value="!!operation" @close="operation=null" title="核对变更" width="1050px">
       <template v-if="operation">
         <div class="operation-detail-header"><el-tag>{{ actionName(operation.action) }}</el-tag><strong>{{ operation.title }}</strong><span>{{ operation.target_id ? '目标当前版本 v'+operation.expected_version : '无已有目标' }}</span></div>
-        <p>{{ operation.reason }}</p><p class="field-hint">归位：{{ operation.categories.map(categoryName).join(' / ') }} · {{ roles[operation.role] }}</p>
+        <p>{{ operation.reason }}</p><p class="field-hint">归位：{{ contentKindName(operation.content_kind) }} · {{ operation.categories.map(categoryName).join(' / ') }} · {{ roles[operation.role] }}</p>
         <details class="technical-details"><summary>精确目标与来源章节</summary><p class="field-hint">{{ operation.target_id || '新增文档' }}<span v-if="operation.target_id"> · 文档 v{{ operation.expected_version }} · 锁版本 {{ operation.expected_lock }}</span></p><ul class="path-list"><li v-for="(source,index) in operation.sources" :key="index">{{ source.path }} · 字符 {{ source.start + 1 }}–{{ source.end }}</li></ul></details>
         <el-tabs><el-tab-pane label="差异"><pre class="document-text diff-text"><span v-for="(line,index) in (operation.diff||'正文不变；请核对分类、用途和关联。').split('\n')" :key="index" :class="['diff-line',{'diff-add':line.startsWith('+'),'diff-remove':line.startsWith('-')} ]">{{ line }}</span></pre></el-tab-pane><el-tab-pane label="拟发布全文"><pre class="document-text">{{ operation.after || '本操作不产生新正文' }}</pre></el-tab-pane><el-tab-pane label="原文"><pre class="document-text">{{ operation.before || '新增文档，无已有正文' }}</pre></el-tab-pane></el-tabs>
       </template>

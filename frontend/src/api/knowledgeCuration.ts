@@ -7,6 +7,7 @@ import type {
   ModelProfile
 } from '../types'
 import { api } from './client'
+import type { KnowledgeContribution } from './knowledgeContributions'
 
 export interface KnowledgeCurationCreateInput {
   files: File[]
@@ -113,8 +114,8 @@ export async function restoreKnowledgeCurationRevision(
 export async function confirmKnowledgeCuration(
   sessionId: string,
   expectedDraftVersion: number
-): Promise<{ session: KnowledgeCurationSession }> {
-  return (await api.post<{ session: KnowledgeCurationSession }>(
+): Promise<{ session: KnowledgeCurationSession; contribution?: KnowledgeContribution }> {
+  return (await api.post<{ session: KnowledgeCurationSession; contribution?: KnowledgeContribution }>(
     `/knowledge-curations/${sessionId}/confirm`,
     { expected_draft_version: expectedDraftVersion }
   )).data

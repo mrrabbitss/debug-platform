@@ -21,12 +21,16 @@ from app.api.retrieval_evaluation import router as retrieval_evaluation_router
 from app.api.system import router as system_router
 from app.api.workbench import router as workbench_router
 from app.api.knowledge_assistant import router as knowledge_assistant_router
+from app.api.knowledge_contributions import router as knowledge_contributions_router
+from app.api.knowledge_reset import router as knowledge_reset_router
 
 
 def include_modular_routers(router: APIRouter) -> None:
     for child in (
         workbench_router,
         knowledge_assistant_router,
+        knowledge_contributions_router,
+        knowledge_reset_router,
         agent_runs_router,
         client_discovery_router,
         demo_cases_router,

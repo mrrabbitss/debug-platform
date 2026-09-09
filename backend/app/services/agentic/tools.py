@@ -43,7 +43,7 @@ class ToolSpec(Generic[InputModel, OutputModel]):
     output_schema: type[OutputModel]
     handler: Callable[[ToolContext, InputModel], OutputModel | dict[str, Any]]
     permission: ToolPermission = ToolPermission.READ
-    allowed_roles: frozenset[str] = frozenset({"ADMIN", "ENGINEER", "VIEWER"})
+    allowed_roles: frozenset[str] = frozenset({"ADMIN", "EXPERT", "ENGINEER", "VIEWER"})
     idempotent: bool = True
     max_retries: int = 1
     timeout_seconds: float = 30.0

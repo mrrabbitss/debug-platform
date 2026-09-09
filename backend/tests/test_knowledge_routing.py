@@ -1,6 +1,5 @@
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -19,7 +18,11 @@ from app.models import (
     KnowledgeDocument,
     KnowledgeDocumentCategory,
     KnowledgeRevision,
+    ModelProfile,
+    UserAccount,
 )
+from app.model_access_models import ModelProfileAccess
+from app.services.model_access import chat_model_snapshot
 from app.services import knowledge_routing
 from app.services.knowledge_routing import route_markdown_knowledge_job
 from app.services.knowledge_taxonomy import seed_knowledge_categories
@@ -139,6 +142,16 @@ def _seed_artifact(
     # below verifies that routing never rewrites the Markdown body.
     path.write_bytes(MARKDOWN.encode("utf-8"))
     with factory() as db:
+        snapshot = {}
+        if reasoning_owner == "platform_llm":
+            db.add(UserAccount(id="USER-admin", username="routing-admin", display_name="Routing admin", role="ADMIN"))
+            profile = ModelProfile(id="MODEL-routing", name="Synthetic routing", task_type="chat",
+                provider="openai_compatible", mode="api", model_name="synthetic-routing-model", enabled=True)
+            db.add(profile)
+            db.flush()
+            db.add(ModelProfileAccess(profile_id=profile.id, owner_id="USER-admin", visibility="PRIVATE"))
+            db.flush()
+            snapshot = chat_model_snapshot(db, {"id": "USER-admin", "role": "ADMIN"}, profile)
         db.add(Artifact(
             id=artifact_id,
             case_id=None,
@@ -153,6 +166,7 @@ def _seed_artifact(
                 "relative_path": "knowledge.md",
                 "reasoning_owner": reasoning_owner,
                 "model_profile_id": "MODEL-routing",
+                "model_snapshot": snapshot,
                 "model_egress_consent": True,
                 "trust_level": "MEDIUM",
                 "confidentiality": "INTERNAL",
@@ -181,16 +195,8 @@ def test_platform_model_routes_markdown_to_a_governed_draft(
     monkeypatch.setattr(knowledge_routing, "storage", isolated_storage)
     monkeypatch.setattr(
         knowledge_routing,
-        "resolve_routing_model",
-        lambda _db, _profile_id: (
-            SimpleNamespace(mode="api"),
-            _Provider(),
-            {
-                "profile_id": "MODEL-routing",
-                "model": "synthetic-routing-model",
-                "prompt_version": "knowledge-routing-v1",
-            },
-        ),
+        "get_llm_provider",
+        lambda _profile: _Provider(),
     )
 
     context = _Context()

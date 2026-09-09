@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api/client'
 import { useWorkbench, failure } from '../composables/useWorkbench'
+import SkillStatusNotice from '../components/diagnosis/SkillStatusNotice.vue'
 import type { CaseItem } from '../types'
 const router = useRouter()
 const { config, canSubmit, caseCategories, loadConfig, categoryName } = useWorkbench()
@@ -53,11 +54,13 @@ onMounted(load)
     <el-dialog v-model="dialog" title="创建待定位案例" width="640px" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving"><el-form label-position="top" @submit.prevent="save">
       <el-alert v-if="formError" :title="formError" type="error" :closable="false" class="inline-alert" />
       <el-form-item label="问题标题" required><el-input v-model="form.title" aria-label="问题标题" maxlength="255" placeholder="用一句话描述问题" /></el-form-item>
-      <el-form-item label="问题类别"><el-radio-group v-model="form.problem_category" aria-label="问题类别"><el-radio-button v-for="item in caseCategories" :key="item.id" :value="item.id">{{ item.name }}</el-radio-button></el-radio-group></el-form-item>
+      <el-form-item label="问题类别"><el-select v-model="form.problem_category" aria-label="问题类别"><el-option v-for="item in caseCategories" :key="item.id" :value="item.id" :label="item.name" /></el-select></el-form-item>
+      <SkillStatusNotice :category="config.categories.find(item=>item.id===form.problem_category)" />
       <p v-if="form.problem_category==='unknown'" class="field-hint">不确定类别时选择“未知”，诊断会结合多类知识查找线索。</p>
       <el-form-item label="问题现象"><el-input v-model="form.description" aria-label="问题现象" type="textarea" :rows="3" placeholder="发生了什么，影响哪些设备，何时开始" /></el-form-item>
-      <el-form-item label="诊断模型"><el-select v-model="form.chat_profile_id" aria-label="诊断模型" clearable placeholder="跟随系统默认"><el-option v-for="model in config.models" :key="model.id" :label="model.name + (model.active ? ' · 系统默认' : '')" :value="model.id" /></el-select></el-form-item>
-      <p v-if="!config.models.length" class="field-hint">管理员尚未预设 Chat 模型。可以先创建案例和上传日志。</p>
+      <el-form-item label="统一诊断模型"><div><strong>{{ config.model_selection?.error ? '当前模型选择不可用' : config.models.find(item=>item.id===(config.model_selection?.profile_id || config.preferences.chat_profile_id))?.name || config.models.find(item=>item.active)?.name || '暂未配置' }}</strong><p class="field-hint">使用系统设置中的个人选择；未选择时跟随共享默认。<router-link to="/settings">调整模型来源</router-link></p></div></el-form-item>
+      <el-alert v-if="config.model_selection?.error" :title="config.model_selection.error" type="warning" :closable="false" show-icon class="inline-alert" />
+      <p v-if="!config.models.length" class="field-hint">暂无可用的诊断模型，可以先创建案例，再到系统设置添加自己的 Chat API。</p>
       <div class="consent-panel"><el-switch v-model="form.model_egress_approved" aria-label="模型出站授权" active-text="允许模型分析" /><p>允许将问题资料、知识和脱敏证据发送到所选模型。可关闭，稍后在案例中调整。</p></div>
       <el-button text @click="advanced=!advanced">{{ advanced ? '收起补充信息' : '补充设备、拓扑等信息' }}</el-button>
       <div v-if="advanced" class="supplementary-fields"><el-form-item label="设备"><el-radio-group v-model="form.device_type"><el-radio value="GW">GW</el-radio><el-radio value="AP">AP</el-radio><el-radio value="OTHER">其他</el-radio></el-radio-group></el-form-item>

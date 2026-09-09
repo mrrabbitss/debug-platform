@@ -1,7 +1,6 @@
 from collections.abc import Iterable
 import ipaddress
 import os
-import socket
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -13,6 +12,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id
 from app.models import ModelProfile
+from app.model_access_models import ModelProfileAccess
 from app.services.secrets import decrypt_secret, encrypt_secret, secret_hint
 
 
@@ -55,61 +55,12 @@ COMPATIBLE_CHAT_PROVIDERS = (
     "internal OpenAI-compatible gateway",
 )
 
-_ALWAYS_BLOCKED_HOSTS = {
-    "metadata.google.internal",
-    "metadata.azure.internal",
-    "instance-data.ec2.internal",
-}
-
-
-def _host_is_allowlisted(host: str, entries: Iterable[str]) -> bool:
-    normalized = host.rstrip(".").lower()
-    for raw_entry in entries:
-        entry = raw_entry.strip().rstrip(".").lower()
-        if not entry:
-            continue
-        if entry.startswith("*."):
-            entry = entry[1:]
-        if entry.startswith("."):
-            if normalized == entry[1:] or normalized.endswith(entry):
-                return True
-        elif normalized == entry:
-            return True
-    return False
-
-
-def _resolved_addresses(host: str, port: int | None) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
-    try:
-        return {
-            ipaddress.ip_address(item[4][0].split("%", 1)[0])
-            for item in socket.getaddrinfo(host, port or 443, type=socket.SOCK_STREAM)
-        }
-    except (OSError, ValueError):
-        # A model profile may be saved while DNS or VPN is unavailable. The same
-        # validation runs again immediately before a request is sent.
-        return set()
-
-
-def _reject_unsafe_address(
-    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
-    *,
-    allowlisted: bool,
-    allow_private: bool,
-) -> None:
-    if address.is_link_local or address.is_unspecified or address.is_multicast or address.is_reserved:
-        raise ValueError("Model endpoint resolves to a blocked network address")
-    if address.is_loopback and not allowlisted:
-        raise ValueError("Loopback model endpoints must be explicitly allowlisted")
-    if address.is_private and not (allowlisted or allow_private):
-        raise ValueError(
-            "Private-network model endpoints require MODEL_ENDPOINT_ALLOWLIST "
-            "or MODEL_ALLOW_PRIVATE_ENDPOINTS=true"
-        )
-
-
 def validate_model_endpoint(base_url: str) -> None:
-    """Reject unsafe model gateway URLs while allowing explicit intranet deployments."""
+    """Validate API URL syntax; user-selected HTTP(S) hosts need no allowlist."""
     value = base_url.strip()
+    if len(value) > 2048 or any(character.isspace() or ord(character) < 32 or ord(character) == 127
+                                for character in value):
+        raise ValueError("Model Base URL is invalid")
     try:
         parsed = urlsplit(value)
         port = parsed.port
@@ -119,39 +70,15 @@ def validate_model_endpoint(base_url: str) -> None:
         raise ValueError("Model Base URL must use http or https")
     if not parsed.hostname:
         raise ValueError("Model Base URL must include a hostname")
+    if port == 0 or "\\" in parsed.netloc or parsed.netloc.endswith(":"):
+        raise ValueError("Model Base URL is invalid")
     if parsed.username or parsed.password:
         raise ValueError("Model Base URL must not contain credentials")
     if parsed.query or parsed.fragment:
         raise ValueError("Model Base URL must not contain a query string or fragment")
 
-    settings = get_settings()
-    host = parsed.hostname.rstrip(".").lower()
-    allowlisted = _host_is_allowlisted(host, settings.model_endpoint_allowlist_entries)
-    if host in _ALWAYS_BLOCKED_HOSTS or host.startswith("metadata."):
-        raise ValueError("Cloud metadata endpoints cannot be used as model gateways")
-    if settings.app_env == "prod" and not allowlisted:
-        raise ValueError("Production model endpoints must be listed in MODEL_ENDPOINT_ALLOWLIST")
-    if (host == "localhost" or host.endswith(".localhost")) and not allowlisted:
-        raise ValueError("Loopback model endpoints must be explicitly allowlisted")
-    if "." not in host and not allowlisted and not settings.model_allow_private_endpoints:
-        raise ValueError("Single-label/internal model endpoints must be explicitly allowed")
-
-    try:
-        literal_address = ipaddress.ip_address(host.split("%", 1)[0])
-    except ValueError:
-        addresses = set() if allowlisted else _resolved_addresses(host, port)
-    else:
-        addresses = {literal_address}
-    for address in addresses:
-        _reject_unsafe_address(
-            address,
-            allowlisted=allowlisted,
-            allow_private=settings.model_allow_private_endpoints,
-        )
-
-
 def validate_managed_sidecar_endpoint(base_url: str) -> None:
-    """Validate an installer-managed llama.cpp endpoint without weakening SSRF policy.
+    """Validate the installer-managed llama.cpp endpoint identity.
 
     The bundled launcher owns these profiles and supplies a random bearer token.
     Requiring a literal loopback address and an explicit port prevents DNS rebinding
@@ -173,7 +100,7 @@ def validate_managed_sidecar_endpoint(base_url: str) -> None:
         raise ValueError(
             "Managed llama.cpp Base URL must not contain a query string or fragment"
         )
-    if port is None:
+    if port is None or port == 0:
         raise ValueError("Managed llama.cpp Base URL must include an explicit port")
     try:
         address = ipaddress.ip_address(parsed.hostname.split("%", 1)[0])
@@ -195,7 +122,7 @@ def validate_model_proxy_url(task_type: str, mode: str, proxy_url: str | None) -
     if task_type != "chat" or mode != "api":
         raise ValueError("A proxy can only be configured for an API Chat model")
     if len(value) > 2048 or any(
-        character.isspace() or ord(character) == 127
+        character.isspace() or ord(character) < 32 or ord(character) == 127
         for character in value
     ):
         raise ValueError("Model proxy URL is invalid")
@@ -208,34 +135,10 @@ def validate_model_proxy_url(task_type: str, mode: str, proxy_url: str | None) -
         raise ValueError("Model proxy URL must use http or https")
     if not parsed.hostname:
         raise ValueError("Model proxy URL must include a hostname")
+    if port == 0 or "\\" in parsed.netloc or parsed.netloc.endswith(":"):
+        raise ValueError("Model proxy URL is invalid")
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
         raise ValueError("Model proxy URL must not contain a path, query string or fragment")
-
-    settings = get_settings()
-    host = parsed.hostname.rstrip(".").lower()
-    allowlisted = _host_is_allowlisted(host, settings.model_endpoint_allowlist_entries)
-    if host in _ALWAYS_BLOCKED_HOSTS or host.startswith("metadata."):
-        raise ValueError("Cloud metadata endpoints cannot be used as model proxies")
-    if settings.app_env == "prod" and not allowlisted:
-        raise ValueError("Production model proxies must be listed in MODEL_ENDPOINT_ALLOWLIST")
-    if (host == "localhost" or host.endswith(".localhost")) and not allowlisted:
-        raise ValueError("Loopback model proxies must be explicitly allowlisted")
-    if "." not in host and not allowlisted and not settings.model_allow_private_endpoints:
-        raise ValueError("Single-label/internal model proxies must be explicitly allowed")
-
-    try:
-        literal_address = ipaddress.ip_address(host.split("%", 1)[0])
-    except ValueError:
-        addresses = set() if allowlisted else _resolved_addresses(host, port)
-    else:
-        addresses = {literal_address}
-    for address in addresses:
-        _reject_unsafe_address(
-            address,
-            allowlisted=allowlisted,
-            allow_private=settings.model_allow_private_endpoints,
-        )
-
 
 def validate_model_profile(
     task_type: str,
@@ -361,11 +264,13 @@ def get_active_model_profile(task_type: str, db: Session | None = None) -> Model
     owns_session = db is None
     session = db or SessionLocal()
     try:
+        from app.services.model_access import shared_model_clause
         return session.scalars(
             select(ModelProfile).where(
                 ModelProfile.task_type == task_type,
                 ModelProfile.enabled.is_(True),
                 ModelProfile.is_active.is_(True),
+                shared_model_clause() if task_type == "chat" else True,
             ).order_by(ModelProfile.updated_at.desc()).limit(1)
         ).first()
     except SQLAlchemyError:
@@ -376,6 +281,12 @@ def get_active_model_profile(task_type: str, db: Session | None = None) -> Model
 
 
 def activate_model_profile(db: Session, profile: ModelProfile) -> None:
+    from app.services.model_access import lock_model_configuration
+    lock_model_configuration(db, profile)
+    if profile.task_type == "chat":
+        access = db.get(ModelProfileAccess, profile.id, populate_existing=True)
+        if not access or access.visibility != "SHARED":
+            raise ValueError("The shared Chat default must be a shared profile")
     if not profile.enabled:
         raise ValueError("Disabled model profiles cannot be activated")
     proxy_url = get_profile_proxy_url(profile) if profile.proxy_url_ciphertext else None
@@ -422,6 +333,9 @@ def _add_profiles(db: Session, profiles: Iterable[ModelProfile]) -> None:
     for profile in profiles:
         if not db.get(ModelProfile, profile.id):
             db.add(profile)
+        db.flush()
+        if not db.get(ModelProfileAccess, profile.id):
+            db.add(ModelProfileAccess(profile_id=profile.id, visibility="SHARED"))
     db.commit()
 
 
@@ -626,6 +540,10 @@ def seed_model_profiles(db: Session) -> None:
         profiles.append(env_profile)
     _add_profiles(db, profiles)
     _sync_bundled_gguf_profiles(db)
+    for profile in db.scalars(select(ModelProfile).where(ModelProfile.provider == MANAGED_LOCAL_PROVIDER)):
+        if not db.get(ModelProfileAccess, profile.id):
+            db.add(ModelProfileAccess(profile_id=profile.id, visibility="SHARED"))
+    db.flush()
 
     if settings.model_disable_in_process_local:
         db.execute(
@@ -655,3 +573,26 @@ def seed_model_profiles(db: Session) -> None:
 
 def new_model_profile_id() -> str:
     return new_id("MODEL")
+
+
+async def test_profile_connection(profile: ModelProfile) -> dict:
+    """Probe a profile already authorized by the caller; do not return upstream bodies."""
+    from starlette.concurrency import run_in_threadpool
+    from app.services.llm import get_llm_provider
+    from app.services.retrieval_models import embed_texts, rerank_documents
+
+    if profile.task_type == "chat":
+        provider = get_llm_provider(profile)
+        text = await provider.generate_text("你是连接测试助手。", "仅回复 MODEL_CONNECTION_OK",
+                                            purpose="connection_test")
+        ok = provider.is_mock or "MODEL_CONNECTION_OK" in text
+        return {"ok": ok, "response": "MODEL_CONNECTION_OK" if ok else "Unexpected test response",
+                "model": provider.model_name, "proxy_url_configured": getattr(provider, "proxy_configured", False)}
+    if profile.task_type == "embedding":
+        vectors = await run_in_threadpool(lambda: embed_texts(profile, ["GW 无法上线", "AP 认证失败"],
+                                                             purpose="connection_test"))
+        dimension = len(vectors[0]) if vectors else 0
+        return {"ok": bool(dimension), "dimension": dimension, "vectors": len(vectors)}
+    ranking = await run_in_threadpool(lambda: rerank_documents("AP 认证失败如何排查",
+        ["检查 EAP 和四次握手日志", "查询设备外壳颜色"], 2, profile, purpose="connection_test"))
+    return {"ok": ranking is None or bool(ranking), "ranking": ranking or [], "disabled": ranking is None}

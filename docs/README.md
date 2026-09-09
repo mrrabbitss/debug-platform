@@ -1,10 +1,16 @@
 # 项目文档索引
 
 业务能力总账见 [CAPABILITIES.md](../CAPABILITIES.md)，Harness Engineering 状态与有序路线见
-[HARNESS_ENGINEERING.md](../HARNESS_ENGINEERING.md)，最近一次完整验证证据见
+[HARNESS_ENGINEERING.md](../HARNESS_ENGINEERING.md)，最新定向及历史完整验证证据见
 [VALIDATION.md](../VALIDATION.md)。
 
 ## 架构与演进
+
+- [专家角色、模型共享与知识协作迭代](expert-knowledge-iteration-20260909.md)
+- [个人及共享 Chat 模型实现与验证](model-sharing-handoff-20260909.md)
+- [知识贡献与审核实现](knowledge-review-handoff-20260909.md)
+- [专家迭代前端实现与验证](frontend-expert-handoff-20260909.md)
+- [知识重置、六文件导入及恢复](knowledge-reset-handoff-20260909.md)
 
 - [三栏工作台改版与接续记录](workbench-iteration-20260908.md)
 - [0.4.0 权限实现与定向验证](security-handoff-20260909.md)

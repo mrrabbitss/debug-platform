@@ -166,6 +166,9 @@ def report_markdown(context):
         text = _fallback_markdown(context)
     else:
         text = _legacy_markdown(context)
+    skill_warning = (result.get("diagnostic_planning") or {}).get("method_coverage", {}).get("skill_status", {}).get("warning")
+    if skill_warning:
+        text = "> **诊断 Skill 使用范围：" + literal(skill_warning) + "**\n\n" + text
     if structured_template(template) and result.get("limitations"):
         text += "\n\n分析限制：\n\n" + "\n".join("- " + literal(item) for item in result["limitations"])
     if result.get("suggested_problem_category"):

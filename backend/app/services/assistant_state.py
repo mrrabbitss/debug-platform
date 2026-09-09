@@ -16,14 +16,16 @@ def digest(value):
 
 def require_admin_actor(db, actor):
     account = db.get(UserAccount, actor) if actor else None
-    if account and account.active and account.role == "ADMIN":
-        return
+    if account:
+        if account.active and account.role in {"ADMIN", "EXPERT"}:
+            return
+        raise ValueError("管理员或专家身份已失效，不能继续此任务")
     settings = get_settings()
     if actor == "local-development" and settings.auth_mode == "local":
         return
     if actor == "legacy-api-key" and (settings.auth_mode in {"local", "api_key"} or settings.auth_allow_legacy_admin):
         return
-    raise ValueError("管理员身份已失效，不能继续此任务")
+    raise ValueError("管理员或专家身份已失效，不能继续此任务")
 
 
 def locked_session(db, session_id):
@@ -83,7 +85,7 @@ def enqueue(db, row, value, kind, *, reviewer=None):
         arguments["reviewer"] = reviewer
     job = Job(id=new_id("JOB"), kind=kind, status="QUEUED", input_json=json_dumps(arguments),
               idempotency_key=digest({**arguments, "record_version": row.version}),
-              max_attempts=1, timeout_seconds=3600,
+              max_attempts=3 if kind == "assistant_publish" else 1, timeout_seconds=3600,
               available_at=utcnow(), resource_limits_json="{}")
     value["job_id"] = job.id
     value.update(worker_token=None, worker_job_id=None, worker_attempt=None)
@@ -93,7 +95,7 @@ def enqueue(db, row, value, kind, *, reviewer=None):
     return job
 
 
-def release_generation(db, value):
+def release_generation(db, value, *, revoke_approval=True):
     generation = value.get("building_generation_id")
     if generation:
         state = db.get(KnowledgeGraphState, "domain")
@@ -101,7 +103,9 @@ def release_generation(db, value):
             db.execute(update(KnowledgeGraphState).where(KnowledgeGraphState.id == "domain",
                 KnowledgeGraphState.building_generation_id == generation).values(building_generation_id=None,
                     status="STALE" if state.active_generation_id else "NOT_BUILT"))
-    value.update(building_generation_id=None, approved_digest=None, approved_by=None, approved_at=None)
+    value["building_generation_id"] = None
+    if revoke_approval:
+        value.update(approved_digest=None, approved_by=None, approved_at=None)
 
 
 def cancel_session(db, row, value, *, pause=False):
@@ -112,7 +116,7 @@ def cancel_session(db, row, value, *, pause=False):
         db.execute(update(Job).where(Job.id == job.id, Job.status == "QUEUED").values(
             status="CANCELLED", completed_at=utcnow()))
         db.execute(update(Job).where(Job.id == job.id, Job.status == "RUNNING").values(status="CANCEL_REQUESTED"))
-    was_publication = value.get("status") in {"APPROVED", "BUILDING"}
+    was_publication = value.get("status") in {"APPROVED", "BUILDING", "PUBLISH_FAILED"}
     release_generation(db, value)
     value.update(status="REVIEW" if was_publication else ("PAUSED" if pause else "CANCELLED"), error=None,
                  request_version=value["request_version"] + 1)
@@ -126,20 +130,20 @@ def cancel_session(db, row, value, *, pause=False):
 def recover_abandoned_assistant_sessions(db):
     """Call after jobs' expired-lease updates, before that transaction commits.
 
-    Reading resumes from durable receipts. Interrupted publication loses approval
-    and returns to REVIEW; only its own generation latch can be released.
+    Only expired/finished workers may release their own generation latch. The
+    exact approved revision survives a crash; changed/revoked approvals do not.
     """
     recovered = 0
     ids = list(db.scalars(select(WorkbenchRecord.id).where(WorkbenchRecord.kind == "assistant")))
     for session_id in ids:
         row = db.get(WorkbenchRecord, session_id)
         value = json_loads(row.payload_json, {})
-        if value.get("status") not in {"READING", "APPROVED", "BUILDING"}:
+        if value.get("status") not in {"READING", "APPROVED", "BUILDING", "PUBLISH_FAILED"}:
             continue
         job = db.get(Job, value.get("job_id")) if value.get("job_id") else None
         if job and job.status in {"RUNNING", "CANCEL_REQUESTED"}:
             continue
-        if job and job.status == "QUEUED" and (value["status"] == "READING" or not job.attempt):
+        if job and job.status == "QUEUED" and value["status"] == "READING":
             continue
         row, value = locked_session(db, session_id)
         # Recheck after acquiring the fence: a dispatcher may already have moved on.
@@ -147,18 +151,43 @@ def recover_abandoned_assistant_sessions(db):
             db.refresh(job)
             if job.status in {"RUNNING", "CANCEL_REQUESTED"}:
                 continue
-        if value.get("status") not in {"READING", "APPROVED", "BUILDING"}:
+        if value.get("status") not in {"READING", "APPROVED", "BUILDING", "PUBLISH_FAILED"}:
             continue
         job = db.get(Job, value.get("job_id")) if value.get("job_id") else None
-        if job and job.status == "QUEUED" and (value["status"] == "READING" or not job.attempt):
+        if job and job.status == "QUEUED" and value["status"] == "READING":
             continue
         publishing = value["status"] != "READING"
+        from app.services.assistant_plan import review_digest
+        if publishing and job and job.status == "QUEUED" and job.kind == "assistant_publish":
+            arguments = json_loads(job.input_json, {})
+            valid = bool(value.get("approved_at") and value.get("approved_by")
+                and value.get("approved_digest") == review_digest(value)
+                and arguments.get("session_id") == row.id
+                and arguments.get("request_version") == value.get("request_version")
+                and arguments.get("reviewer") == value.get("approved_by"))
+            if valid:
+                try:
+                    require_admin_actor(db, value["approved_by"])
+                except ValueError:
+                    valid = False
+            if valid:
+                if value["status"] == "APPROVED" and not value.get("building_generation_id"):
+                    continue
+                release_generation(db, value, revoke_approval=False)
+                value.update(status="APPROVED", worker_job_id=None, worker_attempt=None, worker_token=None,
+                             error="已审批内容已恢复，继续构建发布；无需重复审批。")
+                row.payload_json = json_dumps(value)
+                recovered += 1
+                continue
+        if value["status"] == "PUBLISH_FAILED":
+            # A terminal failure remains reviewable/retryable, without an
+            # unbounded dispatcher retry loop or silently discarding approval.
+            continue
         release_generation(db, value)
         if publishing and job and job.status == "QUEUED":
             job.status, job.completed_at = "CANCELLED", utcnow()
         value.update(status="REVIEW" if publishing else "FAILED", request_version=value["request_version"] + 1,
                      error="任务中断；阅读记录已保存，发布需重新核对确认。")
-        from app.services.assistant_plan import review_digest
         value["review_digest"] = review_digest(value) if publishing else None
         row.payload_json = json_dumps(value)
         recovered += 1

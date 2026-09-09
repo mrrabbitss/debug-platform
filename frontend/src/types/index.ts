@@ -18,7 +18,7 @@ export interface CaseItem {
   updated_at: string
 }
 
-export type UserRole = 'ADMIN' | 'ENGINEER' | 'VIEWER'
+export type UserRole = 'ADMIN' | 'EXPERT' | 'ENGINEER' | 'VIEWER'
 export type CasePermission = 'OWNER' | 'EDITOR' | 'VIEWER' | 'SHARED'
 
 export interface Principal {
@@ -172,6 +172,10 @@ export interface ModelProfile {
   config: Record<string, any>
   enabled: boolean
   is_active: boolean
+  visibility?: 'SHARED' | 'PRIVATE'
+  owner_id?: string | null
+  owner_name?: string
+  can_manage?: boolean
   created_at: string
   updated_at: string
 }

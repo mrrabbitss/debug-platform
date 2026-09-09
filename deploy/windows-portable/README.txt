@@ -102,9 +102,21 @@ start.bat --check --check-models
 start.bat --no-local-retrieval
     Temporarily use the Core retrieval fallbacks without starting sidecars.
 
-Configure approved Chat, Embedding or Reranker API endpoints in System
-Settings. GGUF sidecars are managed by the launcher and are never imported into
-the platform Python process.
+Configure model APIs in System Settings. ENGINEER users manage their own private
+Chat profiles. ADMIN/EXPERT profiles default to shared, with a private option;
+even ADMIN cannot view or use another user's private profile. Personal model
+selection takes priority over the shared default. API Key values are not returned.
+
+Valid HTTP(S) Base URLs and Chat proxies work with intranet, localhost and public
+hosts in both production and development. No endpoint allowlist, private-address
+opt-in or enable-private-endpoints script is required. Legacy
+MODEL_ENDPOINT_ALLOWLIST / MODEL_ALLOW_PRIVATE_ENDPOINTS values no longer gate
+API requests. URL syntax, TLS checks and user egress consent still apply.
+
+Only ADMIN may configure global Embedding/Reranker or GGUF models. EXPERT may use
+them and rebuild knowledge indexes. GGUF sidecar identity and runtime credentials
+are still validated; sidecars remain managed by the launcher and are never
+imported into the platform Python process.
 
 System Settings also provides a managed weight downloader for BGE Base and
 Qwen3 Reranker. It supports an optional explicit proxy and stores completed

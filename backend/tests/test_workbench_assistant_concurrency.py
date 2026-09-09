@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.utils import json_dumps, json_loads
-from app.models import Job, KnowledgeChunk, KnowledgeDocument, KnowledgeGraphState, ModelProfile
+from app.models import Job, KnowledgeChunk, KnowledgeDocument, KnowledgeGraphState, KnowledgePublication, ModelProfile
 from app.services import jobs
 from tests.test_workbench_assistant import (store, client, FakeChat, create, running, upload, get_value, reviewed,
     proposal, approve, add_doc, fake_indexes, api, state, sources, plans, sessions, runtime, assistant, publication)
@@ -19,13 +19,19 @@ def test_confirmation_concurrency_has_exactly_one_outbox_job(store, client):
 
     def confirm():
         barrier.wait(timeout=5)
-        return client.post(f"/workbench/assistant/{key}/confirm", json={"version": version}).status_code
+        return client.post(f"/workbench/assistant/{key}/confirm", json={"version": version})
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first, second = pool.submit(confirm), pool.submit(confirm)
-        assert sorted([first.result(timeout=15), second.result(timeout=15)]) == [200, 409]
+        results = [first.result(timeout=15), second.result(timeout=15)]
+    assert sorted(result.status_code for result in results) in ([200, 200], [200, 409])
+    accepted_job_ids = {result.json()["job_id"] for result in results if result.status_code == 200}
+    assert len(accepted_job_ids) == 1
+    replay = client.post(f"/workbench/assistant/{key}/confirm", json={"version": version})
+    assert replay.status_code == 200 and replay.json()["job_id"] in accepted_job_ids
     with store() as db:
-        assert len(list(db.scalars(select(Job).where(Job.kind == "assistant_publish")))) == 1
+        publish_jobs = list(db.scalars(select(Job).where(Job.kind == "assistant_publish")))
+        assert len(publish_jobs) == 1 and publish_jobs[0].id in accepted_job_ids
 
 
 def test_concurrent_corrections_cannot_drop_either_accepted_message(store, client):
@@ -59,7 +65,7 @@ def test_reading_recovery_resumes_and_old_attempt_cannot_save(store, monkeypatch
             raise jobs.JobLeaseLostError("Synthetic interruption")
 
     model.on_read = lose_lease
-    monkeypatch.setattr(runtime, "get_llm_provider", lambda: model)
+    monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: model)
     key = create(store, [file])
     old_ctx, version = running(store, key)
     with pytest.raises(jobs.JobLeaseLostError):
@@ -97,7 +103,7 @@ def test_egress_revoked_in_flight_stops_receipt_and_next_call(store, monkeypatch
             db.commit()
 
     model.on_read = revoke
-    monkeypatch.setattr(runtime, "get_llm_provider", lambda: model)
+    monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: model)
     ctx, version = running(store, key)
     with pytest.raises(jobs.JobCancelledError):
         assistant.plan_job(ctx, key, version)
@@ -111,7 +117,7 @@ def test_redaction_matches_across_segment_boundary_without_changing_offsets(stor
     file = upload("folder/SKILL.md", text)
     model = FakeChat([{"action": "source", "path": file["path"], "cursor": 4000},
         {"action": "finish", "answer": "Read all segments", "evidence": [{"path": file["path"]}]}])
-    monkeypatch.setattr(runtime, "get_llm_provider", lambda: model)
+    monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: model)
     key = create(store, [file], mode="answer")
     ctx, version = running(store, key)
     assistant.plan_job(ctx, key, version)
@@ -151,18 +157,27 @@ def test_generic_job_retry_cannot_reuse_publication_approval(store, monkeypatch)
     key = reviewed(store, [upload("folder/SKILL.md", "Synthetic")], [proposal()])
     fake_indexes(store, monkeypatch, fail_vectors=True)
     ctx, version = approve(store, key)
+    approved = get_value(store, key)[0]
     with pytest.raises(ValueError):
         publication.publication_job(ctx, key, version, "local-development")
     with store() as db:
         db.get(Job, ctx.job_id).status = "FAILED"
         db.commit()
         retry = api.job_runner.retry(db, ctx.job_id)
+        assert retry.id != ctx.job_id
         retry.status, retry.lease_owner, retry.attempt = "RUNNING", "retry-worker", 1
         db.commit()
         retry_ctx = jobs.JobContext(retry.id, lease_owner="retry-worker")
     with pytest.raises((ValueError, jobs.JobCancelledError, jobs.JobLeaseLostError)):
         publication.publication_job(retry_ctx, key, version, "local-development")
-    assert get_value(store, key)[0]["status"] == "REVIEW"
+    value = get_value(store, key)[0]
+    assert value["status"] == "PUBLISH_FAILED" and value["job_id"] == ctx.job_id
+    for field in ("approved_digest", "approved_by", "approved_at", "request_version"):
+        assert value[field] == approved[field]
+    with store() as db:
+        assert not list(db.scalars(select(KnowledgePublication)))
+        assert db.get(KnowledgeGraphState, "domain").active_generation_id == "KGEN-old"
+        assert db.get(ModelProfile, "MODEL-embedding").active_embedding_generation_id == "EGEN-old"
 
 
 def test_retry_after_vector_failure_does_not_publish_abandoned_chunks(store, monkeypatch):
@@ -172,6 +187,7 @@ def test_retry_after_vector_failure_does_not_publish_abandoned_chunks(store, mon
     key = reviewed(store, [upload("folder/SKILL.md", "Synthetic new")], [proposal(action="replace", target="DOC-old")], ["DOC-old"])
     fake_indexes(store, monkeypatch, fail_vectors=True)
     ctx, version = approve(store, key)
+    approved = get_value(store, key)[0]
     with pytest.raises(ValueError):
         publication.publication_job(ctx, key, version, "local-development")
     with store() as db:
@@ -186,8 +202,23 @@ def test_retry_after_vector_failure_does_not_publish_abandoned_chunks(store, mon
             kwargs["progress"](1, 1)
 
     monkeypatch.setattr(publication, "index_embeddings", successful_vectors)
-    ctx, version = approve(store, key)
+    with store() as db:
+        row, value = state.locked_session(db, key)
+        with pytest.raises(ValueError, match="正在执行或等待自动重试"):
+            sessions.retry_reading(db, row, value, "local-development")
+        db.get(Job, ctx.job_id).status = "FAILED"
+        db.commit()
+        row, value = state.locked_session(db, key)
+        retry = sessions.retry_reading(db, row, value, "local-development")
+        assert retry.id != ctx.job_id
+        db.commit()
+    ctx, retry_version = running(store, key)
+    assert retry_version == version
     publication.publication_job(ctx, key, version, "local-development")
+    value = get_value(store, key)[0]
+    assert value["status"] == "PUBLISHED"
+    for field in ("approved_digest", "approved_by", "approved_at", "request_version"):
+        assert value[field] == approved[field]
     with store() as db:
         assert all(db.get(KnowledgeChunk, key).document_version == 0 for key in abandoned)
         current = list(db.scalars(select(KnowledgeChunk).where(KnowledgeChunk.document_version == 2)))
@@ -201,11 +232,15 @@ def test_graph_builder_contention_cannot_release_another_session_latch(store, mo
         db.get(KnowledgeGraphState, "domain").building_generation_id = "KGEN-other-session"
         db.commit()
     ctx, version = approve(store, key)
+    approved = get_value(store, key)[0]
     with pytest.raises(ValueError):
         publication.publication_job(ctx, key, version, "local-development")
     with store() as db:
         assert db.get(KnowledgeGraphState, "domain").building_generation_id == "KGEN-other-session"
-    assert get_value(store, key)[0]["status"] == "REVIEW"
+    value = get_value(store, key)[0]
+    assert value["status"] == "PUBLISH_FAILED"
+    assert value["approved_digest"] == approved["approved_digest"]
+    assert value["request_version"] == version
 
 
 def test_source_pages_and_malformed_uploads_are_explicit(client, store):
@@ -229,7 +264,7 @@ def test_source_pages_and_malformed_uploads_are_explicit(client, store):
 
 
 def test_default_consent_true_and_model_is_never_called_by_http(client, store, monkeypatch):
-    def never():
+    def never(profile=None):
         pytest.fail("HTTP handler called the model")
     monkeypatch.setattr(runtime, "get_llm_provider", never)
     response = client.post("/workbench/assistant", data={"message": "Query existing knowledge"})
@@ -316,7 +351,7 @@ def test_no_upload_reads_published_skill_and_normalized_dependencies(store, monk
         db.commit()
     model = FakeChat([{"action": "read", "document_ids": ["DOC-root"]}, {"action": "finish", "answer": "Root and child read",
         "evidence": [{"path": "knowledge/DOC-root"}, {"path": "knowledge/DOC-child"}]}])
-    monkeypatch.setattr(runtime, "get_llm_provider", lambda: model)
+    monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: model)
     key = create(store, mode="answer")
     ctx, version = running(store, key)
     assistant.plan_job(ctx, key, version)

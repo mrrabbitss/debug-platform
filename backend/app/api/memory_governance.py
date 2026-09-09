@@ -18,7 +18,7 @@ Db = Annotated[Session, Depends(get_db)]
 
 def administrator(request: Request) -> dict:
     principal = getattr(request.state, "principal", {})
-    if principal.get("role") != "ADMIN":
+    if principal.get("role") not in {"ADMIN", "EXPERT"}:
         raise HTTPException(403, "Administrator role required")
     return principal
 

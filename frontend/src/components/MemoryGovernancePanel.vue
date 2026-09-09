@@ -45,14 +45,14 @@ async function review(memoryId: string, action: 'PUBLISH' | 'REJECT' | 'ARCHIVE'
 }
 
 onMounted(async () => {
-  try { administrator.value = (await api.get('/system/me')).data.role === 'ADMIN'; await load() }
+  try { administrator.value = ['ADMIN', 'EXPERT'].includes((await api.get('/system/me')).data.role); await load() }
   catch { ElMessage.error('无法确认当前用户身份') }
 })
 </script>
 
 <template>
   <el-alert title="模型输出先留在来源案例，不能自动成为全局经验。重复生成、被检索和高置信度都不等于真实有效；实际处理结果须另行确认。" type="info" :closable="false" />
-  <p v-if="!administrator">此页面由管理员复核。工程师可以在来源案例查看候选记忆并提交实际处理反馈。</p>
+  <p v-if="!administrator">此页面由专家或管理员复核。普通用户可以在来源案例查看候选记忆并提交实际处理反馈。</p>
   <div v-else v-loading="loading">
     <div class="toolbar" style="margin-top:16px">
       <el-select v-model="state" aria-label="候选记忆状态" style="width:180px" @change="load">

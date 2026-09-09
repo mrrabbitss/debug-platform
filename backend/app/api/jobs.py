@@ -15,7 +15,7 @@ Db = Annotated[Session, Depends(get_db)]
 
 def _protect_system_job(request: Request, job: Job, db: Session) -> None:
     from app.services.knowledge_access import authorize_routing_job
-    if authorize_routing_job(db, job.id, getattr(request.state, "principal", {})):
+    if authorize_routing_job(db, job.id, getattr(request.state, "principal", {}), method=request.method):
         return
     if (
         job.kind in {"download_model_files", "route_markdown_knowledge"}

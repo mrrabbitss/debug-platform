@@ -19,6 +19,7 @@ KNOWLEDGE_ROLES = {"log_analysis": "日志分析", "diagnosis": "综合诊断", 
 SOURCE_TYPES = {"log_analysis": "analysis_skill", "diagnosis": "analysis_method", "fault_tree": "fault_tree",
                 "report_template": "document", "prior_knowledge": "diagnostic_rule"}
 case_model_id = ContextVar("case_model_id", default=None)
+case_model_snapshot = ContextVar("case_model_snapshot", default=None)
 case_category = ContextVar("case_category", default=None)
 case_template = ContextVar("case_template", default=None)
 case_knowledge = ContextVar("case_knowledge", default=None)
@@ -32,30 +33,32 @@ class WorkbenchConfigurationError(ValueError):
 
 
 def categories(db):
-    return DEFAULT_CATEGORIES + [json_loads(row.payload_json, {}) for row in db.scalars(
-        select(WorkbenchRecord).where(WorkbenchRecord.kind == "problem_category").order_by(WorkbenchRecord.id))]
+    from app.services.problem_categories import category_rows
+    return category_rows(db)
 
 
-def validate_case_options(db, values):
+def validate_case_options(db, values, principal=None):
     category = values.get("problem_category")
     if "problem_category" in values and (not category or category == "general" or category not in {item["id"] for item in categories(db)}):
         raise ValueError("请选择有效的问题类别")
     profile_id = values.get("chat_profile_id")
     if profile_id:
-        profile = db.get(ModelProfile, profile_id)
-        if not profile or not profile.enabled or profile.task_type != "chat" or profile.provider == "mock":
-            raise ValueError("请选择管理员已启用的诊断模型")
+        from app.services.model_access import require_model_profile, shared_model_clause
+        profile = (require_model_profile(db, principal, profile_id, require_enabled=True) if principal else
+                   db.scalar(select(ModelProfile).where(ModelProfile.id == profile_id, shared_model_clause())))
+        if not profile or not profile.enabled or profile.task_type != "chat":
+            raise ValueError("请选择自己可用且已启用的诊断模型")
 
 
 def selected_profile():
     profile_id = case_model_id.get()
     if not profile_id:
+        if case_context_id.get():
+            raise WorkbenchConfigurationError("诊断快照缺少模型选择，请重新发起")
         return None
     with SessionLocal() as db:
-        profile = db.get(ModelProfile, profile_id)
-        if not profile or not profile.enabled or profile.task_type != "chat":
-            raise ValueError("案例选择的模型已停用，请重新选择")
-        return profile
+        from app.services.model_access import resolve_chat_model_snapshot
+        return resolve_chat_model_snapshot(db, case_model_snapshot.get() or {"selected_chat_profile_id": profile_id})
 
 
 def case_model_job(function):
@@ -79,18 +82,25 @@ def case_model_job(function):
                 revision = db.get(AnalysisRevision, bound.arguments["revision_id"])
                 if revision:
                     case_id, run_id = revision.case_id, revision.source_analysis_id
-            source = db.get(AnalysisRun, run_id) if run_id else None
-            source = source or (db.get(AgentRun, agent_id) if agent_id else None)
+                    agent_id = revision.agent_run_id or agent_id
+            # A revision is a new request by its own initiator. Its agent snapshot
+            # must take precedence over the original analysis author's private API.
+            source = db.get(AgentRun, agent_id) if agent_id else None
+            source = source or (db.get(AnalysisRun, run_id) if run_id else None)
             case = db.get(Case, case_id) if case_id else bound.arguments.get("case")
             if not case:
                 return function(*args, **kwargs)
             config = json_loads(source.model_config_json, {}) if source else {}
             try:
-                if not config.get("workbench_snapshot_id") and not case_context_id.get():
-                    config = capture_configuration(db, case)
-                elif not config.get("workbench_snapshot_id"):
+                new_request = bound.arguments.get("request") is not None or bool(bound.arguments.get("created_by"))
+                if (new_request or not config.get("workbench_snapshot_id")) and not case_context_id.get():
+                    identity = model_request_principal(db, bound.arguments, case)
+                    config = capture_configuration(db, case, principal=identity)
+                elif new_request or not config.get("workbench_snapshot_id"):
                     config = run_configuration()
                 configuration = resolve_configuration(db, config)
+                from app.services.model_access import resolve_chat_model_snapshot
+                resolve_chat_model_snapshot(db, configuration)
             except ValueError as error:
                 if existing_db is None and bound.arguments.get("ctx") is not None:
                     fail_configuration_job(db, bound.arguments, str(error))
@@ -100,6 +110,17 @@ def case_model_job(function):
         with use_configuration(configuration):
             return function(*args, **kwargs)
     return run
+
+
+def model_request_principal(db, arguments, case):
+    """Prefer the request initiator, not another member who owns the case."""
+    from app.services.model_access import principal_for_model_user
+    request = arguments.get("request")
+    identity = getattr(getattr(request, "state", None), "principal", None)
+    if identity:
+        return identity
+    actor_id = arguments.get("created_by") or case.owner_id
+    return principal_for_model_user(db, actor_id) if actor_id else None
 
 
 def fail_configuration_job(db, arguments, message):
@@ -131,16 +152,33 @@ def fail_configuration_job(db, arguments, message):
     db.commit()
 
 
-def capture_configuration(db, case):
+def capture_configuration(db, case, principal=None):
     from app.services.model_profiles import get_active_model_profile
+    from app.services.model_access import (
+        chat_model_snapshot, principal_for_model_user, resolve_chat_model_snapshot, resolve_user_chat_profile,
+    )
     from app.services.workbench_snapshot import capture_knowledge
-    profile = db.get(ModelProfile, case.chat_profile_id) if case.chat_profile_id else get_active_model_profile("chat", db)
-    if case.chat_profile_id and (not profile or not profile.enabled or profile.task_type != "chat"):
-        raise ValueError("案例选择的模型已停用或删除，请重新选择")
+    if principal is None and case.owner_id:
+        principal = principal_for_model_user(db, case.owner_id)
+    if principal:
+        # A saved case field predates unified personal settings. New authenticated
+        # tasks follow their initiator's current preference, while queued tasks
+        # retain the model already pinned in their run context.
+        profile = resolve_user_chat_profile(db, principal)
+        model_snapshot = chat_model_snapshot(db, principal, profile)
+    else:
+        # Unowned legacy/local cases can only use shared configuration.
+        profile = (resolve_chat_model_snapshot(db, {"selected_chat_profile_id": case.chat_profile_id})
+                   if case.chat_profile_id else get_active_model_profile("chat", db))
+        if not profile:
+            raise ValueError("尚未配置共享默认诊断模型")
+        from app.services.model_access import model_profile_fingerprint
+        model_snapshot = {"selected_chat_profile_id": profile.id,
+                          "model_profile_fingerprint": model_profile_fingerprint(db, profile)}
     category = case.problem_category or "unknown"
     from app.models import KnowledgeGraphState
     graph = db.get(KnowledgeGraphState, "domain")
-    value = {"problem_category": category, "selected_chat_profile_id": profile.id if profile else None,
+    value = {"problem_category": category, **model_snapshot,
              "problem_categories": categories(db),
              "knowledge_graph_generation_id": graph.active_generation_id if graph else None,
              "report_template": template_snapshot(db, category), "knowledge_snapshot": capture_knowledge(db)}
@@ -171,6 +209,8 @@ def resolve_configuration(db, config):
 @contextmanager
 def use_configuration(config):
     values = ((case_model_id, config.get("selected_chat_profile_id")),
+              (case_model_snapshot, {key: config.get(key) for key in
+                  ("selected_chat_profile_id", "model_actor_id", "model_profile_fingerprint")}),
               (case_category, config.get("problem_category")),
               (case_template, config.get("report_template")),
               (case_knowledge, config.get("knowledge_snapshot")),
@@ -188,6 +228,7 @@ def use_configuration(config):
 def run_configuration():
     template = case_template.get() or {}
     return {"workbench_snapshot_id": case_context_id.get(), "problem_category": case_category.get(),
+            **(case_model_snapshot.get() or {}),
             "selected_chat_profile_id": case_model_id.get(),
             "report_template": {key: template.get(key) for key in ("id", "version", "category", "sha256")}}
 
@@ -219,16 +260,17 @@ def matches_category(document, category):
 def scope_methods(rows, case):
     category = case_category.get() or getattr(case, "problem_category", "unknown")
     selected = [row for row in rows if matches_category(row, category)]
-    # Explicit fallback only when no applicable method exists; the report must explain it.
-    return selected or rows
+    return selected
 
 
 def template_snapshot(db, category):
+    from app.services.knowledge_access import knowledge_kind
     documents = list(db.scalars(select(KnowledgeDocument).where(
         KnowledgeDocument.active.is_(True), KnowledgeDocument.review_status == "ACTIVE",
         KnowledgeDocument.confidentiality.in_(["PUBLIC", "INTERNAL"]))))
     for desired in (category, "network"):
-        matching = [doc for doc in documents if json_loads(doc.metadata_json, {}).get("knowledge_role") == "report_template"
+        matching = [doc for doc in documents if knowledge_kind(doc) == "SKILL"
+                    and json_loads(doc.metadata_json, {}).get("knowledge_role") == "report_template"
                     and desired in knowledge_scope(doc)]
         matching.sort(key=lambda doc: (doc.published_at.isoformat() if doc.published_at else "", doc.id), reverse=True)
         preference = db.get(WorkbenchRecord, "template-" + str(desired))

@@ -66,7 +66,12 @@ def document_fingerprint(doc):
 
 
 def snapshot_document(db, session_id, document_id, request_version=None):
-    doc = db.get(KnowledgeDocument, document_id)
+    from fastapi import HTTPException
+    from app.services.knowledge_access import require_knowledge_access
+    try:
+        doc = require_knowledge_access(db, document_id, session_principal(db, session_id))
+    except HTTPException:
+        raise ValueError("目标知识不存在或不在当前用户可见范围") from None
     if not doc:
         raise ValueError("目标知识不存在")
     if not doc.content.strip() or len(doc.content) > 1000000:
@@ -142,11 +147,25 @@ def verify_receipts(db, session_id, value, item):
                 or receipt.get("start") != start or receipt.get("end") != end
                 or receipt.get("text_sha256") != digest(item["content"][start:end])):
             raise ValueError("全文阅读凭据缺失或校验失败")
+        if value.get("model_snapshot") and receipt.get("model_fingerprint") != digest(value["model_snapshot"]):
+            raise ValueError("阅读模型已变化，需要由本轮选定模型重新完整阅读")
 
 
-def catalogue_page(db, cursor="", query="", category=None, role=None):
+def session_principal(db, session_id):
+    from app.services.model_access import principal_for_model_user
+    row = db.get(WorkbenchRecord, session_id)
+    value = json_loads(row.payload_json, {}) if row else {}
+    return principal_for_model_user(db, value.get("requested_by") or (row.owner_id if row else None))
+
+
+def catalogue_page(db, cursor="", query="", category=None, role=None, *, session_id=None):
     """Keyset pagination never puts the entire catalogue or document metadata in a prompt."""
     statement = select(KnowledgeDocument).where(KnowledgeDocument.id > cursor).order_by(KnowledgeDocument.id)
+    if session_id:
+        from app.services.knowledge_access import visible_knowledge_clause
+        statement = statement.where(visible_knowledge_clause(session_principal(db, session_id)))
+    else:
+        statement = statement.where(KnowledgeDocument.active.is_(True), KnowledgeDocument.review_status == "ACTIVE")
     if query:
         statement = statement.where(KnowledgeDocument.title.contains(query, autoescape=True)
                                     | KnowledgeDocument.content.contains(query, autoescape=True))
@@ -164,6 +183,8 @@ def catalogue_page(db, cursor="", query="", category=None, role=None):
         items.append({"id": doc.id, "title": doc.title, "version": doc.version,
             "categories": meta.get("problem_categories", ["general"]), "role": meta.get("knowledge_role"),
             "characters": len(doc.content), "status": doc.review_status})
+        from app.services.knowledge_access import knowledge_kind
+        items[-1]["content_kind"] = knowledge_kind(doc)
         if len(items) == PAGE_SIZE:
             break
     more = scanned < len(candidates) or len(candidates) == 80

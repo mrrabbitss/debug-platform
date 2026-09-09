@@ -65,6 +65,7 @@ def session_to_dict(
     session: KnowledgeCurationSession,
     *,
     detail: bool,
+    principal: dict | None = None,
 ) -> dict[str, Any]:
     source_count = db.scalar(
         select(func.count(KnowledgeCurationSourceFile.id)).where(
@@ -83,7 +84,8 @@ def session_to_dict(
         "trust_level": session.trust_level,
         "confidentiality": session.confidentiality,
         "model_profile_id": session.model_profile_id,
-        "model_snapshot": json_loads(session.model_snapshot_json, {}),
+        "model_snapshot": {key: value for key, value in json_loads(session.model_snapshot_json, {}).items()
+            if key in {"profile_id", "profile_name", "provider", "mode", "model", "base_url", "prompt_version"}},
         "source_manifest": json_loads(session.source_manifest_json, {}),
         "source_count": int(source_count),
         "draft_title": session.draft_title,
@@ -98,6 +100,10 @@ def session_to_dict(
         "updated_at": session.updated_at,
         "confirmed_at": session.confirmed_at,
     }
+    foreign_reviewer = principal is not None and session.created_by != principal.get("id")
+    if foreign_reviewer:
+        result["model_profile_id"] = None
+        result["model_snapshot"] = {}
     if not detail:
         return result
     result["draft_markdown"] = session.draft_markdown
@@ -118,5 +124,8 @@ def session_to_dict(
     ).all())
     result["sources"] = [source_to_dict(source) for source in sources]
     result["messages"] = [message_to_dict(message) for message in messages]
+    if foreign_reviewer:
+        for message in result["messages"]:
+            message["model_profile_id"] = None
     result["revisions"] = [revision_to_dict(revision) for revision in revisions]
     return result

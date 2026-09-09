@@ -32,7 +32,7 @@ def attach_pending_drafts(db: Session, rows: list[dict], *, detail: bool = False
             own = proposals[0] if proposals else None
         result.append({**row, "pending_draft": draft_payload(own, include_content=detail) if own else None,
                        "can_publish": reviewer,
-                       "can_attest_history": principal is None or principal.get("role") == "ADMIN",
+                       "can_attest_history": principal is None or principal.get("role") in {"ADMIN", "EXPERT"},
                        "review_drafts": [draft_payload(draft, include_content=detail) for draft in proposals
                                          if reviewer and draft.status == "IN_REVIEW"]})
     return result

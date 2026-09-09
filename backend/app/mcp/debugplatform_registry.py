@@ -226,7 +226,7 @@ class _DebugPlatformTools:
     ) -> dict[str, Any]:
         principal = _principal(context)
         statement = select(Case)
-        if principal["role"] != "ADMIN":
+        if principal["role"] not in {"ADMIN", "EXPERT"}:
             statement = statement.where(accessible_case_clause(principal["id"]))
         query = payload.query.strip()
         if query:
@@ -690,7 +690,7 @@ def create_debugplatform_mcp_registry(
     register("debug_cancel_host_run", "Cancel an unfinished host diagnosis with a recorded reason.", DebugCancelHostRunInput, tools.cancel_host_run, read_only=False)
     register("debug_generate_report", "Render an existing completed analysis without another inference pass.", DebugGenerateReportInput, tools.generate_report, read_only=False)
     register("debug_open_ui", "Return the existing Web UI URL for a case; never launches a browser.", DebugOpenUIInput, tools.open_ui, read_only=True)
-    register("debug_get_knowledge_routing_context", "ADMIN only: read active knowledge taxonomy and bounded masked Markdown excerpts for host-model classification.", DebugKnowledgeRoutingContextInput, tools.get_knowledge_routing_context, read_only=True)
-    register("debug_read_knowledge_sections", "Read complete masked Markdown sections page by page. ENGINEER and VIEWER may read published visible knowledge only; ADMIN may also read drafts.", DebugKnowledgeSectionsInput, tools.read_knowledge_sections, read_only=True)
-    register("debug_apply_knowledge_routing", "ADMIN only: atomically apply host-model category decisions to DRAFT knowledge without publishing it.", DebugApplyKnowledgeRoutingInput, tools.apply_knowledge_routing, read_only=False)
+    register("debug_get_knowledge_routing_context", "ADMIN/EXPERT: read active knowledge taxonomy and bounded masked Markdown excerpts for host-model classification; no backend generative calls.", DebugKnowledgeRoutingContextInput, tools.get_knowledge_routing_context, read_only=True)
+    register("debug_read_knowledge_sections", "Read complete masked Markdown sections page by page. ENGINEER and VIEWER may read published visible knowledge only; ADMIN/EXPERT may also read authorized drafts. No backend generative calls.", DebugKnowledgeSectionsInput, tools.read_knowledge_sections, read_only=True)
+    register("debug_apply_knowledge_routing", "ADMIN/EXPERT: atomically apply host-model category decisions to inactive DRAFT knowledge. Does not publish, approve contributions, or grant ordinary users direct Skill-management rights.", DebugApplyKnowledgeRoutingInput, tools.apply_knowledge_routing, read_only=False)
     return registry

@@ -675,6 +675,8 @@ def _analyze_case_impl(
         "summary": search_result["summary"],
     }
     result["diagnostic_planning"] = planning.public_plan
+    from app.services.problem_categories import add_diagnosis_skill_warning
+    add_diagnosis_skill_warning(result, planning.public_plan)
     merge_fault_tree_findings_into_diagnosis(
         result, planning.public_plan.get("fault_tree_coverage", {}),
     )

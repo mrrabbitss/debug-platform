@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import CurationSourcePreviewDialog from '../components/curation/CurationSourcePreviewDialog.vue'
+import ChatModelSelect from '../components/ChatModelSelect.vue'
+import { contributionsApi } from '../api/knowledgeContributions'
 import { useKnowledgeCurationPresentation } from '../composables/useKnowledgeCurationPresentation'
 import { knowledgeDeviceTypeOptions } from '../constants/knowledge'
 import {
@@ -69,7 +71,7 @@ const createForm = reactive({
   trust_level: 'MEDIUM',
   confidentiality: 'RESTRICTED',
   model_profile_id: '',
-  consent_model_egress: false
+  consent_model_egress: true
 })
 
 const eligibleModels = computed(() => modelProfiles.value.filter(
@@ -162,8 +164,8 @@ function resetCreateForm() {
   createForm.module = ''
   createForm.trust_level = 'MEDIUM'
   createForm.confidentiality = 'RESTRICTED'
-  createForm.model_profile_id = eligibleModels.value.find(item => item.is_active)?.id || eligibleModels.value[0]?.id || ''
-  createForm.consent_model_egress = false
+  createForm.model_profile_id = ''
+  createForm.consent_model_egress = true
 }
 
 function openCreate() {
@@ -178,7 +180,6 @@ function selectFolder(event: Event) {
 
 async function createSession() {
   if (!selectedFiles.value.length) return ElMessage.warning('请选择包含案例材料的文件夹')
-  if (!createForm.model_profile_id) return ElMessage.warning('请先在系统设置中配置可用的大模型 API')
   if (!createForm.consent_model_egress) return ElMessage.warning('请确认脱敏证据可以发送到所选模型 API')
   uploading.value = true
   uploadProgress.value = 0
@@ -281,9 +282,9 @@ async function confirmSession() {
   if (!current.value.validation?.confirmable) return ElMessage.warning('当前草稿仍有结构或来源引用问题')
   try {
     await ElMessageBox.confirm(
-      '确认当前 Markdown 内容和来源引用均无问题？确认后才会创建知识库草稿；仍需执行知识审核和发布，才会参与诊断检索。',
-      '人工确认并加入知识库',
-      { type: 'warning', confirmButtonText: '确认无误并加入', cancelButtonText: '继续检查' }
+      '确认 Markdown 与来源引用后，将提交给专家或管理员审核；审核发布成功后才参与诊断检索。',
+      '提交提炼结果审核',
+      { type: 'warning', confirmButtonText: '确认并提交审核', cancelButtonText: '继续检查' }
     )
     saving.value = true
     const response = await confirmKnowledgeCuration(
@@ -291,8 +292,11 @@ async function confirmSession() {
       current.value.draft_version
     )
     current.value = response.session
-    ElMessage.success('已创建知识库草稿；请进入分层知识库提交审核并发布')
-    await loadSessions(current.value!.id)
+    if (response.contribution) {
+      const contribution = response.contribution.status === 'DRAFT' ? await contributionsApi.submit(response.contribution) : response.contribution
+      ElMessage.success('提炼结果已提交，可在“我的提交”查看审核进度')
+      await router.push({ path: '/knowledge', query: { tab: 'submissions', contribution: contribution.id } })
+    } else { ElMessage.success('已保存提炼结果，请在“我的提交”继续核对'); await loadSessions(current.value!.id) }
   } catch (error: any) {
     if (error !== 'cancel') ElMessage.error(errorText(error))
   } finally {
@@ -372,7 +376,7 @@ onBeforeUnmount(clearPoll)
   <div>
     <div class="toolbar">
       <h1 class="page-title" style="margin-right:auto">AI 案例提炼工作台</h1>
-      <el-button @click="router.push('/knowledge')">返回分层知识库</el-button>
+      <el-button @click="router.push('/knowledge?tab=submissions')">返回我的提交</el-button>
       <el-button data-testid="curation-open-create" type="primary" :disabled="!eligibleModels.length" @click="openCreate">选择文件夹并提炼</el-button>
       <el-button @click="loadSessions(current?.id)">刷新</el-button>
     </div>
@@ -444,12 +448,12 @@ onBeforeUnmount(clearPoll)
           </el-alert>
           <el-alert
             v-if="current.status === 'CONFIRMED'"
-            title="该版本已经人工确认并创建知识库草稿。它尚未参与检索，请前往分层知识库提交审核并发布。"
+            title="提炼结果已保存。请在“我的提交”查看对应草稿或审核进度；审核发布前不会共享。"
             type="success"
             :closable="false"
             style="margin-bottom:16px"
           >
-            <template #default><el-button size="small" type="success" @click="router.push('/knowledge')">前往知识审核</el-button></template>
+            <template #default><el-button size="small" type="success" @click="router.push('/knowledge?tab=submissions')">查看我的提交</el-button></template>
           </el-alert>
 
           <el-tabs v-if="current.draft_version > 0" v-model="activeTab">
@@ -536,7 +540,7 @@ onBeforeUnmount(clearPoll)
                   :disabled="current.status !== 'REVIEWING' || draftDirty || !current.validation?.confirmable"
                   :loading="saving"
                   @click="confirmSession"
-                >确认无误并加入知识库草稿</el-button>
+                >确认并提交专家审核</el-button>
                 <span class="muted">加入后仍需走“提交审核 → 发布”流程，发布前不会参与检索。</span>
               </div>
             </el-tab-pane>
@@ -600,9 +604,8 @@ onBeforeUnmount(clearPoll)
         </el-form-item>
         <el-form-item label="标题提示"><el-input v-model="createForm.title_hint" placeholder="例如：AP 认证超时与共享密钥不一致" /></el-form-item>
         <el-form-item label="提炼模型">
-          <el-select v-model="createForm.model_profile_id" style="width:100%">
-            <el-option v-for="model in eligibleModels" :key="model.id" :label="`${model.name} · ${model.model_name}`" :value="model.id" />
-          </el-select>
+          <ChatModelSelect :model-value="createForm.model_profile_id || null" @update:model-value="value=>createForm.model_profile_id=value || ''" :models="eligibleModels.map(item=>({...item,active:item.is_active}))" label="提炼模型" />
+          <p class="field-hint">默认使用系统设置中的个人选择，未选择时跟随共享默认。</p>
         </el-form-item>
         <el-form-item label="知识分类">
           <el-select v-model="createForm.category_id" filterable style="width:100%">

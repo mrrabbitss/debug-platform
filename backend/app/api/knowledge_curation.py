@@ -3,12 +3,13 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import (
+    Job,
     KnowledgeCategory,
     KnowledgeCurationRevision,
     KnowledgeCurationSession,
@@ -37,6 +38,8 @@ from app.services.knowledge_curation import (
     session_to_dict,
 )
 from app.services.knowledge_governance import actor_id
+from app.services.knowledge_access import require_contributor, require_curation_access, is_knowledge_manager
+from app.knowledge_contribution_models import KnowledgeContribution
 from app.services.knowledge_taxonomy import get_default_category_id
 from app.services.llm import LLMError
 from app.services.storage import storage
@@ -50,6 +53,8 @@ job_runner.register(
     curate_knowledge_folder_job,
     ("session_id",),
     cancellable=True,
+    max_attempts=3,
+    timeout_seconds=1800,
 )
 
 
@@ -57,18 +62,14 @@ def _principal(request: Request) -> dict[str, Any]:
     return getattr(request.state, "principal", {}) or {}
 
 
-def _require_admin(request: Request) -> dict[str, Any]:
+def _require_contributor(request: Request) -> dict[str, Any]:
     principal = _principal(request)
-    if principal.get("role") != "ADMIN":
-        raise HTTPException(403, "Administrator role required")
+    require_contributor(principal)
     return principal
 
 
-def _get_session(db: Session, session_id: str) -> KnowledgeCurationSession:
-    session = db.get(KnowledgeCurationSession, session_id)
-    if not session:
-        raise HTTPException(404, "Knowledge curation session not found")
-    return session
+def _get_session(db: Session, session_id: str, principal: dict, *, write=False) -> KnowledgeCurationSession:
+    return require_curation_access(db, session_id, principal, write=write)
 
 
 def _raise_curation_error(exc: CurationError) -> None:
@@ -82,13 +83,18 @@ def list_curation_sessions(
     db: Db,
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[dict[str, Any]]:
-    _require_admin(request)
+    identity = _require_contributor(request)
+    visible = KnowledgeCurationSession.created_by == identity["id"]
+    if is_knowledge_manager(identity):
+        submitted = select(KnowledgeContribution.source_curation_id).where(
+            KnowledgeContribution.status.not_in(["DRAFT", "DELETED"]))
+        visible = or_(visible, KnowledgeCurationSession.id.in_(submitted))
     sessions = list(db.scalars(
-        select(KnowledgeCurationSession)
+        select(KnowledgeCurationSession).where(visible)
         .order_by(KnowledgeCurationSession.updated_at.desc())
         .limit(limit)
     ).all())
-    return [session_to_dict(db, session, detail=False) for session in sessions]
+    return [session_to_dict(db, session, detail=False, principal=_principal(request)) for session in sessions]
 
 
 @router.post("", status_code=202)
@@ -104,11 +110,11 @@ async def create_curation_session(
     firmware_range: str | None = Form(default=None),
     module: str | None = Form(default=None),
     trust_level: str = Form(default="MEDIUM"),
-    confidentiality: str = Form(default="RESTRICTED"),
+    confidentiality: str = Form(default="INTERNAL"),
     model_profile_id: str | None = Form(default=None),
-    consent_model_egress: bool = Form(default=False),
+    consent_model_egress: bool = Form(default=True),
 ) -> dict[str, Any]:
-    principal = _require_admin(request)
+    principal = _require_contributor(request)
     if len(title_hint) > 512:
         raise HTTPException(400, "Title hint is too long")
     if trust_level not in {"LOW", "MEDIUM", "HIGH"}:
@@ -119,7 +125,7 @@ async def create_curation_session(
     if not isinstance(paths, list) or not all(isinstance(item, str) for item in paths):
         raise HTTPException(400, "relative_paths_json must be a JSON string array")
     try:
-        profile, model_snapshot = resolve_curation_model(db, model_profile_id)
+        profile, model_snapshot = resolve_curation_model(db, model_profile_id, principal)
     except CurationError as exc:
         _raise_curation_error(exc)
     if profile.mode == "api" and not consent_model_egress:
@@ -193,17 +199,13 @@ async def create_curation_session(
                 media_type=item["media_type"],
                 source_role=item["source_role"],
             ))
-        db.commit()
-        session_committed = True
-        job = job_runner.submit(
-            db,
-            "curate_knowledge_folder",
-            curate_knowledge_folder_job,
-            session.id,
-            input_data={"session_id": session.id},
-        )
+        job = Job(id=new_id("JOB"), kind="curate_knowledge_folder", status="QUEUED", max_attempts=3, timeout_seconds=1800,
+                  input_json=json_dumps({"session_id": session.id}))
+        db.add(job)
+        db.flush()
         session.job_id = job.id
         db.commit()
+        session_committed = True
         db.refresh(session)
     except Exception:
         db.rollback()
@@ -232,7 +234,7 @@ async def create_curation_session(
         },
     )
     return {
-        "session": session_to_dict(db, session, detail=True),
+        "session": session_to_dict(db, session, detail=True, principal=_principal(request)),
         "job": JobOut.model_validate(job).model_dump(),
     }
 
@@ -243,8 +245,8 @@ def get_curation_session(
     request: Request,
     db: Db,
 ) -> dict[str, Any]:
-    _require_admin(request)
-    return session_to_dict(db, _get_session(db, session_id), detail=True)
+    _require_contributor(request)
+    return session_to_dict(db, _get_session(db, session_id, _principal(request), write=request.method != "GET"), detail=True, principal=_principal(request))
 
 
 @router.post("/{session_id}/retry", status_code=202)
@@ -254,13 +256,13 @@ def retry_curation_session(
     request: Request,
     db: Db,
 ) -> dict[str, Any]:
-    principal = _require_admin(request)
-    session = _get_session(db, session_id)
+    principal = _require_contributor(request)
+    session = _get_session(db, session_id, _principal(request), write=request.method != "GET")
     if session.status not in {"FAILED", "CANCELLED"} or session.draft_version > 0:
         raise HTTPException(409, "Only a failed initial extraction can be retried")
     selected_profile_id = payload.model_profile_id or session.model_profile_id
     try:
-        profile, snapshot = resolve_curation_model(db, selected_profile_id)
+        profile, snapshot = resolve_curation_model(db, selected_profile_id, principal)
     except CurationError as exc:
         _raise_curation_error(exc)
     manifest = json_loads(session.source_manifest_json, {})
@@ -275,15 +277,10 @@ def retry_curation_session(
     session.model_profile_id = profile.id
     session.model_snapshot_json = json_dumps(snapshot)
     session.source_manifest_json = json_dumps(manifest)
-    db.commit()
-    job = job_runner.submit(
-        db,
-        "curate_knowledge_folder",
-        curate_knowledge_folder_job,
-        session.id,
-        input_data={"session_id": session.id, "retry_at": utcnow().isoformat()},
-        deduplicate=False,
-    )
+    job = Job(id=new_id("JOB"), kind="curate_knowledge_folder", status="QUEUED", max_attempts=3, timeout_seconds=1800,
+              input_json=json_dumps({"session_id": session.id, "retry_at": utcnow().isoformat()}))
+    db.add(job)
+    db.flush()
     session.job_id = job.id
     db.commit()
     db.refresh(session)
@@ -296,7 +293,7 @@ def retry_curation_session(
         details={"job_id": job.id, "model_profile_id": profile.id},
     )
     return {
-        "session": session_to_dict(db, session, detail=True),
+        "session": session_to_dict(db, session, detail=True, principal=_principal(request)),
         "job": JobOut.model_validate(job).model_dump(),
     }
 
@@ -310,7 +307,7 @@ def preview_source(
     start_line: int = Query(default=1, ge=1),
     line_count: int = Query(default=200, ge=1, le=1000),
 ) -> dict[str, Any]:
-    _require_admin(request)
+    _get_session(db, session_id, _require_contributor(request))
     source = db.get(KnowledgeCurationSourceFile, source_id)
     if not source or source.session_id != session_id:
         raise HTTPException(404, "Knowledge curation source file not found")
@@ -331,8 +328,8 @@ async def chat_with_curation_session(
     request: Request,
     db: Db,
 ) -> dict[str, Any]:
-    principal = _require_admin(request)
-    session = _get_session(db, session_id)
+    principal = _require_contributor(request)
+    session = _get_session(db, session_id, _principal(request), write=request.method != "GET")
     try:
         session = await refine_curation_session(
             db,
@@ -353,7 +350,7 @@ async def chat_with_curation_session(
         resource_id=session.id,
         details={"draft_version": session.draft_version},
     )
-    return session_to_dict(db, session, detail=True)
+    return session_to_dict(db, session, detail=True, principal=_principal(request))
 
 
 @router.patch("/{session_id}/draft")
@@ -363,8 +360,8 @@ def update_curation_draft(
     request: Request,
     db: Db,
 ) -> dict[str, Any]:
-    principal = _require_admin(request)
-    session = _get_session(db, session_id)
+    principal = _require_contributor(request)
+    session = _get_session(db, session_id, _principal(request), write=request.method != "GET")
     try:
         session = save_manual_curation_draft(
             db,
@@ -385,7 +382,7 @@ def update_curation_draft(
         resource_id=session.id,
         details={"draft_version": session.draft_version},
     )
-    return session_to_dict(db, session, detail=True)
+    return session_to_dict(db, session, detail=True, principal=_principal(request))
 
 
 @router.post("/{session_id}/revisions/{version}/restore")
@@ -396,8 +393,8 @@ def restore_curation_revision(
     request: Request,
     db: Db,
 ) -> dict[str, Any]:
-    principal = _require_admin(request)
-    session = _get_session(db, session_id)
+    principal = _require_contributor(request)
+    session = _get_session(db, session_id, _principal(request), write=request.method != "GET")
     revision = db.scalar(
         select(KnowledgeCurationRevision).where(
             KnowledgeCurationRevision.session_id == session.id,
@@ -429,7 +426,7 @@ def restore_curation_revision(
             "new_draft_version": session.draft_version,
         },
     )
-    return session_to_dict(db, session, detail=True)
+    return session_to_dict(db, session, detail=True, principal=_principal(request))
 
 
 @router.post("/{session_id}/confirm")
@@ -439,8 +436,8 @@ def confirm_curation(
     request: Request,
     db: Db,
 ) -> dict[str, Any]:
-    principal = _require_admin(request)
-    session = _get_session(db, session_id)
+    principal = _require_contributor(request)
+    session = _get_session(db, session_id, _principal(request), write=request.method != "GET")
     try:
         document = confirm_curation_session(
             db,
@@ -461,8 +458,12 @@ def confirm_curation(
             "knowledge_document_id": document.id,
         },
     )
+    from app.services.knowledge_contributions import contribution_payload, create_contribution
+    contribution = create_contribution(db, principal, {"source_curation_id": session_id})
+    db.commit()
     return {
-        "session": session_to_dict(db, _get_session(db, session_id), detail=True),
+        "contribution": contribution_payload(db, contribution),
+        "session": session_to_dict(db, _get_session(db, session_id, _principal(request), write=request.method != "GET"), detail=True, principal=_principal(request)),
         "knowledge_document": {
             "id": document.id,
             "title": document.title,
@@ -479,8 +480,8 @@ def delete_curation_session(
     request: Request,
     db: Db,
 ) -> dict[str, Any]:
-    principal = _require_admin(request)
-    session = _get_session(db, session_id)
+    principal = _require_contributor(request)
+    session = _get_session(db, session_id, _principal(request), write=request.method != "GET")
     if session.status in {"QUEUED", "EXTRACTING", "CONFIRMING"}:
         raise HTTPException(409, "Wait for the active operation to finish before deletion")
     if session.knowledge_document_id:

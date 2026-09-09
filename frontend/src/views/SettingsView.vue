@@ -13,10 +13,11 @@ import type {
 } from '../types'
 
 type ThinkingMode = 'inherit' | 'enabled' | 'disabled'
+const props = withDefaults(defineProps<{ retrievalOnly?: boolean }>(), { retrievalOnly: true })
 
 const profiles = ref<ModelProfile[]>([])
 const retrieval = ref<any>({})
-const activeTask = ref<ModelTask>('chat')
+const activeTask = ref<ModelTask>(props.retrievalOnly ? 'embedding' : 'chat')
 const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
 const saving = ref(false)
@@ -520,7 +521,7 @@ onMounted(load)
 
     <el-card>
       <el-tabs v-model="activeTask">
-        <el-tab-pane v-for="task in (['chat', 'embedding', 'reranker'] as ModelTask[])" :key="task" :label="taskLabels[task]" :name="task" />
+        <el-tab-pane v-for="task in ((retrievalOnly ? ['embedding', 'reranker'] : ['chat', 'embedding', 'reranker']) as ModelTask[])" :key="task" :label="taskLabels[task]" :name="task" />
       </el-tabs>
       <div class="toolbar">
         <el-button type="primary" @click="openCreate">添加 {{ taskLabels[activeTask] }}</el-button>
@@ -661,7 +662,7 @@ onMounted(load)
           <el-form-item label="Base URL">
             <div style="width:100%">
               <el-input v-model="form.base_url" placeholder="Embedding/Chat 填到 /v1；Qwen Reranker 可填到 /compatible-api/v1" />
-              <div class="muted" style="margin-top:6px">开发环境兼容 HTTP/HTTPS；私网地址启用 MODEL_ALLOW_PRIVATE_ENDPOINTS 后无需再配置 HTTP 白名单。</div>
+              <div class="muted" style="margin-top:6px">可直接使用内网或外网 HTTP(S) 地址，请确认接口与所选任务兼容。</div>
             </div>
           </el-form-item>
           <el-form-item label="API Key"><el-input v-model="form.api_key" type="password" show-password :placeholder="editingId ? '留空则保留原密钥' : '仅发送并保存在后端'" /></el-form-item>

@@ -32,7 +32,9 @@ from app.services.knowledge_taxonomy import (
     source_type_for_category,
 )
 from app.services.llm import LLMError, get_llm_provider
-from app.services.model_profiles import get_active_model_profile
+from app.services.knowledge_access import require_knowledge_admin
+from app.services.model_access import (ModelAccessError, chat_model_snapshot, principal_for_model_user,
+    resolve_chat_model_snapshot, resolve_user_chat_profile)
 from app.services.storage import storage
 from app.services.text_files import read_text_file
 
@@ -66,20 +68,18 @@ class _GeneratedRoutingBatch(BaseModel):
 def resolve_routing_model(
     db: Session,
     model_profile_id: str | None,
+    principal: dict,
 ) -> tuple[ModelProfile, Any, dict[str, Any]]:
-    profile = (
-        db.get(ModelProfile, model_profile_id)
-        if model_profile_id
-        else get_active_model_profile("chat", db)
-    )
-    if not profile or profile.task_type != "chat" or not profile.enabled:
-        raise ValueError("Select an enabled diagnostic chat model")
+    require_knowledge_admin(principal)
+    profile = resolve_user_chat_profile(db, principal, model_profile_id)
+    snapshot = chat_model_snapshot(db, principal, profile)
     if profile.provider == "mock":
         raise ValueError(
             "The built-in mock model cannot classify knowledge. Configure an API chat model."
         )
     provider = get_llm_provider(profile)
     return profile, provider, {
+        **snapshot,
         "profile_id": profile.id,
         "profile_name": profile.name,
         "provider": profile.provider,
@@ -87,6 +87,28 @@ def resolve_routing_model(
         "model": provider.model_name,
         "prompt_version": ROUTING_PROMPT_VERSION,
     }
+
+
+def _require_routing_snapshot(db, snapshot, actor):
+    if not isinstance(snapshot, dict) or snapshot.get("model_actor_id") != actor:
+        raise ModelAccessError("Markdown import has no valid saved Chat selection; submit a fresh import", 409)
+    principal = principal_for_model_user(db, actor)
+    require_knowledge_admin(principal)
+    return resolve_chat_model_snapshot(db, snapshot)
+
+
+class _SnapshotRoutingProvider:
+    """Keep every page of a long Markdown import on the approved model configuration."""
+    def __init__(self, provider, snapshot, actor):
+        self.provider, self.snapshot, self.actor = provider, dict(snapshot), actor
+
+    async def generate_json(self, *args, **kwargs):
+        with SessionLocal() as db:
+            _require_routing_snapshot(db, self.snapshot, self.actor)
+        response = await self.provider.generate_json(*args, **kwargs)
+        with SessionLocal() as db:
+            _require_routing_snapshot(db, self.snapshot, self.actor)
+        return response
 
 
 def _category_path(
@@ -597,12 +619,13 @@ def route_markdown_knowledge_job(
                     "idempotent_replay": True,
                 }
             if reasoning_owner == "platform_llm":
-                profile, provider, model_snapshot = resolve_routing_model(
-                    db,
-                    str(metadata.get("model_profile_id") or "") or None,
-                )
+                model_snapshot = metadata.get("model_snapshot")
+                profile = _require_routing_snapshot(db, model_snapshot, actor)
+                if metadata.get("model_profile_id") != profile.id:
+                    raise ModelAccessError("Markdown import model selection changed; submit a fresh import", 409)
                 if profile.mode == "api" and not metadata.get("model_egress_consent"):
                     raise ValueError("Model API egress consent is required")
+                provider = _SnapshotRoutingProvider(get_llm_provider(profile), model_snapshot, actor)
                 temporary = KnowledgeDocument(
                     id=document_id,
                     title=_document_title(source_path, content),
@@ -642,6 +665,8 @@ def route_markdown_knowledge_job(
             artifact = db.get(Artifact, artifact_id)
             if not artifact:
                 raise ValueError("Markdown routing artifact was deleted")
+            if reasoning_owner == "platform_llm":
+                _require_routing_snapshot(db, model_snapshot, actor)
             document = _publish_document(
                 db,
                 artifact=artifact,

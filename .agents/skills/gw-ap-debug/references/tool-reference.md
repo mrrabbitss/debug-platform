@@ -44,12 +44,25 @@ server prefix.
 
 | Tool | Purpose | Boundary |
 |---|---|---|
-| `debug_get_knowledge_routing_context` | Read active leaf categories and bounded masked excerpts for one to twenty staged Markdown documents. | Read-only; ADMIN only; requires explicit approval for the current host model to receive the excerpts; backend chat calls remain zero. |
-| `debug_apply_knowledge_routing` | Atomically apply one host-model category decision per staged document. | Write-capable; ADMIN only; validates category allowlist, lock version, and content hash; creates a revision but leaves every document inactive and DRAFT. |
+| `debug_get_knowledge_routing_context` | Read active leaf categories and bounded masked excerpts for one to twenty staged Markdown documents. | Read-only; ADMIN/EXPERT; requires user authorization for the current host model to receive excerpts, including approval already given; backend chat calls remain zero. |
+| `debug_read_knowledge_sections` | Read complete masked Markdown in bounded pages fixed to its content hash. | Read-only; ENGINEER/VIEWER read published visible knowledge, while ADMIN/EXPERT may also read drafts within their authorized scope; retain section IDs and follow every page. |
+| `debug_apply_knowledge_routing` | Atomically apply one host-model category decision per staged document. | Write-capable; ADMIN/EXPERT; validates category allowlist, lock version, and content hash; creates a revision but leaves every document inactive and DRAFT. |
 
 Stage complete Markdown files with `scripts/upload-knowledge-markdown.ps1`, not
 an MCP argument. Read [knowledge-routing.md](knowledge-routing.md) before using
 these tools. Do not mix the Web platform-model route with the host-CLI route.
+
+The catalog remains 18 tools. Ordinary knowledge uploads, private draft changes,
+AI case extraction, and submitted Skill amendments use Web/REST. ADMIN/EXPERT
+reviewers may revise and approve submitted contributions; only these roles directly
+manage mandatory Skills and publication. Legacy VIEWER remains read-only for
+cases/knowledge and may choose a visible model in settings. No MCP tool bypasses
+ownership or publication review.
+
+Platform Chat profiles accept valid HTTP(S) Base URLs and proxies without a
+hostname allowlist or private-address opt-in. User egress authorization, TLS,
+managed-sidecar identity, and private-profile isolation still apply. Host tools
+continue to use the current CLI reasoner and make zero backend generative calls.
 
 Method/evidence calls are domain-read operations, but the server treats them as
 run-state writes because they append CAS-protected receipts, evidence allowlist

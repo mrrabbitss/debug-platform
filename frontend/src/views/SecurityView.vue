@@ -43,6 +43,7 @@ const userForm = reactive({
 const tokenForm = reactive({ name: 'replacement', expires_days: 90 })
 
 const isAdmin = computed(() => principal.value?.role === 'ADMIN')
+const canReadAudit = computed(() => ['ADMIN', 'EXPERT'].includes(principal.value?.role || ''))
 
 function errorMessage(error: any, fallback: string) {
   return error?.response?.data?.detail || error?.message || fallback
@@ -57,12 +58,9 @@ async function loadIdentity(showSuccess = false) {
   loading.value = true
   try {
     principal.value = (await api.get('/system/me')).data
+    users.value = []; auditEvents.value = []; systemStatus.value = null
     if (isAdmin.value) await Promise.all([loadUsers(), loadAudit(), loadSystemStatus()])
-    else {
-      users.value = []
-      auditEvents.value = []
-      systemStatus.value = null
-    }
+    else if (canReadAudit.value) await loadAudit()
     if (showSuccess) ElMessage.success('凭据验证成功')
   } catch (error: any) {
     principal.value = null
@@ -91,10 +89,12 @@ async function clearCredential() {
 }
 
 async function loadUsers() {
+  if (!isAdmin.value) return
   users.value = (await api.get('/system/users')).data
 }
 
 async function createUser() {
+  if (!isAdmin.value) return
   if (!userForm.username.trim() || !userForm.display_name.trim()) {
     return ElMessage.warning('请填写用户名和显示名称')
   }
@@ -114,6 +114,7 @@ async function createUser() {
 }
 
 async function updateUser(user: UserAccount, changes: Partial<Pick<UserAccount, 'role' | 'active'>>) {
+  if (!isAdmin.value) return
   try {
     await api.patch(`/system/users/${user.id}`, changes)
     ElMessage.success('用户已更新')
@@ -125,6 +126,7 @@ async function updateUser(user: UserAccount, changes: Partial<Pick<UserAccount, 
 }
 
 async function openTokens(user: UserAccount) {
+  if (!isAdmin.value) return
   selectedUser.value = user
   tokenDialogVisible.value = true
   await loadTokens()
@@ -136,7 +138,7 @@ async function loadTokens() {
 }
 
 async function issueToken() {
-  if (!selectedUser.value) return
+  if (!isAdmin.value || !selectedUser.value) return
   try {
     const { data } = await api.post(
       `/system/users/${selectedUser.value.id}/tokens`,
@@ -150,7 +152,7 @@ async function issueToken() {
 }
 
 async function revokeToken(token: AccessTokenInfo) {
-  if (!selectedUser.value) return
+  if (!isAdmin.value || !selectedUser.value) return
   try {
     await ElMessageBox.confirm(`确认撤销令牌 ${token.token_hint}？`, '撤销访问令牌', {
       type: 'warning'
@@ -267,7 +269,7 @@ onMounted(async () => {
       <p class="muted">凭据只保存在当前浏览器的 localStorage，并通过 {{ authInfo?.token_header || 'X-API-Key' }} 请求头发送；服务端只保存个人令牌的 SHA-256 摘要。</p>
     </el-card>
 
-    <template v-if="isAdmin">
+    <template v-if="canReadAudit">
       <el-card v-if="systemStatus" style="margin-bottom:16px">
         <template #header>
           <div class="toolbar" style="margin-bottom:0">
@@ -284,7 +286,7 @@ onMounted(async () => {
         </div>
       </el-card>
 
-      <el-card style="margin-bottom:16px">
+      <el-card v-if="isAdmin" style="margin-bottom:16px">
         <template #header>
           <div class="toolbar" style="margin-bottom:0">
             <span style="margin-right:auto">用户与角色</span>
@@ -303,6 +305,7 @@ onMounted(async () => {
                 @change="(value: UserRole) => updateUser(scope.row as UserAccount, { role: value })"
               >
                 <el-option label="管理员" value="ADMIN" />
+                <el-option label="专家" value="EXPERT" />
                 <el-option label="工程师" value="ENGINEER" />
                 <el-option label="只读用户" value="VIEWER" />
               </el-select>
@@ -355,15 +358,16 @@ onMounted(async () => {
       </el-card>
     </template>
 
-    <el-empty v-else-if="principal" description="当前角色可查看身份，但用户和审计管理仅对管理员开放。" />
+    <el-empty v-else-if="principal" description="当前角色可查看身份。系统审计仅对专家和管理员开放。" />
 
-    <el-dialog v-model="userDialogVisible" title="新建用户" width="560px">
+    <el-dialog v-if="isAdmin" v-model="userDialogVisible" title="新建用户" width="560px">
       <el-form label-width="110px">
         <el-form-item label="用户名"><el-input v-model="userForm.username" /></el-form-item>
         <el-form-item label="显示名称"><el-input v-model="userForm.display_name" /></el-form-item>
         <el-form-item label="角色">
           <el-select v-model="userForm.role" class="full-width">
             <el-option label="管理员" value="ADMIN" />
+            <el-option label="专家" value="EXPERT" />
             <el-option label="工程师" value="ENGINEER" />
             <el-option label="只读用户" value="VIEWER" />
           </el-select>

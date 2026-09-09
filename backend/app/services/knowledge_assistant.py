@@ -1,8 +1,8 @@
 """Durable server Chat knowledge assistant; model output only creates reviewable drafts."""
 from app.core.db import SessionLocal
-from app.core.utils import json_dumps, json_loads
+from app.core.utils import json_dumps
 from app.models import Job
-from app.services.assistant_state import locked_session, claim_worker, require_worker, release_generation
+from app.services.assistant_state import locked_session, claim_worker, release_generation
 from app.services.assistant_runtime import Runtime, RunPaused
 from app.services.assistant_controller import plan
 from app.services.jobs import JobCancelledError, JobLeaseLostError
@@ -13,11 +13,14 @@ def finish_interrupted(runtime, error):
     with SessionLocal() as db:
         row, value = locked_session(db, runtime.session_id)
         job = db.get(Job, value.get("job_id")) if value.get("job_id") else None
+        attempt = getattr(runtime.ctx, "assistant_attempt", None)
+        worker_matches = (job and job.attempt == attempt and value.get("worker_token") ==
+                          getattr(runtime.ctx, "assistant_token", None)) if attempt is not None else (
+                              not value.get("worker_token") or (job and value.get("worker_attempt") != job.attempt))
         if (value.get("request_version") != runtime.version or value.get("status") != "READING"
                 or not job or job.id != runtime.ctx.job_id
                 or job.lease_owner != getattr(runtime.ctx, "lease_owner", None)
-                or job.attempt != getattr(runtime.ctx, "assistant_attempt", None)
-                or value.get("worker_token") != getattr(runtime.ctx, "assistant_token", None)):
+                or not worker_matches):
             return
         if job.status not in {"RUNNING", "CANCEL_REQUESTED", "CANCELLED"} or isinstance(error, JobLeaseLostError):
             return

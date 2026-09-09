@@ -8,7 +8,7 @@ from app.core.db import SessionLocal
 from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import (KnowledgeChunk, KnowledgeDocument, KnowledgeDraft, KnowledgeEmbedding,
                         KnowledgeGraphState, KnowledgePublication, ModelProfile)
-from app.services.jobs import JobContext
+from app.services.jobs import JobContext, JobLeaseLostError
 from app.services.knowledge import chunk_document
 from app.services.knowledge_governance import create_document_revision
 from app.services.knowledge_graph import _source_signature
@@ -17,6 +17,69 @@ from app.services.knowledge_taxonomy import set_document_category
 from app.services.knowledge_visibility import current_chunk_clause
 from app.services.model_profiles import get_active_model_profile
 from app.services.retrieval_models import index_embeddings
+
+
+def enqueue_publication(db, document, draft, reviewer):
+    """Queue a legacy reviewed draft in its caller's transaction; does not commit."""
+    from app.models import AuditEvent, Job
+    from app.services.assistant_state import require_admin_actor
+    require_admin_actor(db, reviewer)
+    if draft.document_id != document.id or draft.status != "IN_REVIEW" or draft.base_version != document.version:
+        raise ValueError("Only the current reviewed proposal may be queued")
+    snapshot_hash = hashlib.sha256(draft.snapshot_json.encode()).hexdigest()
+    previous = db.get(Job, draft.publication_job_id) if draft.publication_job_id else None
+    if previous and previous.status in {"QUEUED", "RUNNING"}:
+        data = json_loads(previous.input_json, {})
+        if data.get("_approval_snapshot_sha256") == snapshot_hash and data.get("reviewer") == reviewer:
+            return previous
+        raise ValueError("Another exact proposal is already queued")
+    job = Job(id=new_id("JOB"), kind="publish_knowledge_revision", status="QUEUED", available_at=utcnow(),
+              max_attempts=3, timeout_seconds=1800)
+    db.add(job)
+    draft.publication_job_id, draft.reviewed_by = job.id, reviewer
+    db.flush()
+    data = {"document_id": document.id, "draft_id": draft.id, "draft_version": draft.version,
+        "reviewer": reviewer, "_approval_snapshot_sha256": snapshot_hash, "_approval_draft_version": draft.version}
+    job.input_json = json_dumps(data)
+    job.idempotency_key = f"knowledge:{draft.id}:{draft.version}:{snapshot_hash}"
+    db.add(AuditEvent(id=new_id("AUD"), actor_id=reviewer, actor_type="user", action="knowledge.publication.approve",
+        resource_type="knowledge_document", resource_id=document.id, details_json=json_dumps({"draft_id": draft.id,
+            "version": draft.version, "snapshot_hash": snapshot_hash, "job_id": job.id, "content_recorded": False})))
+    db.flush()
+    return job
+
+
+def _resume_exact_approval(db, ctx, draft, reviewer, draft_version):
+    """Lifecycle status changes may advance a draft version without changing reviewed bytes."""
+    from app.models import Job
+    from app.services.assistant_state import require_admin_actor
+    job = db.get(Job, getattr(ctx, "job_id", None)) if getattr(ctx, "job_id", None) else None
+    data = json_loads(job.input_json, {}) if job else {}
+    approved_hash = data.get("_approval_snapshot_sha256")
+    if not approved_hash:
+        return draft_version
+    if job.status != "RUNNING" or (getattr(ctx, "lease_owner", None) and ctx.lease_owner != job.lease_owner):
+        raise JobLeaseLostError("Knowledge publication no longer owns the job lease")
+    require_admin_actor(db, reviewer)
+    if (not draft or draft.reviewed_by != reviewer or data.get("reviewer") != reviewer
+            or hashlib.sha256(draft.snapshot_json.encode()).hexdigest() != approved_hash):
+        raise ValueError("The exact reviewed draft approval is no longer valid")
+    if draft.publication_job_id != job.id:
+        previous = db.get(Job, draft.publication_job_id) if draft.publication_job_id else None
+        if (not previous or data.get("_retry_of_job_id") != previous.id
+                or previous.status not in {"FAILED", "DEAD_LETTER", "CANCELLED"}):
+            raise ValueError("The draft is now owned by a different publication job")
+        draft.publication_job_id = job.id
+    if draft.status in {"BUILDING", "FAILED"}:
+        state = db.get(KnowledgeGraphState, "domain")
+        if state and state.building_generation_id == draft.building_generation_id:
+            state.building_generation_id = None
+            state.status = "STALE" if state.active_generation_id else "NOT_BUILT"
+        draft.status, draft.building_generation_id = "IN_REVIEW", None
+        db.flush()
+        data["draft_version"] = draft.version
+        job.input_json = json_dumps(data)
+    return draft.version
 
 
 def active_documents(db):
@@ -36,6 +99,19 @@ def require_publishable_proposal(draft, document, document_id, draft_version):
     return first_publication
 
 
+def _assert_publication_approval(db, ctx, draft, reviewer):
+    from app.models import Job
+    from app.services.assistant_state import require_admin_actor
+    job_id = getattr(ctx, "job_id", None)
+    job = db.get(Job, job_id) if job_id else None
+    data = json_loads(job.input_json, {}) if job else {}
+    approved_hash = data.get("_approval_snapshot_sha256")
+    if approved_hash:
+        require_admin_actor(db, reviewer)
+        if not draft or hashlib.sha256(draft.snapshot_json.encode()).hexdigest() != approved_hash or draft.reviewed_by != reviewer:
+            raise ValueError("Knowledge draft approval changed during publication")
+
+
 def publication_job(ctx: JobContext, document_id: str, draft_id: str, draft_version: int, reviewer: str) -> dict:
     graph_id = new_id("KGEN")
     build_version = None
@@ -43,6 +119,7 @@ def publication_job(ctx: JobContext, document_id: str, draft_id: str, draft_vers
         with SessionLocal() as db:
             draft = db.get(KnowledgeDraft, draft_id)
             document = db.get(KnowledgeDocument, document_id)
+            draft_version = _resume_exact_approval(db, ctx, draft, reviewer, draft_version)
             first_publication = require_publishable_proposal(draft, document, document_id, draft_version)
             documents = active_documents(db)
             signature = _source_signature(documents)
@@ -126,6 +203,7 @@ def publication_job(ctx: JobContext, document_id: str, draft_id: str, draft_vers
             document = db.get(KnowledgeDocument, document_id)
             profile = get_active_model_profile("embedding", db)
             graph_state = db.get(KnowledgeGraphState, "domain")
+            _assert_publication_approval(db, ctx, draft, reviewer)
             if (not draft or draft.version != build_version or draft.status != "BUILDING"
                     or not document or document.version != old_version or document.lock_version != old_lock
                     or _source_signature(active_documents(db)) != signature):

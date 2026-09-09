@@ -70,7 +70,7 @@ const availableMemberUsers = computed(() => {
   const assigned = new Set(caseMembers.value.map(item => item.user_id))
   return memberDirectory.value.filter(item => item.id !== caseInfo.value?.owner_id && !assigned.has(item.id))
 })
-const canSubmitResult = computed(() => principal.value?.role === 'ADMIN' || (principal.value?.role === 'ENGINEER' && caseAccess.value?.permission === 'OWNER'))
+const canSubmitResult = computed(() => ['ADMIN', 'EXPERT'].includes(principal.value?.role || '') || (principal.value?.role === 'ENGINEER' && caseAccess.value?.permission === 'OWNER'))
 const jobRunning = computed(() => !!currentJob.value && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(currentJob.value.status))
 const synthesisStatus = computed(() => diagnosis.value.synthesis_status || null)
 const synthesisFailure = computed(() => synthesisStatus.value?.failure || null)
@@ -496,7 +496,7 @@ onBeforeUnmount(() => {
     <el-tabs v-model="activeTab" type="border-card" @tab-change="handleTabChange">
       <el-tab-pane label="案例概览" name="overview">
         <div class="case-journey" aria-label="定位流程"><span :class="{done:artifacts.length}">1 · 上传问题日志</span><span :class="{done:latestAnalysis}">2 · 诊断与核对</span><span>3 · 报告与知识沉淀</span></div>
-        <CaseOptionsPanel :case-info="caseInfo" :can-edit="canEditCase" :categories="caseCategories" :models="config.models" @updated="value => caseInfo=value" />
+        <CaseOptionsPanel :case-info="caseInfo" :can-edit="canEditCase" :categories="caseCategories" :models="config.models" :selected-model-id="config.model_selection?.profile_id" :model-selection-error="config.model_selection?.error" @updated="value => caseInfo=value" />
         <el-card shadow="never" style="margin:14px 0">
           <div class="toolbar">
             <div style="margin-right:auto">
@@ -583,6 +583,7 @@ onBeforeUnmount(() => {
       </el-tab-pane>
 
       <el-tab-pane label="综合诊断" name="diagnosis">
+        <el-alert v-if="diagnosis.diagnostic_planning?.method_coverage?.skill_status?.warning" :title="diagnosis.diagnostic_planning.method_coverage.skill_status.warning" type="warning" show-icon :closable="false" class="inline-alert" data-testid="diagnosis-skill-warning" />
         <details v-if="latestAnalysisWithTrace?.agent_run_id" class="technical-details"><summary>技术轨迹与执行记录</summary>
         <PlanningTracePanel
           v-if="latestAnalysisWithTrace?.agent_run_id"
@@ -645,7 +646,7 @@ onBeforeUnmount(() => {
         <div class="toolbar">
           <input type="file" accept=".zip,.tar,.gz,.tgz,.bundle" :disabled="!canEditCase" @change="(e:any) => repoFile = e.target.files?.[0] || null"/>
           <el-button type="primary" :disabled="!canEditCase" @click="uploadRepo">上传代码仓库</el-button>
-          <router-link v-if="principal?.role==='ADMIN'" :to="{ path: '/admin/cognitive-search', query: { case: caseId } }">
+          <router-link v-if="['ADMIN','EXPERT'].includes(principal?.role || '')" :to="{ path: '/admin/cognitive-search', query: { case: caseId } }">
             <el-button>打开认知检索</el-button>
           </router-link>
         </div>

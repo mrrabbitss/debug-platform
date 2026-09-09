@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 from app.core.db import get_db
@@ -36,7 +35,12 @@ from app.services.access_control import issue_access_token
 from app.services.audit import record_audit_event
 from app.services.health import readiness_report
 from app.services.knowledge_graph import domain_graph_status
-from app.services.llm import LLMError, get_active_chat_model_info, get_llm_provider
+from app.services.model_access import (
+    ModelAccessError, can_manage_model, change_model_visibility, create_model_access, model_profile_payload,
+    require_model_identity, require_model_profile, require_shared_model_default,
+    resolve_user_chat_profile, visible_model_clause,
+)
+from app.services.model_transport import safe_model_connection_error
 from app.services.model_profiles import (
     COMPATIBLE_CHAT_PROVIDERS,
     MANAGED_LOCAL_PROVIDER,
@@ -49,13 +53,9 @@ from app.services.model_profiles import (
     set_profile_api_key,
     set_profile_proxy_url,
     validate_model_profile,
+    test_profile_connection,
 )
-from app.services.retrieval_models import (
-    RetrievalModelError,
-    embed_texts,
-    embedding_index_status,
-    rerank_documents,
-)
+from app.services.retrieval_models import embedding_index_status
 
 
 router = APIRouter(tags=["system"])
@@ -310,19 +310,22 @@ def revoke_user_token(user_id: str, token_id: str, request: Request, db: Db) -> 
 
 
 @router.get("/system/model")
-def model_config(db: Db) -> dict:
-    profile = get_active_model_profile("chat", db)
-    info = get_active_chat_model_info()
+def model_config(request: Request, db: Db) -> dict:
+    profile = _user_chat_profile(request, db)
+    info = model_profile_payload(db, request.state.principal, profile)
     proxy_enabled = profile_uses_proxy(profile)
     return {
-        "profile_id": info["profile_id"],
-        "profile_name": info["profile_name"],
+        "profile_id": profile.id,
+        "profile_name": profile.name,
         "provider": info["provider"],
         "base_url_configured": bool(profile and profile.base_url),
         "api_key_configured": bool(profile and profile.api_key_ciphertext),
         "proxy_url_configured": proxy_enabled,
         "certificate_revocation_check_skipped": proxy_enabled,
-        "model": info["model"],
+        "model": profile.model_name,
+        "owner_id": info["owner_id"],
+        "visibility": info["visibility"],
+        "can_manage": info["can_manage"],
         "compatible_providers": list(COMPATIBLE_CHAT_PROVIDERS),
     }
 
@@ -364,22 +367,38 @@ def list_audit_events(
 
 
 @router.post("/system/model/test")
-async def test_active_model(db: Db) -> dict:
-    profile = get_active_model_profile("chat", db)
-    if not profile:
-        raise HTTPException(409, "No active chat model")
-    return await test_model_profile(profile.id, db)
+async def test_active_model(request: Request, db: Db) -> dict:
+    profile = _user_chat_profile(request, db)
+    return await test_model_profile(profile.id, request, db)
+
+
+def _user_chat_profile(request: Request, db: Session) -> ModelProfile:
+    try:
+        return resolve_user_chat_profile(db, getattr(request.state, "principal", {}))
+    except ModelAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+def _visible_profile(request: Request, db: Session, profile_id: str, *, manage=False) -> ModelProfile:
+    try:
+        return require_model_profile(db, getattr(request.state, "principal", {}), profile_id, manage=manage)
+    except ModelAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
 
 
 @router.get("/system/models", response_model=list[ModelProfileOut])
 def list_model_profiles(
+    request: Request,
     db: Db,
     task_type: str | None = Query(
         default=None,
         pattern="^(chat|embedding|reranker)$",
     ),
 ) -> list[dict]:
-    query = select(ModelProfile)
+    try:
+        query = select(ModelProfile).where(visible_model_clause(getattr(request.state, "principal", {})))
+    except ModelAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     if task_type:
         query = query.where(ModelProfile.task_type == task_type)
     profiles = list(db.scalars(
@@ -389,12 +408,18 @@ def list_model_profiles(
             ModelProfile.name,
         )
     ).all())
-    return [model_profile_to_dict(profile) for profile in profiles]
+    return [model_profile_payload(db, request.state.principal, profile) for profile in profiles]
+
+
+@router.get("/system/models/{profile_id}", response_model=ModelProfileOut)
+def read_model_profile(profile_id: str, request: Request, db: Db) -> dict:
+    return model_profile_payload(db, request.state.principal, _visible_profile(request, db, profile_id))
 
 
 @router.post("/system/models", response_model=ModelProfileOut)
-def create_model_profile(payload: ModelProfileCreate, db: Db) -> dict:
+def create_model_profile(payload: ModelProfileCreate, request: Request, db: Db) -> dict:
     try:
+        identity = require_model_identity(getattr(request.state, "principal", {}))
         validate_model_profile(
             payload.task_type,
             payload.mode,
@@ -404,7 +429,7 @@ def create_model_profile(payload: ModelProfileCreate, db: Db) -> dict:
             payload.proxy_url,
         )
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(getattr(exc, "status_code", 400), str(exc)) from exc
     profile = ModelProfile(
         id=new_model_profile_id(),
         name=payload.name,
@@ -417,27 +442,40 @@ def create_model_profile(payload: ModelProfileCreate, db: Db) -> dict:
         enabled=payload.enabled,
         is_active=False,
     )
+    try:
+        create_model_access(db, identity, profile, payload.visibility)
+    except ModelAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     set_profile_api_key(profile, payload.api_key)
     try:
         set_profile_proxy_url(profile, payload.proxy_url)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     db.add(profile)
+    db.flush([profile])
     db.commit()
     db.refresh(profile)
-    return model_profile_to_dict(profile)
+    return model_profile_payload(db, identity, profile)
 
 
 @router.patch("/system/models/{profile_id}", response_model=ModelProfileOut)
 def update_model_profile(
     profile_id: str,
     payload: ModelProfileUpdate,
+    request: Request,
     db: Db,
 ) -> dict:
-    profile = db.get(ModelProfile, profile_id)
-    if not profile:
-        raise HTTPException(404, "Model profile not found")
+    profile = _visible_profile(request, db, profile_id, manage=True)
     values = payload.model_dump(exclude_unset=True)
+    try:
+        change_model_visibility(db, request.state.principal, profile, values.pop("visibility", None))
+    except ModelAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    if any(values.get(key, "present") is None for key in ("name", "mode", "provider", "model_name", "enabled")):
+        raise HTTPException(422, "Model name, mode, provider and enabled state cannot be null")
+    if profile.task_type == "chat" and request.state.principal["role"] not in {"ADMIN", "EXPERT"}:
+        if values.get("mode", profile.mode) != "api" or values.get("provider", profile.provider) != "openai_compatible":
+            raise HTTPException(422, "Personal Chat profiles must use an OpenAI-compatible API")
     if profile.provider == MANAGED_LOCAL_PROVIDER or values.get("provider") == MANAGED_LOCAL_PROVIDER:
         raise HTTPException(409, "Bundled llama.cpp profiles are managed by the launcher")
     api_key = values.pop("api_key", None)
@@ -499,14 +537,12 @@ def update_model_profile(
         profile.active_embedding_generation_id = None
     db.commit()
     db.refresh(profile)
-    return model_profile_to_dict(profile)
+    return model_profile_payload(db, request.state.principal, profile)
 
 
 @router.delete("/system/models/{profile_id}")
-def delete_model_profile(profile_id: str, db: Db) -> dict:
-    profile = db.get(ModelProfile, profile_id)
-    if not profile:
-        raise HTTPException(404, "Model profile not found")
+def delete_model_profile(profile_id: str, request: Request, db: Db) -> dict:
+    profile = _visible_profile(request, db, profile_id, manage=True)
     if profile.is_active:
         raise HTTPException(409, "Activate another profile before deleting this one")
     if profile.provider == MANAGED_LOCAL_PROVIDER or json_loads(profile.config_json, {}).get("builtin"):
@@ -520,72 +556,31 @@ def delete_model_profile(profile_id: str, db: Db) -> dict:
 
 
 @router.post("/system/models/{profile_id}/activate")
-def activate_selected_model(profile_id: str, db: Db) -> dict:
-    profile = db.get(ModelProfile, profile_id)
-    if not profile:
-        raise HTTPException(404, "Model profile not found")
+def activate_selected_model(profile_id: str, request: Request, db: Db) -> dict:
+    profile = _visible_profile(request, db, profile_id, manage=True)
     try:
+        require_shared_model_default(db, request.state.principal, profile)
         activate_model_profile(db, profile)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(getattr(exc, "status_code", 400), str(exc)) from exc
     db.refresh(profile)
     return {
-        "profile": model_profile_to_dict(profile),
+        "profile": model_profile_payload(db, request.state.principal, profile),
         "requires_reindex": profile.task_type == "embedding",
     }
 
 
 @router.post("/system/models/{profile_id}/test")
-async def test_model_profile(profile_id: str, db: Db) -> dict:
-    profile = db.get(ModelProfile, profile_id)
-    if not profile:
-        raise HTTPException(404, "Model profile not found")
+async def test_model_profile(profile_id: str, request: Request, db: Db) -> dict:
+    profile = _visible_profile(request, db, profile_id)
+    if not profile.enabled and not can_manage_model(db, request.state.principal, profile):
+        raise HTTPException(409, "This shared model is disabled")
+    if profile.task_type != "chat" and request.state.principal["role"] != "ADMIN":
+        raise HTTPException(403, "Only administrators may test global retrieval configuration")
     try:
-        if profile.task_type == "chat":
-            provider = get_llm_provider(profile)
-            text = await provider.generate_text(
-                "你是连接测试助手。",
-                "仅回复 MODEL_CONNECTION_OK",
-                purpose="connection_test",
-            )
-            return {
-                "ok": provider.is_mock or "MODEL_CONNECTION_OK" in text,
-                "response": text[:500],
-                "model": provider.model_name,
-                "proxy_url_configured": getattr(provider, "proxy_configured", False),
-            }
-        if profile.task_type == "embedding":
-            vectors = await run_in_threadpool(
-                lambda: embed_texts(
-                    profile,
-                    ["GW 无法上线", "AP 认证失败"],
-                    purpose="connection_test",
-                )
-            )
-            dimension = len(vectors[0]) if vectors else 0
-            return {
-                "ok": bool(dimension),
-                "dimension": dimension,
-                "vectors": len(vectors),
-            }
-        ranking = await run_in_threadpool(
-            lambda: rerank_documents(
-                "AP 认证失败如何排查",
-                ["检查 EAP 和四次握手日志", "查询设备外壳颜色"],
-                2,
-                profile,
-                purpose="connection_test",
-            )
-        )
-        return {
-            "ok": ranking is None or bool(ranking),
-            "ranking": ranking or [],
-            "disabled": ranking is None,
-        }
-    except (LLMError, RetrievalModelError, ValueError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        return await test_profile_connection(profile)
     except Exception as exc:
-        raise HTTPException(502, f"Model connection failed: {exc}") from exc
+        raise HTTPException(502, safe_model_connection_error(exc, proxy_configured=profile_uses_proxy(profile))) from exc
 
 
 @router.get("/system/retrieval")

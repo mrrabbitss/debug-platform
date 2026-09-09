@@ -9,7 +9,11 @@ from sqlalchemy.orm.exc import StaleDataError
 from app.core.utils import json_dumps, json_loads
 from app.models import KnowledgeDocument, ModelProfile
 from app.workbench_models import WorkbenchRecord
-from app.services.workbench import categories, KNOWLEDGE_ROLES, knowledge_scope, make_record, record_payload, template_snapshot
+from app.services.workbench import categories, KNOWLEDGE_ROLES, knowledge_scope, make_record, record_payload
+from app.services.problem_categories import categories_with_status, change_category
+from app.services.model_access import (
+    ModelAccessError, model_profile_payload, require_model_identity, resolve_user_chat_profile, visible_model_clause,
+)
 
 router = APIRouter(prefix="/workbench", tags=["workbench"])
 Db = Annotated[Session, Depends(get_db)]
@@ -21,32 +25,43 @@ def principal(request):
 
 def admin(request):
     identity = principal(request)
-    if identity.get("role") != "ADMIN":
-        raise HTTPException(403, "仅管理员可执行此操作")
+    if identity.get("role") not in {"ADMIN", "EXPERT"}:
+        raise HTTPException(403, "仅管理员或专家可执行此操作")
     return identity
 
 
 class Preferences(BaseModel):
-    chat_profile_id: str | None = None
+    chat_profile_id: str | None = Field(default=None, max_length=40)
 
 
 @router.get("/bootstrap")
 def bootstrap(request: Request, db: Db):
     identity = principal(request)
+    try:
+        require_model_identity(identity)
+    except ModelAccessError as error:
+        raise HTTPException(error.status_code, str(error)) from error
     pref = db.get(WorkbenchRecord, "pref-" + str(identity.get("id", "local")))
-    return {"principal": identity, "categories": categories(db), "knowledge_roles": KNOWLEDGE_ROLES,
+    try:
+        selection = {"profile_id": resolve_user_chat_profile(db, identity).id, "error": None}
+    except ModelAccessError as error:
+        selection = {"profile_id": None, "error": str(error)}
+    return {"principal": identity, "categories": categories_with_status(db), "knowledge_roles": KNOWLEDGE_ROLES,
             "preferences": json_loads(pref.payload_json, {}) if pref else {},
-            "models": [{"id": row.id, "name": row.name, "active": row.is_active} for row in db.scalars(
-                select(ModelProfile).where(ModelProfile.task_type == "chat", ModelProfile.enabled.is_(True), ModelProfile.provider != "mock"))]}
+            "model_selection": selection,
+            "models": [{**model_profile_payload(db, identity, row), "active": row.is_active} for row in db.scalars(
+                select(ModelProfile).where(ModelProfile.task_type == "chat", ModelProfile.enabled.is_(True),
+                    visible_model_clause(identity)).order_by(ModelProfile.is_active.desc(), ModelProfile.name))]}
 
 
 @router.put("/preferences")
 def preferences(payload: Preferences, request: Request, db: Db):
     from app.services.workbench import validate_case_options
     try:
-        validate_case_options(db, payload.model_dump())
+        require_model_identity(principal(request))
+        validate_case_options(db, payload.model_dump(), principal=principal(request))
     except ValueError as error:
-        raise HTTPException(422, str(error)) from error
+        raise HTTPException(getattr(error, "status_code", 422), str(error)) from error
     key = "pref-" + str(principal(request).get("id", "local"))
     row = db.get(WorkbenchRecord, key)
     if row is None:
@@ -61,6 +76,14 @@ class CategoryInput(BaseModel):
     name: str = Field(min_length=1, max_length=60)
 
 
+class CategoryVersion(BaseModel):
+    version: int = Field(ge=1)
+
+
+class CategoryUpdate(CategoryInput, CategoryVersion):
+    pass
+
+
 class TemplateChoice(BaseModel):
     document_id: str
     version: int
@@ -68,6 +91,7 @@ class TemplateChoice(BaseModel):
 
 @router.put("/templates/{category_id}")
 def choose_template(category_id: str, payload: TemplateChoice, request: Request, db: Db):
+    from app.services.knowledge_access import knowledge_kind
     identity = admin(request)
     doc = db.get(KnowledgeDocument, payload.document_id)
     if (not doc or not doc.active or doc.review_status != "ACTIVE" or doc.version != payload.version
@@ -75,7 +99,7 @@ def choose_template(category_id: str, payload: TemplateChoice, request: Request,
         raise HTTPException(409, "模板未发布或版本已变化，请刷新")
     if category_id not in {item["id"] for item in categories(db)} or category_id not in knowledge_scope(doc):
         raise HTTPException(422, "模板不属于此问题类别")
-    if json_loads(doc.metadata_json, {}).get("knowledge_role") != "report_template":
+    if knowledge_kind(doc) != "SKILL" or json_loads(doc.metadata_json, {}).get("knowledge_role") != "report_template":
         raise HTTPException(422, "请选择报告格式文档")
     key = "template-" + category_id
     record = db.get(WorkbenchRecord, key)
@@ -90,21 +114,34 @@ def choose_template(category_id: str, payload: TemplateChoice, request: Request,
 @router.post("/categories")
 def add_category(payload: CategoryInput, request: Request, db: Db):
     identity = admin(request)
-    payload.name = payload.name.strip()
-    if not payload.name:
-        raise HTTPException(422, "分类名称不能为空")
-    if payload.name in {item["name"] for item in categories(db)}:
-        raise HTTPException(409, "分类名称已存在")
-    row = make_record(db, "problem_category", identity.get("id"), {})
-    row.payload_json = json_dumps({"id": row.id, "name": payload.name})
-    db.commit()
-    return {"id": row.id, "name": payload.name}
+    return save_category(db, identity, name=payload.name)
+
+
+def save_category(db, identity, **changes):
+    try:
+        result = change_category(db, identity.get("id"), **changes)
+        db.commit()
+        return result
+    except (ValueError, StaleDataError) as error:
+        db.rollback()
+        raise HTTPException(409, str(error)) from error
+
+
+@router.patch("/categories/{category_id}")
+def rename_category(category_id: str, payload: CategoryUpdate, request: Request, db: Db):
+    return save_category(db, admin(request), category_id=category_id, version=payload.version, name=payload.name)
+
+
+@router.delete("/categories/{category_id}")
+def delete_category(category_id: str, payload: CategoryVersion, request: Request, db: Db):
+    return save_category(db, admin(request), category_id=category_id, version=payload.version, deactivate=True)
 
 
 @router.get("/knowledge")
 def knowledge(request: Request, db: Db):
-    from app.services.knowledge_access import visible_knowledge_clause
-    rows = db.scalars(select(KnowledgeDocument).where(visible_knowledge_clause(principal(request))))
+    from app.services.knowledge_access import visible_knowledge_clause, knowledge_kind
+    rows = db.scalars(select(KnowledgeDocument).where(visible_knowledge_clause(principal(request)),
+        KnowledgeDocument.active.is_(True), KnowledgeDocument.review_status == "ACTIVE"))
     result = []
     for row in rows:
         metadata = json_loads(row.metadata_json, {})
@@ -112,10 +149,8 @@ def knowledge(request: Request, db: Db):
             "status": row.review_status, "content": row.content, "categories": knowledge_scope(row),
             "role": metadata.get("knowledge_role") or ({"fault_tree": "fault_tree", "analysis_method": "diagnosis"}.get(row.source_type, "log_analysis")),
             "bundle_id": metadata.get("bundle_id"), "source_paths": metadata.get("source_paths", []),
+            "content_kind": knowledge_kind(row), "metadata": metadata,
             "legacy": not bool(metadata.get("problem_categories"))})
-    default = template_snapshot(db, "network")
-    if default["id"] == "builtin-network-report":
-        result.append({**default, "title": "组网问题报告格式", "role": "report_template", "categories": ["network"], "status": "ACTIVE"})
     return result
 
 
@@ -129,7 +164,7 @@ class LibrarySubmission(BaseModel):
 
 @router.post("/library")
 def submit_library(payload: LibrarySubmission, request: Request, db: Db):
-    from app.services.workbench_library import prepare_submission
+    from app.services.workbench_library import prepare_submission, conclusion_contribution
     identity = principal(request)
     try:
         snapshot = prepare_submission(db, identity, payload.model_dump())
@@ -140,15 +175,16 @@ def submit_library(payload: LibrarySubmission, request: Request, db: Db):
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     row = make_record(db, "library", identity.get("id"), snapshot)
+    contribution = conclusion_contribution(db, identity, row.id)
     db.commit()
-    return record_payload(row)
+    return {**record_payload(row), "contribution_id": contribution.id}
 
 
 @router.get("/library")
 def library(request: Request, db: Db):
     identity = principal(request)
     rows = [record_payload(row) for row in db.scalars(select(WorkbenchRecord).where(WorkbenchRecord.kind == "library"))]
-    return [row for row in rows if identity.get("role") == "ADMIN" or row.get("status") == "CONFIRMED" or row["owner_id"] == identity.get("id")]
+    return [row for row in rows if identity.get("role") in {"ADMIN", "EXPERT"} or row.get("status") == "CONFIRMED" or row["owner_id"] == identity.get("id")]
 
 
 class ReviewInput(BaseModel):

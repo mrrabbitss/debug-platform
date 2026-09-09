@@ -23,10 +23,10 @@ def require_enabled() -> None:
 
 
 def engineer_credentials(db: Session, user: UserAccount) -> dict:
-    if not user.active or user.role != "ENGINEER":
+    if not user.active or user.role not in {"ENGINEER", "EXPERT"}:
         raise HTTPException(403, "此识别码不能用于工程师自助登录，请联系管理员")
     _, raw = issue_access_token(db, user, name="trusted-lan-device", expires_days=None)
-    return {"token": raw, "user_id": user.id, "personal_code": user.username, "role": "ENGINEER"}
+    return {"token": raw, "user_id": user.id, "personal_code": user.username, "role": user.role}
 
 
 def enroll_engineer(db: Session, code: str) -> dict:
@@ -50,8 +50,8 @@ def enroll_engineer(db: Session, code: str) -> dict:
 def create_browser_ticket(db: Session, principal: dict) -> dict:
     require_enabled()
     user = db.get(UserAccount, principal.get("id"))
-    if user is None or not user.active or user.role != "ENGINEER":
-        raise HTTPException(403, "仅工程师账号可使用分机网页登录")
+    if user is None or not user.active or user.role not in {"ENGINEER", "EXPERT"}:
+        raise HTTPException(403, "仅工程师或专家账号可使用分机网页登录")
     ticket, raw = issue_access_token(db, user, name=HANDOFF_NAME, expires_days=None)
     ticket.expires_at = utcnow() + timedelta(seconds=60)
     db.commit()

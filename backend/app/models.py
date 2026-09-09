@@ -971,3 +971,5 @@ class AuditEvent(Base):
 from app import diagnostic_models as _diagnostic_models  # noqa: E402, F401
 from app import host_agent_models as _host_agent_models  # noqa: E402, F401
 from app import workbench_models as _workbench_models  # noqa: E402, F401
+from app import model_access_models as _model_access_models  # noqa: E402, F401
+from app import knowledge_contribution_models as _knowledge_contribution_models  # noqa: E402, F401

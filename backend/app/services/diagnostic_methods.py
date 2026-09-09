@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -12,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.models import Case, KnowledgeDocument
 from app.core.utils import json_loads
 from app.services.diagnostic_scope import knowledge_matches_joint_diagnostic_scope
-from app.services.text_files import read_text_file
 
 
 DIAGNOSTIC_SOURCE_TYPES = frozenset({
@@ -59,10 +57,6 @@ _MEANING_HINTS = (
     "meaning",
     "description",
 )
-_LOCAL_METHOD_FILES = {
-    "故障树.md": ("fault_tree", "FAULT_TREE"),
-    "日志分析.md": ("analysis_skill", "LOG_ANALYSIS_METHOD"),
-}
 
 
 @dataclass(frozen=True)
@@ -137,16 +131,13 @@ def load_applicable_diagnostic_methods(
     if case_knowledge.get() is not None:
         from app.services.workbench_snapshot import load_knowledge
         rows, _ = load_knowledge(db, case_knowledge.get())
-    if knowledge_view:
-        from app.services.knowledge_personal import working_documents
-        working = working_documents(db, knowledge_view)
-        replaced = {document.id for document in working}
-        rows = [row for row in rows if row.id not in replaced]
-        rows.extend(row for row in working if row.source_type in DIAGNOSTIC_SOURCE_TYPES)
+    # Working drafts remain ordinary retrieval context. Only the approved,
+    # published Skill generation can supply mandatory diagnostic instructions.
     from app.services.workbench import scope_methods, knowledge_scope, matches_category, case_category
     from app.services.skill_dependencies import expand_bundle_documents, bundle_dependencies
-    available = rows
-    rows = scope_methods([row for row in rows if row.source_type in DIAGNOSTIC_SOURCE_TYPES], case)
+    from app.services.knowledge_access import knowledge_kind
+    available = [row for row in rows if knowledge_kind(row) == "SKILL"]
+    rows = scope_methods(available, case)
     rows = expand_bundle_documents(rows, available)
     result: list[DiagnosticMethodDocument] = []
     for row in rows:
@@ -173,34 +164,9 @@ def load_applicable_diagnostic_methods(
             personal_revision_id=json_loads(row.metadata_json, {}).get("personal_revision_id"),
             bundle_id=metadata.get("bundle_id"), source_paths=metadata.get("source_paths", []),
             dependency_ids=dependencies, unresolved_references=missing, problem_categories=knowledge_scope(row),
-            selection_reason=("对应类别及通用知识不足，或总领Skill明确引用此依赖，补充跨类参考；需核对适用范围"
+            selection_reason=("总领Skill明确引用此跨类依赖；需核对适用范围"
                               if not matches_category(row, category) else None),
         ))
-    known_hashes = {document.content_sha256 for document in result}
-    repository_root = Path(__file__).resolve().parents[3]
-    for filename, (source_type, role) in _LOCAL_METHOD_FILES.items():
-        path = repository_root / filename
-        if not path.is_file():
-            continue
-        decoded = read_text_file(path)
-        if decoded is None:
-            continue
-        content = decoded.replace("\r\n", "\n").replace("\r", "\n")
-        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        if content_hash in known_hashes:
-            continue
-        result.append(DiagnosticMethodDocument(
-            id=f"LOCALDOC-{content_hash[:20]}",
-            title=path.stem,
-            source_type=source_type,
-            version=1,
-            device_type=None,
-            module=None,
-            content=content,
-            content_sha256=content_hash,
-            role=role,
-        ))
-        known_hashes.add(content_hash)
     case_scope = str(case.device_type or "").strip().upper()
     result.sort(key=lambda item: (
         0 if str(item.device_type or "").strip().upper() == case_scope else

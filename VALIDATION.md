@@ -1,6 +1,51 @@
 # Validation Record
 
-## Latest: three-section workbench, 0.4.0 (2026-09-09)
+## Latest: expert roles, model ownership and knowledge collaboration (2026-09-09)
+
+Source branch: `codex/expert-knowledge-iteration`, based on `6523cca`. This is a local source and
+integration delivery; the existing 0.4.0 release artifacts were not replaced. Unrelated local writing
+was preserved. Only new or changed behavior was checked, with previously passed evidence reused;
+no historical suite, Full, External or manual CI run was triggered.
+
+| Checks | Result | Evidence and scope |
+| --- | --- | --- |
+| Model ownership, sharing, selected source, endpoint policy and migration | 48 new cases passed | [model handoff](docs/model-sharing-handoff-20260909.md); synthetic profiles and HTTP transport, no real model requests |
+| Contributions, review AI, exact approval/outbox, private drafts, Markdown model binding and terminal recovery | 62 new cases plus 3 affected checks passed | [knowledge handoff](docs/knowledge-review-handoff-20260909.md); isolated SQLite and real HTTP route boundaries with synthetic identities |
+| External backup, six-file reset, atomic publication and abrupt process exit/recovery | 52 distinct new scenarios passed | [reset handoff](docs/knowledge-reset-handoff-20260909.md); synthetic files, local hashing/graph and subprocess `os._exit(73)` before final commit |
+| Assistant approval recovery and privilege exclusions | 12 new cases passed | `backend/tests/test_expert_publication_recovery.py`; rollback, idempotency, exact approval, stale workers and expert restrictions |
+| Categories, published Skill boundaries and complete model reading receipts | 6 new cases passed | `backend/tests/test_skill_scope_iteration.py`; first built-in rename version defect fixed and the failed target rechecked |
+| Assistant personal model binding and ordinary knowledge type | 5 new cases passed | `backend/tests/test_assistant_model_binding_iteration.py`; configuration/owner changes stop the request, no false READING status or private-profile disclosure |
+| Changed assistant crash/concurrency expectations | 16 selected cases passed | Modified targets in `test_workbench_assistant.py` and `test_workbench_assistant_concurrency.py`; all other historical cases left unrun |
+| Assembled REST category/RBAC integration and promoted expert login | 2 new cases passed | `test_expert_workbench_integration.py`, `test_expert_login_iteration.py`; new category reaches ordinary case creation, same login identity remains EXPERT |
+| Final dispatcher, case review transaction and Windows client integration | 4 new cases passed across targeted runs | `artifacts/validation/expert-iteration-20260909/final-boundaries.xml`, `library-outbox-final.xml`; successful/rollback case submissions, terminal lease reconciliation, real PowerShell with 9 synthetic identity assertions |
+| Frontend typecheck/build and browser scenarios | Build PASS; 26 distinct new browser cases passed | [frontend handoff](docs/frontend-expert-handoff-20260909.md); real production frontend with synthetic HTTP, including 390px layout, expert memory review and no unexpected API/JavaScript errors; one affected compatibility case rechecked |
+| Workflow / OpenAPI / Skill references | 594 final contract assertions, 3 workflow checks and Skill validator passed | 68 declared operations, 48 schemas, unchanged 38 agent REST entrypoints and 18 MCP tools; startup-free export |
+| Repository harness, lint and diff | 24/24 PASS; no new Ruff diagnostics or whitespace errors | 196 Python and 36 Vue architecture boundaries; 76 changed/new Python files clean after removing one unused import. Two old test files retain exactly 28 baseline Ruff diagnostics; checked against HEAD |
+| Actual current-project data and application | Migration, import and restart PASS | [implementation record](docs/expert-knowledge-iteration-20260909.md); external consistent backup, 0016→0024 upgrade, six active Skills, complete dependencies, SQLite integrity and unchanged original business-record hashes |
+
+The first final-boundary batch passed 3/4; only the test's expected HTTP status for the idempotent
+library bridge was wrong (200 versus the existing 201 contract). Correcting that assertion and
+rerunning that one target passed. There are no unresolved failures in the new targeted checks.
+Additional affected single-case checks for full-folder assistant reading and legacy VIEWER model
+selection also passed; they are not counted again as new cases above.
+
+Actual data operations were limited to the current project's `backend/data/gw_ap_debug.db`, after
+validating a consistent external backup and a trial migration on its copy. A single approved reset
+retired four old active documents and published six supplied network Skills, including the report
+format; historical references remain. Original-column hashes for 14 cases, 16 analyses, 28 artifacts
+and 0 standalone reports did not change. The source ZIP, backups and business text remain outside
+the source diff. A new process verified no old seeding, six complete Skill dependencies and the
+network/default report choice. Read-only actual-browser checks covered management, review,
+organizer and model settings; no Chat request was made.
+
+The actual index used the existing local hashing profile. No company Chat API, real semantic
+diagnosis, GGUF throughput, physical power loss, remote PostgreSQL/Qdrant, fresh-machine upgrade
+or new installer was tested. Process-crash durability evidence is narrower than those checks.
+No green CI/merge or release gate is claimed. Historical evidence below retains its original scope.
+The final source diff contains no runtime database, models, ZIP/installer, real private key or model
+credential; the unrelated untracked writing file remains untouched.
+
+## Earlier: three-section workbench, 0.4.0 (2026-09-09)
 
 Only new or changed behavior was checked. Historical passing suites, Full, External and manual CI
 were not rerun, following the user's instruction. The package was built from `release` base

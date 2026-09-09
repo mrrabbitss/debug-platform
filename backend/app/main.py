@@ -1,5 +1,4 @@
 from contextlib import AsyncExitStack, asynccontextmanager
-from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +12,6 @@ from app.core.db import SessionLocal
 from app.core.migrations import run_database_migrations
 from app.core.security import verify_api_key
 from app.mcp.integration import configure_debugplatform_mcp
-from app.services.knowledge import seed_builtin_knowledge
 from app.services.knowledge_taxonomy import assign_uncategorized_documents, seed_knowledge_categories
 from app.services.jobs import job_runner
 from app.services.audit import AuditMiddleware
@@ -29,11 +27,9 @@ from app.services.workbench import WorkbenchConfigurationError
 async def lifespan(app: FastAPI):
     job_runner.start()
     run_database_migrations()
-    seed_dir = Path(__file__).resolve().parent / "seed_knowledge"
     with SessionLocal() as db:
         seed_knowledge_categories(db)
         seed_model_profiles(db)
-        seed_builtin_knowledge(db, seed_dir)
         assign_uncategorized_documents(db)
         ensure_builtin_embedding_index(db)
     job_runner.resume_incomplete()

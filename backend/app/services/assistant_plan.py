@@ -2,7 +2,7 @@
 from difflib import unified_diff
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from app.core.utils import json_loads, new_id
+from app.core.utils import new_id
 from app.models import KnowledgeDocument
 from app.services.workbench import categories
 from app.services.assistant_state import digest
@@ -33,6 +33,7 @@ class Decision(BaseModel):
     title: str = Field(default="", max_length=255)
     categories: list[str] = Field(default_factory=list, max_length=10)
     role: Literal["log_analysis", "diagnosis", "fault_tree", "report_template", "prior_knowledge"] = "prior_knowledge"
+    content_kind: Literal["SKILL", "KNOWLEDGE"] | None = None
     target_id: str | None = Field(default=None, min_length=1, max_length=40)
     reason: str = Field(min_length=1, max_length=6000)
     sources: list[SourceSlice] = Field(default_factory=list, max_length=128)
@@ -122,6 +123,8 @@ def materialize(db, session_id, value, raw, previous):
         "expected_fingerprint": document_fingerprint(target) if target else None,
         "new_id": new_id("DOC") if proposal.action == "create" else None,
         "diff": exact_diff(before, after)}
+    from app.services.knowledge_access import knowledge_kind
+    op["content_kind"] = proposal.content_kind or (knowledge_kind(target) if target else "SKILL")
     if target and not op["source_paths"]:
         op["source_paths"] = [target_item["path"]]
     return op

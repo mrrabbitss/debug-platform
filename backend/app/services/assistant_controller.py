@@ -134,7 +134,7 @@ def execute(runtime, step):
     with SessionLocal() as db:
         row, value = runtime.state(db)
         if step.action == "search":
-            return catalogue_page(db, step.catalogue_cursor, step.query, step.category, step.role)
+            return catalogue_page(db, step.catalogue_cursor, step.query, step.category, step.role, session_id=runtime.session_id)
         if step.action == "files":
             return file_page(db, runtime, value, step.cursor)
         if step.action == "operations":
@@ -177,9 +177,11 @@ def plan(runtime):
                 "已有目标须先read。替换/新增使用sources原文或唯一锚点edits；无上传的修改可使用已有知识作来源。"
                 "mode=answer仅回答。auto根据用户最新请求选择回答或修改；问答不要propose修改。"
                 "先比较search目录里的已有知识再决定新增。根SKILL依赖文件必须保留到新建或已有关联目标。"
+                "每项操作明确content_kind：SKILL是强制诊断方法；KNOWLEDGE是案例/Wiki普通知识，不进入必读方法。"
+                "修改已有目标时保留其类型；仅在用户明确要求并核对差异时提出类型转换。"
                 "上下文仅保留上一工具结果与checkpoint；更早的原文和阅读记录全部可通过分页工具重读，未被删除。",
                 "mode": value.get("mode", "auto"), "conversation": value["messages"],
-                "files": file_page(db, runtime, value), "catalogue": catalogue_page(db),
+                "files": file_page(db, runtime, value), "catalogue": catalogue_page(db, session_id=runtime.session_id),
                 "categories": categories(db), "roles": KNOWLEDGE_ROLES,
                 "pending_operations": len(value.get("pending_plan", [])),
                 "last_step": value.get("planning_checkpoint")}

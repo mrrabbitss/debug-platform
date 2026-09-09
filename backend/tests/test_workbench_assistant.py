@@ -47,6 +47,14 @@ def store(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'assistant.db'}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
+    from app.model_access_models import ModelProfileAccess
+    with factory() as db:
+        db.add(ModelProfile(id="CHAT-assistant", name="Synthetic Chat", task_type="chat", mode="api",
+            provider="openai_compatible", model_name="synthetic", base_url="http://model.example.test/v1",
+            is_active=True, enabled=True))
+        db.flush()
+        db.add(ModelProfileAccess(profile_id="CHAT-assistant", visibility="SHARED"))
+        db.commit()
     for module in (runtime, controller, assistant, publication, jobs):
         monkeypatch.setattr(module, "SessionLocal", factory)
     monkeypatch.setattr(state, "get_settings", lambda: SimpleNamespace(auth_mode="local", auth_allow_legacy_admin=False))
@@ -116,7 +124,8 @@ def complete_read(db, key, value, item):
         count += 1
         end = min(start + sources.SEGMENT_CHARS, len(item["content"]))
         receipt = {"path": item["path"], "sha256": item["sha256"], "segment": count, "start": start, "end": end,
-            "text_sha256": state.digest(item["content"][start:end]), "complete": True, "notes": "Synthetic receipt"}
+            "text_sha256": state.digest(item["content"][start:end]), "complete": True, "notes": "Synthetic receipt",
+            "model_fingerprint": state.digest(value.get("model_snapshot") or {})}
         db.merge(WorkbenchRecord(id=sources.receipt_key(key, item, start), kind="assistant_reading", owner_id=key,
                                 payload_json=json_dumps(receipt)))
     value.setdefault("coverage", {})[item["path"]] = {"sha256": item["sha256"], "read": count, "total": count, "complete": True}
@@ -211,7 +220,7 @@ def test_full_folder_all_characters_and_durable_receipts(store, monkeypatch):
     raw = [proposal(item["path"]) for item in files]
     model = FakeChat([{"action": "propose", "operations": raw}, {"action": "finish", "answer": "已完整读取并保留依赖。",
         "evidence": [{"path": file["path"]} for file in files]}])
-    monkeypatch.setattr(runtime, "get_llm_provider", lambda: model)
+    monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: model)
     key = create(store, files)
     ctx, version = running(store, key)
     assistant.plan_job(ctx, key, version)
@@ -308,7 +317,7 @@ def test_no_upload_query_and_existing_document_edits(store, monkeypatch, mode):
             edits=[{"old": "Original method", "new": "Improved method"}])]})
     steps.append({"action": "finish", "answer": "文档包含可核对的方法。", "evidence": [{"path": "knowledge/DOC-old"}]})
     model = FakeChat(steps)
-    monkeypatch.setattr(runtime, "get_llm_provider", lambda: model)
+    monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: model)
     key = create(store, mode=mode)
     ctx, version = running(store, key)
     assistant.plan_job(ctx, key, version)
@@ -324,7 +333,7 @@ def test_answer_mode_and_forged_answer_evidence_fail_closed(store, monkeypatch):
     file = upload("folder/SKILL.md", "Original")
     for step in ({"action": "propose", "operations": [proposal()]},
                  {"action": "finish", "answer": "Unsupported", "evidence": [{"path": "knowledge/unknown"}]}):
-        monkeypatch.setattr(runtime, "get_llm_provider", lambda: FakeChat([step]))
+        monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: FakeChat([step]))
         key = create(store, [file], mode="answer")
         ctx, version = running(store, key)
         with pytest.raises(ValueError):
@@ -336,7 +345,7 @@ def test_reading_budget_pause_retry_reuses_receipts(store, monkeypatch):
     file = upload("folder/SKILL.md", "A" * 8100)
     model = FakeChat([{"action": "propose", "operations": [proposal()]},
         {"action": "finish", "answer": "Complete", "evidence": [{"path": file["path"]}]}])
-    monkeypatch.setattr(runtime, "get_llm_provider", lambda: model)
+    monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: model)
     monkeypatch.setattr(runtime, "MAX_CALLS", 1)
     key = create(store, [file])
     ctx, version = running(store, key)
@@ -365,7 +374,7 @@ def test_correction_during_call_fences_old_worker_and_invalidates_plan(store, mo
             db.commit()
 
     model.on_read = correction
-    monkeypatch.setattr(runtime, "get_llm_provider", lambda: model)
+    monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: model)
     ctx, version = running(store, key)
     with pytest.raises(jobs.JobCancelledError):
         assistant.plan_job(ctx, key, version)
@@ -398,7 +407,7 @@ def test_success_publishes_bundle_once_and_keeps_old_chunks(store, monkeypatch):
 
 
 @pytest.mark.parametrize("failure", ["vector", "graph", "target", "profile", "cancel", "commit"])
-def test_publication_failure_retains_old_generation_and_requires_fresh_approval(store, monkeypatch, failure):
+def test_publication_failure_retains_old_generation_and_only_valid_approval(store, monkeypatch, failure):
     with store() as db:
         add_doc(db)
         db.commit()
@@ -421,12 +430,22 @@ def test_publication_failure_retains_old_generation_and_requires_fresh_approval(
 
     fake_indexes(store, monkeypatch, intervene, fail_vectors=failure == "vector")
     ctx, version = approve(store, key)
+    approved = get_value(store, key)[0]
     if failure == "commit":
         monkeypatch.setattr(ctx, "complete_in_transaction", lambda *args: (_ for _ in ()).throw(RuntimeError("Synthetic final marker failure")))
     with pytest.raises((ValueError, jobs.JobCancelledError, jobs.JobLeaseLostError)):
         publication.publication_job(ctx, key, version, "local-development")
     value, _ = get_value(store, key)
-    assert value["status"] == "REVIEW" and value["approved_digest"] is None
+    if failure in {"target", "cancel"}:
+        assert value["status"] == "REVIEW"
+        assert all(value[field] is None for field in ("approved_digest", "approved_by", "approved_at"))
+        assert value["request_version"] == version + 1
+    else:
+        assert value["status"] == "PUBLISH_FAILED"
+        assert approved["approved_digest"]
+        for field in ("approved_digest", "approved_by", "approved_at", "approval_request_version", "request_version"):
+            assert value[field] == approved[field]
+    assert "UNTRUSTED_MODEL_BODY" not in (value.get("error") or "")
     with store() as db:
         assert db.get(KnowledgeDocument, "DOC-old").content == "# Old\nOriginal method\n"
         assert db.get(KnowledgeDocument, "DOC-old").version == 1
@@ -435,13 +454,15 @@ def test_publication_failure_retains_old_generation_and_requires_fresh_approval(
         assert not list(db.scalars(select(KnowledgePublication)))
     with pytest.raises((ValueError, jobs.JobCancelledError, jobs.JobLeaseLostError)):
         publication.publication_job(ctx, key, version, "local-development")
+    assert get_value(store, key)[0] == value
 
 
-def test_abandoned_publication_clears_latch_and_never_republishes(store, monkeypatch):
+def test_abandoned_publication_clears_latch_and_resumes_same_approval(store, monkeypatch):
     file = upload("folder/SKILL.md", "Synthetic")
     key = reviewed(store, [file], [proposal()])
     fake_indexes(store, monkeypatch)
     ctx, version = approve(store, key)
+    approved = get_value(store, key)[0]
     fence = publication.PublicationFence(ctx, key, version, "local-development", "KGEN-interrupted")
     publication.prepare(fence, "EGEN-interrupted")
     with store() as db:
@@ -450,15 +471,32 @@ def test_abandoned_publication_clears_latch_and_never_republishes(store, monkeyp
         assert state.recover_abandoned_assistant_sessions(db) == 1
         db.commit()
     value, _ = get_value(store, key)
-    assert value["status"] == "REVIEW" and not value["approved_digest"]
+    assert value["status"] == "APPROVED"
+    for field in ("approved_digest", "approved_by", "approved_at", "request_version", "job_id"):
+        assert value[field] == approved[field]
     with store() as db:
-        assert db.get(Job, ctx.job_id).status == "CANCELLED"
+        assert db.get(Job, ctx.job_id).status == "QUEUED"
         assert db.get(KnowledgeGraphState, "domain").building_generation_id is None
     with pytest.raises((ValueError, jobs.JobCancelledError, jobs.JobLeaseLostError)):
         publication.publication_job(ctx, key, version, "local-development")
+    resumed_ctx, resumed_version = running(store, key)
+    assert resumed_ctx.job_id == ctx.job_id and resumed_version == version
+    publication.publication_job(resumed_ctx, key, resumed_version, "local-development")
+    value = get_value(store, key)[0]
+    assert value["status"] == "PUBLISHED" and value["approved_digest"] == approved["approved_digest"]
+    with store() as db:
+        assert db.get(Job, ctx.job_id).status == "COMPLETED"
+        assert len(list(db.scalars(select(Job).where(Job.kind == "assistant_publish")))) == 1
+        assert len(list(db.scalars(select(KnowledgePublication)))) == 1
 
 
-def test_api_consent_outbox_versions_and_admin_only(client, store, monkeypatch):
+@pytest.mark.parametrize("role", ["ADMIN", "EXPERT"])
+def test_api_consent_outbox_versions_and_knowledge_manager_gate(client, store, monkeypatch, role):
+    with store() as db:
+        db.add(UserAccount(id=f"{role}-assistant", username=f"synthetic-{role.lower()}",
+                           display_name="Synthetic manager", role=role, active=True))
+        db.commit()
+    client.principal.update(id=f"{role}-assistant", role=role)
     scheduled = []
 
     def wake(job_id):
@@ -495,26 +533,51 @@ def test_api_rejects_unsafe_paths(client, path):
 
 def test_catalogue_is_paginated_beyond_old_2000_limit(store):
     with store() as db:
-        db.add_all(KnowledgeDocument(id=f"DOC-{index:04}", title=f"Synthetic {index}", content="text") for index in range(2010))
+        db.add_all(KnowledgeDocument(id=f"DOC-{index:04}", title=f"Synthetic {index}", content="text",
+                    active=True, review_status="ACTIVE") for index in range(2010))
+        db.add(KnowledgeDocument(id="DOC-draft", title="Synthetic 2009 draft", content="Unpublished",
+                                 active=False, review_status="DRAFT"))
         db.commit()
         page = sources.catalogue_page(db, query="Synthetic 2009")
-        assert page["items"][0]["id"] == "DOC-2009"
+        assert [item["id"] for item in page["items"]] == ["DOC-2009"]
+        assert sources.catalogue_page(db, query="Unpublished")["items"] == []
         first = sources.catalogue_page(db)
         second = sources.catalogue_page(db, first["next_cursor"])
         assert len(first["items"]) == sources.PAGE_SIZE
         assert first["items"][-1]["id"] < second["items"][0]["id"]
 
 
-def test_endpoint_guard_and_egress_revocation_before_next_segment(store, monkeypatch):
+def test_http_endpoint_allowed_and_egress_revocation_stops_next_segment(store, monkeypatch):
+    file = upload("folder/SKILL.md", "A" * 8100)
     model = FakeChat()
-    model.base_url = "http://169.254.169.254/latest"
-    monkeypatch.setattr(runtime, "get_llm_provider", lambda: model)
-    key = create(store, [upload("folder/SKILL.md", "Synthetic")])
+    model.base_url = "http://127.0.0.1:18765/v1"
+    with store() as db:
+        db.get(ModelProfile, "CHAT-assistant").base_url = model.base_url
+        db.commit()
+    monkeypatch.setattr(runtime, "get_llm_provider", lambda profile=None: model)
+    key = create(store, [file])
     ctx, version = running(store, key)
-    with pytest.raises(ValueError):
+    original_update = ctx.update
+
+    def revoke_after_segment(*args, **kwargs):
+        original_update(*args, **kwargs)
+        with store() as db:
+            row, value = state.locked_session(db, key)
+            sessions.consent(db, row, value, False)
+            db.commit()
+
+    monkeypatch.setattr(ctx, "update", revoke_after_segment)
+    with pytest.raises(jobs.JobCancelledError):
         assistant.plan_job(ctx, key, version)
-    assert not model.calls
-    assert "169.254" not in get_value(store, key)[0]["error"]
+    value = get_value(store, key)[0]
+    assert value["status"] == "PAUSED" and value["model_egress_approved"] is False
+    assert len(model.calls) == 1 and model.calls[0][0] == "Reading"
+    assert model.calls[0][1]["start"] == 0
+    assert value["coverage"][file["path"]]["read"] == 1
+    assert not value["coverage"][file["path"]]["complete"]
+    with store() as db:
+        assert db.get(WorkbenchRecord, sources.receipt_key(key, file, 0)) is not None
+        assert db.get(WorkbenchRecord, sources.receipt_key(key, file, sources.SEGMENT_CHARS)) is None
 
 
 def test_lan_actor_revalidation(store, monkeypatch):

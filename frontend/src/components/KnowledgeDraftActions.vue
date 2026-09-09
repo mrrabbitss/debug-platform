@@ -56,7 +56,7 @@ async function review(action: string, draft: KnowledgeProposal) {
     <el-button v-if="draft.id === document.pending_draft?.id && draft.status !== 'BUILDING'" link :disabled="busy" @click="review('ARCHIVE', draft)">撤销草稿</el-button>
   </span>
   <el-dialog v-model="preview" title="比较知识修订" width="85%" append-to-body>
-    <p>个人修订先用于修订者自己的新诊断；线上发布需管理员或知识发布者确认。</p>
+    <p>比较当前发布正文与拟发布修订。专家或管理员批准后，新诊断使用发布成功的版本。</p>
     <el-row :gutter="20">
       <el-col :span="12"><strong>线上正文</strong><pre class="proposal-text">{{ publishedContent }}</pre></el-col>
       <el-col :span="12"><strong>修订正文</strong><pre class="proposal-text">{{ proposedContent }}</pre></el-col>

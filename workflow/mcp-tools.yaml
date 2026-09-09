@@ -1,6 +1,7 @@
 schema_version: "1.0"
 name: gw-ap-debug-mcp
 version: "0.3.0"
+policy_revision: expert-model-knowledge-20260909
 status: IN_PROGRESS
 description: >-
   Stable MVP contract for Claude Code and Codex host reasoning over the Debug
@@ -15,7 +16,7 @@ transport:
   knowledge_markdown_upload: /api/v1/knowledge-routing/import
 
 knowledge_routing:
-  authorization: admin_only
+  authorization: admin_or_expert
   rest_import: /api/v1/knowledge-routing/import
   accepted_extensions:
     - .md
@@ -26,7 +27,8 @@ knowledge_routing:
   automatic_publish: forbidden
   web:
     reasoning_owner: platform_llm
-    model_source: selected_or_active_platform_chat_profile
+    model_source: visible_selected_or_personal_default_or_shared_default_chat_profile
+    model_binding: fixed_request_profile_and_configuration_fingerprint
     model_input: complete_markdown_in_bounded_masked_section_pages
   cli:
     reasoning_owner: host_cli
@@ -59,7 +61,7 @@ reasoning:
     - Method and evidence calls execute before the planning round that cites them.
     - Planning tool_calls reuse each server call_id and the complete normalized accepted_arguments from its receipt.
     - Each Markdown file becomes an independent inactive DRAFT and is never auto-published.
-    - Web routing uses a selected or active platform Chat profile; host_cli routing uses the active Claude Code or Codex session model.
+    - Web routing uses a visible selected Chat profile or personal/shared default and pins its request configuration; host_cli routing uses the active Claude Code or Codex session model.
     - The host_cli path receives only bounded masked Markdown excerpts through MCP and makes zero backend generative model calls.
     - Routing decisions may select only an active leaf category and are applied with document lock-version and content-hash validation.
 
@@ -77,16 +79,37 @@ authorization:
   run_scope_is_pinned_to_case: true
   run_receipt_writes_require_active_diagnosis_intent: true
   domain_output_writes_require_explicit_user_intent: true
+  knowledge_managers: [ADMIN, EXPERT]
+  shared_knowledge_readers: [ADMIN, EXPERT, ENGINEER, VIEWER]
+  expert_exclusions: [user_administration, other_user_credentials, global_embedding_reranker_configuration, gguf_configuration]
+  ordinary_knowledge_contributions: owner_scoped_web_rest_only
+  skill_amendment_proposals: web_rest_review_by_ADMIN_or_EXPERT
+  skill_direct_management_and_publication: ADMIN_or_EXPERT_web_rest_only
+  new_mcp_tools_for_contributions_or_approval: forbidden
+
+web_model_policy:
+  external_base_url_schemes: [http, https]
+  endpoint_allowlist_required: false
+  private_address_opt_in_required: false
+  managed_gguf_sidecar_identity_validation: required
+  user_selection_precedence: [personal_preference, shared_active_default]
+  private_profiles_visible_only_to_owner: true
+  shared_chat_management: [ADMIN, EXPERT]
+  global_embedding_reranker_and_gguf_configuration: [ADMIN]
+  api_key_values_returned: false
+  note: Web model settings do not change host_cli reasoning or expand this MCP operation set.
 
 access_semantics:
   read: Does not mutate durable platform or host-run state.
-  write: Mutates durable host-run state, an AnalysisRun, or a Report.
+  write: Mutates durable host-run state, an AnalysisRun, a Report, or governed knowledge DRAFT routing.
   receipt_note: >-
     Method and evidence tools read domain data but append CAS-protected tool
     receipts, evidence allowlist entries, or coverage to the durable host run;
     therefore their MCP access classification is write.
 
 implementation_status:
+  policy_revision_validation: targeted_contract_checks_20260909
+  validation_scope_note: The Full and real CLI results below are historical evidence from 2026-09-03; they do not validate this new role/model policy or its in-progress Web consumer integration.
   contract: frozen_for_mvp
   streamable_http_transport: focused_tests_passed
   host_session_and_finalization: focused_tests_passed
@@ -187,18 +210,18 @@ tools:
   - name: debug_get_knowledge_routing_context
     access: read
     case_scope: owned_knowledge_drafts
-    authorization: admin_only
+    authorization: admin_or_expert
     purpose: Return the active leaf taxonomy plus bounded masked excerpts and optimistic concurrency fields for selected Markdown drafts; the host CLI model performs classification.
 
   - name: debug_read_knowledge_sections
     access: read
     case_scope: visible_knowledge
-    authorization: published_visible_or_admin
+    authorization: published_visible_or_admin_or_expert
     purpose: Read all masked Markdown sections through bounded pages pinned to a content hash; no generative backend calls.
 
   - name: debug_apply_knowledge_routing
     access: write
     write_effect: knowledge_draft_routing
     case_scope: owned_knowledge_drafts
-    authorization: admin_only
+    authorization: admin_or_expert
     purpose: Atomically apply allowlisted host-model category decisions to independent inactive DRAFT documents without publishing them.

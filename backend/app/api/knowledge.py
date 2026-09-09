@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -17,7 +17,6 @@ from app.models import (
     KnowledgeDerivation,
     KnowledgeDocument,
     KnowledgeDocumentCategory,
-    KnowledgeEmbedding,
 )
 from app.schemas import (
     JobOut,
@@ -35,12 +34,11 @@ from app.services.jobs import job_runner
 from app.services.knowledge import index_document, reindex_knowledge_job
 from app.services.knowledge_drafts import attach_pending_drafts, save_draft
 from app.services.knowledge_visibility import current_chunk_clause
-from app.services.knowledge_access import bind_owner, visible_knowledge_clause
+from app.services.knowledge_access import bind_owner, knowledge_kind, require_knowledge_admin, visible_knowledge_clause
 from app.services.knowledge_governance import (
     actor_id,
     advance_document_version,
     create_document_revision,
-    mark_domain_graph_stale,
     require_lock_version,
 )
 from app.services.knowledge_methods import (
@@ -62,7 +60,12 @@ from app.services.model_profiles import get_active_model_profile
 from app.services.storage import storage
 
 
-router = APIRouter()
+def _authorize_knowledge_write(request: Request):
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        require_knowledge_admin(getattr(request.state, "principal", {}) or {})
+
+
+router = APIRouter(dependencies=[Depends(_authorize_knowledge_write)])
 Db = Annotated[Session, Depends(get_db)]
 
 job_runner.register("reindex_knowledge", reindex_knowledge_job, ("profile_id",), cancellable=True)
@@ -103,7 +106,7 @@ def _knowledge_to_dict(
         "category_id": category[0] if category else None,
         "category_name": category[1] if category else None,
         "chunk_count": chunk_counts.get(document.id, 0),
-        "metadata": json_loads(document.metadata_json, {}),
+        "metadata": {**json_loads(document.metadata_json, {}), "content_kind": knowledge_kind(document)},
         "created_at": document.created_at,
         "updated_at": document.updated_at,
     }
@@ -140,22 +143,6 @@ def _single_knowledge_response(db: Session, document: KnowledgeDocument, *, deta
     return attach_pending_drafts(db, [_knowledge_to_dict(document, categories, chunks, include_content=detail)], detail=detail)[0]
 
 
-def _delete_knowledge_rows(db: Session, document_id: str) -> None:
-    chunk_ids = select(KnowledgeChunk.id).where(
-        KnowledgeChunk.document_id == document_id
-    )
-    db.execute(delete(KnowledgeEmbedding).where(
-        KnowledgeEmbedding.chunk_id.in_(chunk_ids)
-    ))
-    db.execute(delete(KnowledgeChunk).where(
-        KnowledgeChunk.document_id == document_id
-    ))
-    link = db.get(KnowledgeDocumentCategory, document_id)
-    if link:
-        db.delete(link)
-    document = db.get(KnowledgeDocument, document_id)
-    if document:
-        db.delete(document)
 
 
 @router.post("/knowledge", response_model=KnowledgeDetailOut)
@@ -170,6 +157,7 @@ def create_knowledge(payload: KnowledgeCreate, request: Request, db: Db) -> dict
     )
     db.add(document)
     db.flush()
+    document.metadata_json = json_dumps({**payload.metadata, "content_kind": knowledge_kind(document)})
     bind_owner(db, document.id, actor_id(getattr(request.state, "principal", {})))
     category_id = payload.category_id or get_default_category_id(db, payload.source_type)
     set_document_category(db, document.id, category_id)
@@ -192,6 +180,7 @@ def create_knowledge(payload: KnowledgeCreate, request: Request, db: Db) -> dict
 )
 async def upload_knowledge(
     db: Db,
+    request: Request,
     file: UploadFile = File(...),
     source_type: str = Form(default="document"),
     device_type: str | None = Form(default=None),
@@ -246,6 +235,8 @@ async def upload_knowledge(
     db.flush()
     db.add(document)
     db.flush()
+    document.metadata_json = json_dumps({**json_loads(document.metadata_json, {}), "content_kind": knowledge_kind(document)})
+    bind_owner(db, document.id, actor_id(getattr(request.state, "principal", {})))
     set_document_category(db, document.id, category_id or get_default_category_id(db, source_type))
     db.commit()
     job = job_runner.submit(
@@ -546,45 +537,32 @@ def update_knowledge(
 
 
 @router.delete("/knowledge/{document_id}")
-def delete_knowledge(document_id: str, db: Db) -> dict:
-    document = db.get(KnowledgeDocument, document_id)
-    if not document:
-        raise HTTPException(404, "Knowledge document not found")
-    if document.active:
-        mark_domain_graph_stale(
-            db,
-            f"knowledge document {document.id} deleted",
-        )
-    source_derivations = list(db.scalars(select(KnowledgeDerivation).where(
-        KnowledgeDerivation.source_document_id == document_id
-    )).all())
-    incoming_derivations = list(db.scalars(select(KnowledgeDerivation).where(
-        KnowledgeDerivation.derived_document_id == document_id
-    )).all())
-    derived_ids = {
-        derivation.derived_document_id
-        for derivation in source_derivations
-        if derivation.derived_document_id != document_id
-    }
-    for derivation in [*source_derivations, *incoming_derivations]:
-        db.delete(derivation)
-    db.flush()
-    for derivation in incoming_derivations:
-        source = db.get(KnowledgeDocument, derivation.source_document_id)
-        if source:
-            metadata = json_loads(source.metadata_json, {})
-            if metadata.get("derived_analysis_method_id") == document_id:
-                metadata.pop("derived_analysis_method_id", None)
-                source.metadata_json = json_dumps(metadata)
-    for derived_id in derived_ids:
-        still_referenced = db.scalar(select(KnowledgeDerivation.id).where(
-            KnowledgeDerivation.derived_document_id == derived_id
-        ).limit(1))
-        if not still_referenced:
-            _delete_knowledge_rows(db, derived_id)
-    _delete_knowledge_rows(db, document_id)
+def delete_knowledge(document_id: str, request: Request, db: Db) -> dict:
+    from app.services.knowledge_access import require_knowledge_access
+    from app.services.knowledge_contributions import (create_contribution, submit_contribution,
+        review_contribution, contribution_payload)
+    principal = getattr(request.state, "principal", {}) or {}
+    document = require_knowledge_access(db, document_id, principal, write=True)
+    if not document.active:
+        from app.knowledge_contribution_models import KnowledgeContribution
+        pending_publication = db.scalar(select(KnowledgeContribution.id).where(
+            KnowledgeContribution.published_document_id == document.id,
+            KnowledgeContribution.status.in_(["APPROVED", "PUBLISHING"])))
+        if pending_publication:
+            raise HTTPException(409, "An approved publication owns this reserved document; use its review job controls")
+        if document.review_status != "ARCHIVED":
+            document.review_status = "ARCHIVED"
+            document.version += 1
+            document.lock_version += 1
+            create_document_revision(db, document, created_by=actor_id(principal),
+                                     change_summary="Archived unpublished document; historical references retained")
+            db.commit()
+        return {"deleted": document_id, "archived": True, "historical_references_retained": True}
+    contribution = create_contribution(db, principal, {"operation": "DELETE", "target_document_id": document.id})
+    submit_contribution(db, contribution, principal, contribution.version)
+    review_contribution(db, contribution, principal, {"expected_version": contribution.version,
+        "expected_content_hash": contribution.content_hash, "action": "APPROVE", "comment": "Manager confirmed deletion"})
     db.commit()
-    return {
-        "deleted": document_id,
-        "deleted_derived_documents": sorted(derived_ids),
-    }
+    return {"document_id": document_id, "publication_pending": True,
+        "contribution": contribution_payload(db, contribution),
+        "job": JobOut.model_validate(db.get(Job, contribution.publication_job_id)).model_dump()}

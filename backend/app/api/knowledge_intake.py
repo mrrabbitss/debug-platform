@@ -9,7 +9,7 @@ from app.core.utils import json_dumps, json_loads, new_id, utcnow
 from app.models import KnowledgeDocument, KnowledgeDraft
 from app.services.knowledge_access import bind_owner
 from app.services.knowledge_governance import document_snapshot, require_lock_version
-from app.services.knowledge_publication import publication_job
+from app.services.knowledge_publication import enqueue_publication
 from app.services.jobs import job_runner
 from app.schemas import JobOut
 
@@ -26,7 +26,7 @@ class HumanVerifiedApproval(BaseModel):
 @router.post("/knowledge/{document_id}/adopt-human-verified")
 def adopt_verified(document_id: str, payload: HumanVerifiedApproval, request: Request, db: Db):
     principal = getattr(request.state, "principal", {})
-    if principal.get("role") != "ADMIN":
+    if principal.get("role") not in {"ADMIN", "EXPERT"}:
         raise HTTPException(403, "Administrator must attest historical knowledge")
     document = db.get(KnowledgeDocument, document_id)
     if not document:
@@ -60,8 +60,12 @@ def adopt_verified(document_id: str, payload: HumanVerifiedApproval, request: Re
     draft.snapshot_json = json_dumps(snapshot)
     draft.status = "IN_REVIEW"
     draft.review_comment = "Human-verified historical source; no generated correctness claim"
+    db.flush()
+    job = enqueue_publication(db, document, draft, actor)
     db.commit()
-    args = {"document_id": document.id, "draft_id": draft.id, "draft_version": draft.version, "reviewer": actor}
-    job = job_runner.submit(db, "publish_knowledge_revision", publication_job, *args.values(), input_data=args)
+    try:
+        job_runner._schedule(job.id)
+    except RuntimeError:
+        pass
     return {"document_id": document.id, "trust_level": "HIGH", "publication_pending": True,
             "job": JobOut.model_validate(job).model_dump()}

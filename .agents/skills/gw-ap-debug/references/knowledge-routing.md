@@ -1,12 +1,19 @@
 # Host-model Markdown knowledge routing
 
-Use this workflow when an administrator wants the current Codex or Claude Code
+Use this workflow when an ADMIN or EXPERT wants the current Codex or Claude Code
 model to classify one to twenty local Markdown files into the platform's
 existing governed knowledge taxonomy. This is a host-model workflow: the full
 files travel over the REST data plane, the MCP server returns only bounded
 masked excerpts, and the backend makes zero generative-model calls.
 
 ## 1. Stage the files
+
+In trusted-LAN deployments with simple login enabled, an account promoted by
+ADMIN to EXPERT retains its personal code and browser-ticket login. The server
+returns the account's current role; do not downgrade it to ENGINEER based on an
+old client label. Self-enrollment creates only ENGINEER, while ADMIN and disabled
+accounts are refused by these self-service login paths. Login is outside this
+MCP tool catalog and does not grant a new routing or publication operation.
 
 Keep the personal token in the current process environment. Do not paste
 it into a prompt, report, or saved command file.
@@ -41,9 +48,10 @@ the same files again blindly.
 
 1. Call `debug_status` and confirm the advertised knowledge-routing capability
    says the host model owns inference and backend chat is disabled.
-2. After the user has approved the current CLI model/provider to receive the
-   bounded masked excerpts, call `debug_get_knowledge_routing_context` with all
-   returned `document_ids` and `consent_host_model_data=true`.
+2. Verify the user's authorization for the current CLI model/provider to receive
+   bounded masked excerpts, reusing approval already given in this session. Then
+   call `debug_get_knowledge_routing_context` with all returned `document_ids` and
+   `consent_host_model_data=true`; ask only when that authorization is missing.
 3. For each document marked `full_section_read_required`, call
    `debug_read_knowledge_sections` with its `document_id`, `content_sha256`,
    `offset=0`, `limit=2`, and `consent_host_model_data=true`. Follow `next_offset`
@@ -69,8 +77,8 @@ the same files again blindly.
 
 If a lock version or content hash is stale, retrieve fresh context and
 reclassify the changed document. Do not replay the rejected decision. A routing
-call never publishes knowledge; an administrator must review and publish it
-through the normal governance workflow.
+call never publishes knowledge; an ADMIN or EXPERT must review and publish it
+through Knowledge Management. Preserve the existing DRAFT and version checks.
 
 ## Data and authority boundaries
 
@@ -78,11 +86,28 @@ through the normal governance workflow.
   a complete file into an MCP argument.
 - The MCP context is bounded and sensitive values are masked. Do not try to
   reconstruct omitted content or treat truncation as evidence for a category.
-- Both knowledge-routing MCP tools require an administrator principal.
-- Engineers and viewers may read published knowledge sections. Engineers can
-  submit resolved cases in the Web knowledge library for administrator review;
-  they cannot import, modify, classify, extract or publish knowledge.
+- `debug_get_knowledge_routing_context` and `debug_apply_knowledge_routing`
+  require an ADMIN or EXPERT principal. ADMIN assigns EXPERT; experts cannot
+  manage users, other users' credentials, or global Embedding/Reranker/GGUF settings.
+- ENGINEER and legacy VIEWER may read published visible knowledge sections.
+  ENGINEER may upload ordinary case/Wiki Markdown, edit or delete their own
+  drafts, and use AI case extraction through Web/REST. Shared knowledge changes,
+  deletions, case conclusions, and Skill amendments are proposals that require
+  ADMIN/EXPERT review. Reviewers may correct submissions through multiple AI turns
+  before approving the final version, retaining originals, diffs, and review history.
+  Legacy VIEWER gains no contribution or case writes.
+- Only ADMIN/EXPERT directly manage mandatory Skills, dependencies, fault
+  categories, and publication in Knowledge Management. An ordinary upload named
+  `SKILL.md` remains an ordinary unpublished contribution. This workflow grants
+  no MCP contribution, Skill-publication, review-chat, or approval tools.
 - `debug_apply_knowledge_routing` may change classification metadata and create
   a new revision, but it cannot set the document ACTIVE or bypass review.
 - Web-based automatic routing is a separate platform-model workflow. Do not
   invoke it when the user selected host-CLI reasoning.
+- Web model settings use caller-owned private or shared Chat profiles, with
+  personal preference before the shared default. Even ADMIN cannot use another
+  user's private API. Any valid external HTTP(S) Base URL or Chat proxy may use
+  intranet, localhost, or public hosts in production and development; no endpoint
+  allowlist or private-network opt-in is required. URL syntax, TLS, user egress
+  authorization, and managed GGUF sidecar identity checks remain. These Web
+  settings do not change the current CLI model or its separate data authorization.

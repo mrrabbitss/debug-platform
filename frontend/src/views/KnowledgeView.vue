@@ -355,8 +355,14 @@ async function upload() {
 async function removeDocument(document: KnowledgeDocument) {
   try {
     await ElMessageBox.confirm(`确认删除“${document.title}”？`, '删除知识', { type: 'warning' })
-    await api.delete(`/knowledge/${document.id}`)
-    ElMessage.success('知识已删除')
+    const { data } = await api.delete(`/knowledge/${document.id}`)
+    if (data.publication_pending) {
+      ElMessage.info('删除审批已保存，发布成功后才从共享知识移除')
+      if (data.contribution?.id) {
+        await router.push({ path: '/knowledge-management', query: { tab: 'review', contribution: data.contribution.id } })
+        return
+      }
+    } else ElMessage.success('知识已归档，历史引用保留')
     await load()
   } catch (error: any) {
     if (error !== 'cancel') ElMessage.error(errorText(error))

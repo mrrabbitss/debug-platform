@@ -4,7 +4,7 @@ from sqlalchemy import select, update
 
 from app.core.db import SessionLocal
 from app.core.utils import json_loads, json_dumps, new_id, utcnow
-from app.models import (KnowledgeDocument, KnowledgeChunk, KnowledgeEmbedding, KnowledgeGraphState,
+from app.models import (KnowledgeDocument, KnowledgeChunk, KnowledgeGraphState,
     KnowledgePublication, ModelProfile, KnowledgeAccess)
 from app.services.assistant_plan import validate_review, review_digest, validate_target
 from app.services.assistant_sources import document_fingerprint
@@ -38,9 +38,9 @@ def corpus(db):
 
 
 def require_approval(db, row, value, ctx, version, reviewer, statuses):
-    job = require_worker(db, row, value, ctx, version, statuses)
+    require_worker(db, row, value, ctx, version, statuses)
     require_admin_actor(db, reviewer)
-    if (job.attempt != 1 or value.get("approved_by") != reviewer or not value.get("approved_at")
+    if (value.get("approved_by") != reviewer or not value.get("approved_at")
             or value.get("approved_digest") != review_digest(value)):
         raise ValueError("具体方案没有有效审批；请重新核对确认")
 
@@ -60,6 +60,7 @@ def metadata_for(document, operations, value, session_id):
     metadata.update(problem_categories=last["categories"], knowledge_role=last["role"],
         assistant_session_id=session_id, assistant_operation_ids=[op["operation_id"] for op in operations])
     metadata.pop("assistant_reservation", None)
+    metadata["content_kind"] = last.get("content_kind") or metadata.get("content_kind") or "SKILL"
     metadata.pop("assistant_operation_id", None)
     return metadata
 
@@ -88,7 +89,8 @@ def make_candidates(db, operations, value, session_id):
                 raise ValueError("新增知识预留编号已被使用")
         metadata = metadata_for(document, items, value, session_id)
         replacement = KnowledgeDocument(id=document.id, title=last["title"], content=last["after"],
-            source_type=SOURCE_TYPES[last["role"]], active=True, review_status="ACTIVE",
+            source_type=SOURCE_TYPES[last["role"]] if metadata["content_kind"] == "SKILL" else "document",
+            active=True, review_status="ACTIVE",
             version=document.version + 1, lock_version=document.lock_version + 1, trust_level="HIGH",
             confidentiality=document.confidentiality, device_type=document.device_type,
             device_model=document.device_model, firmware_range=document.firmware_range, module=document.module,
@@ -295,10 +297,22 @@ def failed(fence, error):
             return
         if isinstance(error, JobLeaseLostError):
             return
-        release_generation(db, value)
-        value.update(status="REVIEW", request_version=value["request_version"] + 1,
-            error="发布未完成，原知识和索引保留；需要重新核对确认。")
-        value["review_digest"] = review_digest(value)
+        valid = value.get("approved_digest") == review_digest(value) and bool(value.get("approved_at"))
+        if valid:
+            try:
+                require_admin_actor(db, value.get("approved_by"))
+                validate_review(db, row.id, value)
+            except ValueError:
+                valid = False
+        if valid and not isinstance(error, JobCancelledError):
+            release_generation(db, value, revoke_approval=False)
+            value.update(status="PUBLISH_FAILED",
+                error="发布未完成，审批及具体内容已保存；原知识继续可用，可继续同一审批的发布任务。")
+        else:
+            release_generation(db, value)
+            value.update(status="REVIEW", request_version=value["request_version"] + 1,
+                error="审批已撤销或目标内容发生变化，请重新核对具体变更。")
+            value["review_digest"] = review_digest(value)
         row.payload_json = json_dumps(value)
         db.commit()
 
@@ -315,4 +329,4 @@ def publication_job(ctx, session_id: str, request_version: int, reviewer: str):
         raise
     except Exception as error:
         failed(fence, error)
-        raise ValueError("知识助手发布未完成；原版本保持可用，必须重新核对确认") from None
+        raise ValueError("知识助手发布未完成；原版本保持可用，审批与恢复状态已保存") from None

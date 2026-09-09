@@ -12,6 +12,9 @@ export interface KnowledgeEntry {
   bundle_id?: string
   source_paths?: string[]
   legacy?: boolean
+  content_kind?: 'KNOWLEDGE' | 'SKILL'
+  owner_id?: string | null
+  metadata?: Record<string, any>
 }
 
 export interface LibraryEntry {
@@ -25,10 +28,13 @@ export interface LibraryEntry {
   case_id?: string
   analysis_id?: string
   report_markdown?: string
+  reviewed_conclusion?: string
+  contribution_id?: string
 }
 
 export interface AssistantOperation {
   operation_id: string
+  content_kind?: 'SKILL' | 'KNOWLEDGE'
   action: 'create' | 'merge' | 'replace' | 'link' | 'skip'
   title: string
   categories: string[]

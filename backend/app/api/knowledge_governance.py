@@ -42,7 +42,7 @@ def _principal(request: Request) -> dict[str, Any]:
 
 def _require_admin(request: Request) -> dict[str, Any]:
     principal = _principal(request)
-    if principal.get("role") != "ADMIN":
+    if principal.get("role") not in {"ADMIN", "EXPERT"}:
         raise HTTPException(403, "Administrator role required")
     return principal
 

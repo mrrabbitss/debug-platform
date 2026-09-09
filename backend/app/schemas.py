@@ -332,6 +332,7 @@ class KnowledgeCategoryOut(ORMModel):
 
 
 class ModelProfileCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=255)
     task_type: Literal["chat", "embedding", "reranker"]
     mode: Literal["builtin", "local", "api"]
@@ -342,9 +343,11 @@ class ModelProfileCreate(BaseModel):
     proxy_url: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    visibility: Literal["SHARED", "PRIVATE"] | None = None
 
 
 class ModelProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, min_length=1, max_length=255)
     mode: Literal["builtin", "local", "api"] | None = None
     provider: str | None = None
@@ -356,6 +359,7 @@ class ModelProfileUpdate(BaseModel):
     clear_proxy_url: bool = False
     config: dict[str, Any] | None = None
     enabled: bool | None = None
+    visibility: Literal["SHARED", "PRIVATE"] | None = None
 
 
 class ModelProfileOut(ORMModel):
@@ -376,6 +380,9 @@ class ModelProfileOut(ORMModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    owner_id: str | None = None
+    visibility: Literal["SHARED", "PRIVATE"] = "SHARED"
+    can_manage: bool = False
 
 
 class ModelDownloadRequest(BaseModel):
@@ -614,7 +621,7 @@ class PatchRequest(BaseModel):
 class UserCreate(BaseModel):
     username: str = Field(pattern=r"^[A-Za-z0-9._-]{2,128}$")
     display_name: str = Field(min_length=1, max_length=255)
-    role: Literal["ADMIN", "ENGINEER", "VIEWER"] = "VIEWER"
+    role: Literal["ADMIN", "EXPERT", "ENGINEER", "VIEWER"] = "VIEWER"
     issue_token: bool = True
     token_name: str = Field(default="initial", min_length=1, max_length=255)
     token_expires_days: int | None = Field(default=90, ge=1, le=3650)
@@ -622,7 +629,7 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=255)
-    role: Literal["ADMIN", "ENGINEER", "VIEWER"] | None = None
+    role: Literal["ADMIN", "EXPERT", "ENGINEER", "VIEWER"] | None = None
     active: bool | None = None
 
 
