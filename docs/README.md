@@ -6,6 +6,13 @@
 
 ## 架构与演进
 
+- [三栏工作台改版与接续记录](workbench-iteration-20260908.md)
+- [0.4.0 权限实现与定向验证](security-handoff-20260909.md)
+- [0.4.0 前端实现与浏览器验证](frontend-handoff-20260909.md)
+- [0.4.0 报告模板、导出与定向验证](report-handoff-20260909.md)
+- [0.4.0 知识助手、原子发布与恢复验证](assistant-handoff-20260909.md)
+- [0.4.0 服务器与分机交付](../deploy/releases/20260909/0.4.0/README.md)
+
 - [服务器离线安装准备](仓库部署准备.md)
 - [0.3.3 内网识别码登录配套包](../deploy/releases/20260908/0.3.3/README.md)
 - [2026-09-08 服务器离线安装包](../deploy/releases/20260908/README.md)

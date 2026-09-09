@@ -1,6 +1,6 @@
 # Host-model Markdown knowledge routing
 
-Use this workflow when an engineer or administrator wants the current Codex or Claude Code
+Use this workflow when an administrator wants the current Codex or Claude Code
 model to classify one to twenty local Markdown files into the platform's
 existing governed knowledge taxonomy. This is a host-model workflow: the full
 files travel over the REST data plane, the MCP server returns only bounded
@@ -79,6 +79,9 @@ through the normal governance workflow.
 - The MCP context is bounded and sensitive values are masked. Do not try to
   reconstruct omitted content or treat truncation as evidence for a category.
 - Both knowledge-routing MCP tools require an administrator principal.
+- Engineers and viewers may read published knowledge sections. Engineers can
+  submit resolved cases in the Web knowledge library for administrator review;
+  they cannot import, modify, classify, extract or publish knowledge.
 - `debug_apply_knowledge_routing` may change classification metadata and create
   a new revision, but it cannot set the document ACTIVE or bypass review.
 - Web-based automatic routing is a separate platform-model workflow. Do not

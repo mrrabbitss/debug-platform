@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +77,12 @@ class DiagnosticMethodDocument:
     content_sha256: str
     role: str
     personal_revision_id: str | None = None
+    bundle_id: str | None = None
+    source_paths: list[str] = field(default_factory=list)
+    dependency_ids: list[str] = field(default_factory=list)
+    unresolved_references: list[str] = field(default_factory=list)
+    problem_categories: list[str] = field(default_factory=list)
+    selection_reason: str | None = None
 
     def public_snapshot(self) -> dict[str, Any]:
         snapshot = asdict(self)
@@ -124,16 +130,24 @@ def load_applicable_diagnostic_methods(
             KnowledgeDocument.active.is_(True),
             KnowledgeDocument.review_status == "ACTIVE",
             KnowledgeDocument.confidentiality.in_(["PUBLIC", "INTERNAL"]),
-            KnowledgeDocument.source_type.in_(DIAGNOSTIC_SOURCE_TYPES),
         )
         .order_by(KnowledgeDocument.source_type, KnowledgeDocument.title, KnowledgeDocument.id)
     ).all())
+    from app.services.workbench import case_knowledge
+    if case_knowledge.get() is not None:
+        from app.services.workbench_snapshot import load_knowledge
+        rows, _ = load_knowledge(db, case_knowledge.get())
     if knowledge_view:
         from app.services.knowledge_personal import working_documents
         working = working_documents(db, knowledge_view)
         replaced = {document.id for document in working}
         rows = [row for row in rows if row.id not in replaced]
         rows.extend(row for row in working if row.source_type in DIAGNOSTIC_SOURCE_TYPES)
+    from app.services.workbench import scope_methods, knowledge_scope, matches_category, case_category
+    from app.services.skill_dependencies import expand_bundle_documents, bundle_dependencies
+    available = rows
+    rows = scope_methods([row for row in rows if row.source_type in DIAGNOSTIC_SOURCE_TYPES], case)
+    rows = expand_bundle_documents(rows, available)
     result: list[DiagnosticMethodDocument] = []
     for row in rows:
         # A managed WLAN is one diagnostic system: an AP symptom may originate
@@ -143,6 +157,9 @@ def load_applicable_diagnostic_methods(
         if not knowledge_matches_joint_diagnostic_scope(row.device_type):
             continue
         content = row.content.replace("\r\n", "\n").replace("\r", "\n")
+        metadata = json_loads(row.metadata_json, {})
+        dependencies, missing = bundle_dependencies(row, available)
+        category = case_category.get() or getattr(case, "problem_category", "unknown")
         result.append(DiagnosticMethodDocument(
             id=row.id,
             title=row.title,
@@ -154,6 +171,10 @@ def load_applicable_diagnostic_methods(
             content_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
             role=_document_role(row.source_type),
             personal_revision_id=json_loads(row.metadata_json, {}).get("personal_revision_id"),
+            bundle_id=metadata.get("bundle_id"), source_paths=metadata.get("source_paths", []),
+            dependency_ids=dependencies, unresolved_references=missing, problem_categories=knowledge_scope(row),
+            selection_reason=("对应类别及通用知识不足，或总领Skill明确引用此依赖，补充跨类参考；需核对适用范围"
+                              if not matches_category(row, category) else None),
         ))
     known_hashes = {document.content_sha256 for document in result}
     repository_root = Path(__file__).resolve().parents[3]

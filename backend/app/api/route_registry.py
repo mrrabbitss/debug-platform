@@ -19,10 +19,14 @@ from app.api.memory_governance import router as memory_governance_router
 from app.api.repositories import router as repositories_router
 from app.api.retrieval_evaluation import router as retrieval_evaluation_router
 from app.api.system import router as system_router
+from app.api.workbench import router as workbench_router
+from app.api.knowledge_assistant import router as knowledge_assistant_router
 
 
 def include_modular_routers(router: APIRouter) -> None:
     for child in (
+        workbench_router,
+        knowledge_assistant_router,
         agent_runs_router,
         client_discovery_router,
         demo_cases_router,

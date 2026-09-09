@@ -22,9 +22,12 @@ from app.services.diagnostic_planning_prompt import (
     fault_tree_items_for_prompt,
 )
 from app.services.fault_tree_coverage import FaultTreeCoverageItem
+from app.services.workbench import case_category
 
 
 PLANNING_REQUIREMENTS = [
+    "problem_category是本次诊断固定的问题类别；优先对应类别及通用知识，跨类补充必须说明原因，未知类别根据证据建议分类",
+    "总领Skill的dependency_ids已随方法读取，按总领的适用条件和步骤使用子文件；unresolved_references必须作为知识缺口，不得编造其内容",
     "后端已通过 read_diagnostic_documents 工具完整读取 mandatory_method_documents；read_document_ids 会由工具轨迹证明并由后端写入，不要编造 ID",
     "method_assessments 必须逐份覆盖全部文档；根据案例现象明确标记 RELEVANT、POSSIBLY_RELEVANT 或 NOT_RELEVANT，并说明命中信号",
     "案例现象与故障树标题、症状、日志特征存在直接重合时，不得把该故障树标记为 NOT_RELEVANT",
@@ -64,6 +67,7 @@ def build_governed_planning_prompt(
     correction: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     prompt = {
+        "problem_category": case_category.get() or case.problem_category,
         "round": round_number,
         "case": {
             "title": case.title,

@@ -29,6 +29,8 @@ def main() -> None:
     tracked = set(git("ls-files", "-z").decode("utf-8").split("\0")) - {""}
     untracked = set(git("ls-files", "--others", "--exclude-standard", "-z").decode("utf-8").split("\0")) - {""}
     included = tracked | {name for name in untracked if name.startswith(UNTRACKED_SOURCE_ROOTS)}
+    if ".codex/config.toml" in untracked:
+        included.add(".codex/config.toml")
     entries = []
     archive = target / "source.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:

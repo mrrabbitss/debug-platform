@@ -30,7 +30,7 @@ Claude Code session is the only generative reasoner for this workflow.
 
 ## Select the workflow
 
-- For one or more local `.md` or `.markdown` files that should be classified
+- For administrators with one or more local `.md` or `.markdown` files to classify
   into the governed knowledge taxonomy, use the knowledge-routing workflow in
   [references/knowledge-routing.md](references/knowledge-routing.md). Upload
   with `scripts/upload-knowledge-markdown.ps1`; then the current CLI model must
@@ -52,10 +52,11 @@ Claude Code session is the only generative reasoner for this workflow.
 4. List and read the diagnostic method documents before proposing checks.
    Assess every method the run marks as required; do not infer content from a
    title alone.
-   The run can include the signed-in user's personal knowledge revisions. Keep
-   `personal_revision_id` and `PERSONAL_UNREVIEWED` provenance in the result;
-   a personal correction is immediately usable by its author but is not a
-   globally approved fact. Never use a past case or a method as proof of this
+   Follow the run's fixed problem category and reviewed Skill dependencies.
+   Reading a root Skill includes its `dependency_ids`; report any unresolved
+   references. New runs use shared approved knowledge. Historical personal
+   snapshots remain readable with their original provenance and do not become
+   globally approved facts. Never use a past case or a method as proof of this
    case's root cause; retrieve and validate current-case evidence.
 5. Form a bounded check plan locally, then call the required method/evidence
    tools. Each response returns a server receipt. Submit that round only after
@@ -73,6 +74,12 @@ Claude Code session is the only generative reasoner for this workflow.
 7. Build the structured diagnosis and call `debug_finalize_diagnosis`. Correct
    validation errors using the supplied error details; never invent IDs to make
    validation pass.
+   Use the returned fixed `report_template` and `report_instructions` when
+   writing `report_markdown`; cite current-case receipts as `[[evidence_id]]`.
+   Keep each AP's timeline and reasoning separate, mark unknown fields pending,
+   and separate root-cause confidence from action priority. Category suggestions
+   must use `available_problem_categories` and include an evidence-backed reason;
+   they do not change the case automatically.
 8. Present the persisted analysis ID, root-cause confidence, strongest evidence,
    open gaps, and recommended actions. Persist a report only when the user asks
    or confirms; return the Web UI URL when it is useful.

@@ -58,6 +58,11 @@ job_runner.register(
 
 @router.post("/cases", response_model=CaseOut)
 def create_case(payload: CaseCreate, request: Request, db: Db) -> Case:
+    from app.services.workbench import validate_case_options
+    try:
+        validate_case_options(db, payload.model_dump())
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     principal = getattr(request.state, "principal", {})
     owner_id = principal.get("id") if principal.get("type") == "user_token" else None
     case = Case(id=new_id("CASE"), owner_id=owner_id, **payload.model_dump())
@@ -181,6 +186,11 @@ def get_case_access(case_id: str, request: Request, db: Db) -> dict:
 
 @router.patch("/cases/{case_id}", response_model=CaseOut)
 def update_case(case_id: str, payload: CaseUpdate, db: Db) -> Case:
+    from app.services.workbench import validate_case_options
+    try:
+        validate_case_options(db, payload.model_dump(exclude_unset=True))
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     case = db.get(Case, case_id)
     if not case:
         raise HTTPException(404, "Case not found")

@@ -306,13 +306,15 @@ onBeforeUnmount(() => {
         </el-collapse-item>
       </el-collapse>
 
-      <PlanningTracePanel
+      <details class="technical-details"><summary>技术轨迹与执行记录</summary>
+    <PlanningTracePanel
         :case-id="caseId"
         :run-id="triage.agent_run_id"
         operation="log_triage_planning"
         :title="isDemoSnapshot ? '真实 GLM-5.2 历史日志筛查轨迹（脱敏快照）' : '日志 LLM Planning 轨迹'"
         style="margin-bottom:14px"
       />
+    </details>
 
       <el-tabs v-if="triage.status === 'COMPLETED'" v-model="activeBucket" type="border-card">
         <el-tab-pane

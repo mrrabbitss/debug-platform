@@ -15,7 +15,7 @@ transport:
   knowledge_markdown_upload: /api/v1/knowledge-routing/import
 
 knowledge_routing:
-  authorization: engineer_owner_or_admin
+  authorization: admin_only
   rest_import: /api/v1/knowledge-routing/import
   accepted_extensions:
     - .md
@@ -187,18 +187,18 @@ tools:
   - name: debug_get_knowledge_routing_context
     access: read
     case_scope: owned_knowledge_drafts
-    authorization: engineer_owner_or_admin
+    authorization: admin_only
     purpose: Return the active leaf taxonomy plus bounded masked excerpts and optimistic concurrency fields for selected Markdown drafts; the host CLI model performs classification.
 
   - name: debug_read_knowledge_sections
     access: read
-    case_scope: owned_knowledge_drafts
-    authorization: engineer_owner_or_admin
+    case_scope: visible_knowledge
+    authorization: published_visible_or_admin
     purpose: Read all masked Markdown sections through bounded pages pinned to a content hash; no generative backend calls.
 
   - name: debug_apply_knowledge_routing
     access: write
     write_effect: knowledge_draft_routing
     case_scope: owned_knowledge_drafts
-    authorization: engineer_owner_or_admin
+    authorization: admin_only
     purpose: Atomically apply allowlisted host-model category decisions to independent inactive DRAFT documents without publishing them.

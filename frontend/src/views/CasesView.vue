@@ -1,151 +1,69 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
-import type { CaseItem, Principal } from '../types'
-
+import { useWorkbench, failure } from '../composables/useWorkbench'
+import type { CaseItem } from '../types'
 const router = useRouter()
+const { config, canSubmit, caseCategories, loadConfig, categoryName } = useWorkbench()
 const cases = ref<CaseItem[]>([])
-const loading = ref(false)
-const demoLoading = ref(false)
-const dialogVisible = ref(false)
-const principal = ref<Principal | null>(null)
-const authError = ref('')
-const form = reactive({
-  title: '', device_type: 'GW', device_model: '', firmware_version: '', issue_time: '',
-  description: '', reproduction_steps: '', topology: ''
-})
-const canCreate = computed(() => principal.value !== null && principal.value.role !== 'VIEWER')
-
-function errorMessage(error: any, fallback: string) {
-  return error?.response?.data?.detail || error?.message || fallback
-}
-
-async function loadIdentity() {
-  try {
-    principal.value = (await api.get('/system/me')).data
-    authError.value = ''
-  } catch (error: any) {
-    principal.value = null
-    authError.value = errorMessage(error, '需要先配置访问凭据')
-  }
-}
-
-async function loadCases() {
-  if (!principal.value) return
-  loading.value = true
-  try {
-    cases.value = (await api.get('/cases')).data
-    authError.value = ''
-  } catch (error: any) {
-    authError.value = errorMessage(error, '案例读取失败')
-  }
+const loading = ref(false), saving = ref(false), dialog = ref(false), query = ref(''), category = ref(''), advanced = ref(false)
+const error = ref(''), formError = ref('')
+const defaults = () => ({ title: '', problem_category: 'unknown', description: '', device_type: 'GW', chat_profile_id: null as string | null,
+  model_egress_approved: true, device_model: '', firmware_version: '', topology: '', reproduction_steps: '', issue_time: '' })
+const form = reactive(defaults())
+const visible = computed(() => cases.value.filter(item => (!category.value || (item.problem_category || 'unknown') === category.value) && (!query.value.trim() || `${item.title} ${item.description}`.toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase()))))
+const statusName = (value: string) => ({ DRAFT:'待处理',QUEUED:'等待诊断',RUNNING:'诊断中',ANALYZING:'诊断中',COMPLETED:'已生成诊断',ANALYZED:'已生成诊断',FAILED:'处理失败',RESOLVED:'已定位' } as Record<string, string>)[value] || value
+const inProgress = computed(() => cases.value.filter(item => ['RUNNING','ANALYZING','QUEUED'].includes(item.status)).length)
+async function load() {
+  loading.value = true; error.value = ''
+  try { await loadConfig(); cases.value = (await api.get('/cases')).data }
+  catch(cause) { error.value = failure(cause) }
   finally { loading.value = false }
 }
-
-async function createCase() {
-  if (!form.title.trim()) return ElMessage.warning('请填写问题标题')
-  try {
-    const { data } = await api.post('/cases', form)
-    dialogVisible.value = false
-    ElMessage.success('案例已创建')
-    router.push(`/cases/${data.id}`)
-  } catch (error: any) {
-    ElMessage.error(errorMessage(error, '案例创建失败'))
-  }
+function create() {
+  Object.assign(form, defaults())
+  const preferred = config.value.preferences.chat_profile_id
+  form.chat_profile_id = config.value.models.some(item => item.id === preferred) ? preferred || null : null
+  formError.value = ''; advanced.value = false; dialog.value = true
 }
-
-function isDemoCase(item: CaseItem) {
-  return item.id.startsWith('CASE-DEMO-AP-OFFLINE-')
+async function save() {
+  if (saving.value || !canSubmit.value) return
+  if (form.title.trim().length < 2) { formError.value = '请填写至少两个字的问题标题'; return }
+  saving.value = true; formError.value = ''
+  try { const {data} = await api.post('/cases', { ...form, title: form.title.trim(), chat_profile_id: form.chat_profile_id || null }); dialog.value = false; await router.push(`/cases/${data.id}`) }
+  catch(cause) { formError.value = failure(cause) }
+  finally { saving.value = false }
 }
-
-async function importDemoCase() {
-  demoLoading.value = true
-  try {
-    const { data } = await api.post('/demo-cases/ap-frequent-offline')
-    ElMessage.success(
-      data.restored
-        ? '真实 GLM-5.2 演示快照已恢复'
-        : data.created
-          ? '真实 GLM-5.2 历史成功结果已导入；本次导入未再次调用模型'
-          : '真实 GLM-5.2 演示快照已存在，正在打开'
-    )
-    router.push(`/cases/${data.case.id}`)
-  } catch (error: any) {
-    ElMessage.error(errorMessage(error, '演示案例导入失败'))
-  } finally {
-    demoLoading.value = false
-  }
-}
-
-onMounted(async () => {
-  await loadIdentity()
-  await loadCases()
-})
+onMounted(load)
 </script>
-
 <template>
-  <div>
-    <div class="toolbar">
-      <h1 class="page-title" style="margin-right:auto">故障案例</h1>
-      <el-tag v-if="principal" effect="plain">{{ principal.role }}</el-tag>
-      <el-button
-        type="success"
-        plain
-        :disabled="!canCreate"
-        :loading="demoLoading"
-        data-testid="import-ap-offline-demo"
-        @click="importDemoCase"
-      >导入 AP 离线演示</el-button>
-      <el-button type="primary" :disabled="!canCreate" @click="dialogVisible = true">新建案例</el-button>
-      <el-button @click="loadCases">刷新</el-button>
-    </div>
-    <el-alert v-if="authError" type="warning" :closable="false" :title="authError" style="margin-bottom:14px" />
-    <div v-if="authError" class="toolbar"><el-button type="primary" @click="router.push('/security')">打开安全与审计并配置凭据</el-button></div>
-    <el-alert v-else-if="principal?.role === 'VIEWER'" type="info" :closable="false" title="当前账号为只读角色，可以查看获授权案例，但不能新建案例。" style="margin-bottom:14px" />
-    <el-alert
-      v-else
-      type="info"
-      :closable="false"
-      title="内置 AP 频繁离线演示仅含纯合成 GW/AP 日志；一键生成可浏览日志、三层筛查和综合诊断快照，不调用模型，也不包含私有方法正文。"
-      style="margin-bottom:14px"
-    />
-    <el-card>
-      <el-table :data="cases" v-loading="loading" @row-dblclick="(row: CaseItem) => router.push(`/cases/${row.id}`)">
-        <el-table-column prop="id" label="案例编号" width="210" />
-        <el-table-column prop="title" label="问题标题" min-width="260">
-          <template #default="scope">
-            <el-tag v-if="isDemoCase(scope.row as CaseItem)" size="small" type="success" style="margin-right:8px">真实 GLM 演示</el-tag>
-            {{ scope.row.title }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="device_type" label="设备" width="80" />
-        <el-table-column prop="device_model" label="型号" width="130" />
-        <el-table-column prop="firmware_version" label="固件版本" width="130" />
-        <el-table-column prop="status" label="状态" width="120">
-          <template #default="scope"><el-tag>{{ scope.row.status }}</el-tag></template>
-        </el-table-column>
-        <el-table-column prop="severity" label="级别" width="90" />
-        <el-table-column prop="created_at" label="创建时间" width="180" />
-        <el-table-column label="操作" width="100">
-          <template #default="scope"><el-button link type="primary" @click="router.push(`/cases/${scope.row.id}`)">查看</el-button></template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-
-    <el-dialog v-model="dialogVisible" title="创建 GW/AP 故障案例" width="680px">
-      <el-form label-width="110px">
-        <el-form-item label="问题标题"><el-input v-model="form.title" /></el-form-item>
-        <el-form-item label="设备类型"><el-radio-group v-model="form.device_type"><el-radio-button value="GW">GW</el-radio-button><el-radio-button value="AP">AP</el-radio-button><el-radio-button value="OTHER">其他</el-radio-button></el-radio-group></el-form-item>
-        <el-form-item label="设备型号"><el-input v-model="form.device_model" /></el-form-item>
-        <el-form-item label="固件版本"><el-input v-model="form.firmware_version" /></el-form-item>
-        <el-form-item label="问题时间"><el-input v-model="form.issue_time" placeholder="例如 2026-07-20 10:32:00" /></el-form-item>
-        <el-form-item label="组网环境"><el-input v-model="form.topology" type="textarea" :rows="2" /></el-form-item>
-        <el-form-item label="问题现象"><el-input v-model="form.description" type="textarea" :rows="4" /></el-form-item>
-        <el-form-item label="复现步骤"><el-input v-model="form.reproduction_steps" type="textarea" :rows="3" /></el-form-item>
-      </el-form>
-      <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" @click="createCase">创建</el-button></template>
-    </el-dialog>
+  <div class="workspace-page">
+    <div class="workspace-heading"><div><span class="eyebrow">DIAGNOSIS</span><h1>故障定位</h1><p class="muted">记录问题、收集证据，让诊断有据可循。</p></div><el-button type="primary" size="large" :disabled="!canSubmit || loading" @click="create">创建待定位案例</el-button></div>
+    <div class="summary-strip"><div><strong>{{ cases.length }}</strong><span>全部案例</span></div><div><strong>{{ inProgress }}</strong><span>处理中</span></div><p class="muted">从上传 GW / AP 日志开始，逐步完善问题资料。</p></div>
+    <div class="toolbar"><el-input v-model="query" aria-label="搜索问题" placeholder="搜索问题标题或现象" clearable class="search-input" /><el-select v-model="category" aria-label="筛选问题类别" clearable placeholder="全部问题类别" style="width:180px"><el-option v-for="item in caseCategories" :key="item.id" :label="item.name" :value="item.id" /></el-select><el-button :loading="loading" @click="load">刷新</el-button></div>
+    <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="inline-alert" />
+    <el-card shadow="never"><el-table :data="visible" v-loading="loading" @row-click="(row:CaseItem) => router.push(`/cases/${row.id}`)" class="clickable-table">
+      <el-table-column label="问题" min-width="250"><template #default="{row}"><router-link class="case-title-link" :to="`/cases/${row.id}`" @click.stop>{{ row.title }}</router-link><p class="table-description">{{ row.description || '待补充问题现象' }}</p></template></el-table-column>
+      <el-table-column label="问题类别" width="130"><template #default="{row}">{{ categoryName(row.problem_category) }}</template></el-table-column>
+      <el-table-column label="状态" width="150"><template #default="{row}"><el-tag effect="plain" :type="row.status==='FAILED'?'danger':'info'">{{ statusName(row.status) }}</el-tag></template></el-table-column><el-table-column prop="device_model" label="设备型号" width="130" />
+      <el-table-column label="创建时间" width="180"><template #default="{row}">{{ new Date(row.created_at).toLocaleString() }}</template></el-table-column>
+      <template #empty><el-empty :description="error ? '案例暂时无法加载，请刷新重试' : query || category ? '没有匹配的案例，试试其他条件' : '还没有案例，从创建一个问题开始'" /></template>
+    </el-table></el-card>
+    <el-dialog v-model="dialog" title="创建待定位案例" width="640px" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving"><el-form label-position="top" @submit.prevent="save">
+      <el-alert v-if="formError" :title="formError" type="error" :closable="false" class="inline-alert" />
+      <el-form-item label="问题标题" required><el-input v-model="form.title" aria-label="问题标题" maxlength="255" placeholder="用一句话描述问题" /></el-form-item>
+      <el-form-item label="问题类别"><el-radio-group v-model="form.problem_category" aria-label="问题类别"><el-radio-button v-for="item in caseCategories" :key="item.id" :value="item.id">{{ item.name }}</el-radio-button></el-radio-group></el-form-item>
+      <p v-if="form.problem_category==='unknown'" class="field-hint">不确定类别时选择“未知”，诊断会结合多类知识查找线索。</p>
+      <el-form-item label="问题现象"><el-input v-model="form.description" aria-label="问题现象" type="textarea" :rows="3" placeholder="发生了什么，影响哪些设备，何时开始" /></el-form-item>
+      <el-form-item label="诊断模型"><el-select v-model="form.chat_profile_id" aria-label="诊断模型" clearable placeholder="跟随系统默认"><el-option v-for="model in config.models" :key="model.id" :label="model.name + (model.active ? ' · 系统默认' : '')" :value="model.id" /></el-select></el-form-item>
+      <p v-if="!config.models.length" class="field-hint">管理员尚未预设 Chat 模型。可以先创建案例和上传日志。</p>
+      <div class="consent-panel"><el-switch v-model="form.model_egress_approved" aria-label="模型出站授权" active-text="允许模型分析" /><p>允许将问题资料、知识和脱敏证据发送到所选模型。可关闭，稍后在案例中调整。</p></div>
+      <el-button text @click="advanced=!advanced">{{ advanced ? '收起补充信息' : '补充设备、拓扑等信息' }}</el-button>
+      <div v-if="advanced" class="supplementary-fields"><el-form-item label="设备"><el-radio-group v-model="form.device_type"><el-radio value="GW">GW</el-radio><el-radio value="AP">AP</el-radio><el-radio value="OTHER">其他</el-radio></el-radio-group></el-form-item>
+        <el-form-item label="型号"><el-input v-model="form.device_model" /></el-form-item><el-form-item label="固件版本"><el-input v-model="form.firmware_version" /></el-form-item>
+        <el-form-item label="拓扑"><el-input v-model="form.topology" type="textarea" /></el-form-item><el-form-item label="复现步骤"><el-input v-model="form.reproduction_steps" type="textarea" /></el-form-item>
+      </div>
+    </el-form><template #footer><el-button :disabled="saving" @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">创建并上传日志</el-button></template></el-dialog>
   </div>
 </template>

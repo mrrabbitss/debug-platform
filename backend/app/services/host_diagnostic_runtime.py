@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import case as sql_case, select
@@ -39,6 +39,8 @@ from app.services.diagnostic_tools import (
 from app.services.diagnosis_contract import LLMDiagnosis
 from app.services.events import active_log_event_clause
 from app.services.fault_tree_coverage import FaultTreeCoverageItem, compile_fault_tree_items
+from app.services.report_contract import report_instructions
+from app.services.workbench import category_instructions
 
 
 HOST_DIAGNOSTIC_CONTRACT_VERSION = "1.0"
@@ -66,6 +68,7 @@ class HostDiagnosticSnapshot:
     case_snapshot_hash: str
     method_manifest_hash: str
     knowledge_view: tuple[str, ...] = ()
+    configuration: dict[str, Any] = field(default_factory=dict)
 
     @property
     def method_manifest(self) -> list[dict[str, Any]]:
@@ -160,6 +163,7 @@ def load_host_diagnostic_snapshot(
     *,
     session_factory: Any = SessionLocal,
     knowledge_view: list[str] | None = None,
+    configuration: dict[str, Any] | None = None,
 ) -> HostDiagnosticSnapshot:
     """Load a stable, provider-neutral snapshot for one host-owned run."""
 
@@ -172,12 +176,12 @@ def load_host_diagnostic_snapshot(
             .where(Artifact.case_id == case_id)
             .order_by(Artifact.created_at.asc(), Artifact.id.asc())
         ).all())
-        demo_methods = load_bundled_demo_methods_for_case(case, artifact_rows)
-        methods = (
-            demo_methods
-            if demo_methods is not None
-            else load_applicable_diagnostic_methods(db, case, **({"knowledge_view": knowledge_view} if knowledge_view else {}))
-        )
+        from app.services.workbench import capture_configuration, resolve_configuration, use_configuration
+        configuration = resolve_configuration(db, configuration or capture_configuration(db, case))
+        with use_configuration(configuration):
+            demo_methods = load_bundled_demo_methods_for_case(case, artifact_rows)
+            methods = (demo_methods if demo_methods is not None else load_applicable_diagnostic_methods(
+                db, case, **({"knowledge_view": knowledge_view} if knowledge_view else {})))
         artifact_sources_by_id = {
             artifact.id: normalize_artifact_source(artifact, case)
             for artifact in artifact_rows
@@ -222,7 +226,6 @@ def load_host_diagnostic_snapshot(
             "description": case.description,
             "reproduction_steps": case.reproduction_steps,
             "issue_time": case.issue_time,
-            "updated_at": case.updated_at,
             "artifacts": artifacts,
         }
         method_manifest = [method.public_snapshot() for method in methods]
@@ -230,12 +233,14 @@ def load_host_diagnostic_snapshot(
             _event_evidence(event, artifact_sources_by_id.get(event.artifact_id))
             for event in event_rows
         ]
+        db.commit()
 
     patterns = compile_diagnostic_patterns(methods)
     fault_tree_items = compile_fault_tree_items(methods)
     if demo_methods is not None:
         validate_bundled_demo_method_compilation(methods, patterns, fault_tree_items)
     return HostDiagnosticSnapshot(
+        configuration=configuration,
         knowledge_view=tuple(knowledge_view or []),
         case=case,
         artifacts=artifacts,
@@ -256,7 +261,12 @@ def host_diagnostic_context(snapshot: HostDiagnosticSnapshot) -> dict[str, Any]:
         "prompt_version": HOST_DIAGNOSTIC_PROMPT_VERSION,
         "inference_owner": "host_cli",
         "backend_chat_allowed": False,
+        "workbench_snapshot_id": snapshot.configuration.get("workbench_snapshot_id"),
+        **report_instructions(snapshot.configuration),
+        "method_instruction": "读取总领Skill时同时读取dependency_ids，并遵循总领规定的步骤；缺失依赖须明确说明。",
+        **category_instructions(snapshot.configuration.get("problem_categories")),
         "case": {
+            "problem_category": snapshot.configuration.get("problem_category", snapshot.case.problem_category),
             "id": snapshot.case.id,
             "title": snapshot.case.title,
             "device_type": snapshot.case.device_type,
@@ -296,8 +306,10 @@ def _knowledge_search(
     top_k: int,
     session_factory: Any,
     knowledge_view: list[str] | None = None,
+    configuration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    with session_factory() as db:
+    from app.services.workbench import use_configuration
+    with session_factory() as db, use_configuration(configuration or {}):
         result = agentic_search(
             db,
             case_id=case_id,
@@ -341,6 +353,7 @@ def invoke_host_diagnostic_tool(
             top_k,
             session_factory,
             list(snapshot.knowledge_view),
+            snapshot.configuration,
         ),
         log_search=(
             lambda payload: search_persisted_log_evidence(

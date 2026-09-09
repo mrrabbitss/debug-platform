@@ -85,7 +85,10 @@ class LocalHybridRetriever:
         dense_scores: dict[str, float] = {}
         session_context = nullcontext(db) if db is not None else SessionLocal()
         with session_context as active_db:
-            if apply_models:
+            from app.services.workbench import case_knowledge
+            from app.services.workbench_retrieval import scope_rows, reference_metadata
+            frozen = case_knowledge.get()
+            if apply_models and frozen is None:
                 try:
                     dense_scores = embedding_search(
                         query,
@@ -138,6 +141,7 @@ class LocalHybridRetriever:
                 for chunk, document in dense_rows:
                     row_map[chunk.id] = (chunk, document)
             rows = list(row_map.values())
+            rows, selected_category = scope_rows(active_db, rows, dense_scores, search_terms, case_id)
             if knowledge_view:
                 from app.services.knowledge_personal import overlay_chunks
                 rows = overlay_chunks(active_db, rows, knowledge_view)
@@ -193,6 +197,7 @@ class LocalHybridRetriever:
                     "document_id": document.id,
                     "document_version": chunk.document_version,
                     "chunk_id": chunk.id,
+                    **reference_metadata(document, selected_category),
                 },
             })
         for symbol in symbols:

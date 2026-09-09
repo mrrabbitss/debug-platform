@@ -197,6 +197,7 @@ onBeforeUnmount(() => {
       <el-button type="primary" :loading="submitting" :disabled="!canEdit || waiting" @click="send">发送到后台</el-button>
       <el-button v-if="activeJob && ['QUEUED', 'RUNNING'].includes(activeJob.status)" type="warning" @click="cancel">取消本轮</el-button>
     </div>
+    <details class="technical-details"><summary>技术轨迹与执行记录</summary>
     <PlanningTracePanel
       v-if="activeRunId"
       :case-id="caseId"
@@ -205,6 +206,7 @@ onBeforeUnmount(() => {
       :title="intent === 'REVISE_DIAGNOSIS' ? '本轮诊断修订轨迹' : '本轮问答轨迹'"
       style="margin-top:14px"
     />
+    </details>
   </div>
 </template>
 

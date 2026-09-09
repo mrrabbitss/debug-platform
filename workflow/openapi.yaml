@@ -1,18 +1,20 @@
 openapi: 3.1.0
 info:
   title: GW/AP Debug Platform Workflow API
-  version: 0.8.0
+  version: 0.9.0
 servers:
   - url: http://localhost:8000/api/v1
 paths:
   /system/client-info:
     get:
       operationId: discoverClientServer
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       responses:
         '200': { description: Authenticated server identity and client compatibility contract }
   /knowledge/{document_id}/publications:
     get:
       operationId: listKnowledgePublications
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: document_id
@@ -23,6 +25,7 @@ paths:
   /knowledge/{document_id}/versions/{version}/chunks/{chunk_id}:
     get:
       operationId: readKnowledgeRevisionEvidence
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: document_id
@@ -42,24 +45,29 @@ paths:
   /cases:
     post:
       operationId: createDebugCase
+      x-allowed-roles: [ADMIN, ENGINEER]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [title, device_type]
+              required: [title]
               properties:
                 title: { type: string }
-                device_type: { type: string, enum: [GW, AP, OTHER] }
+                device_type: { type: string, enum: [GW, AP, OTHER], default: GW }
                 description: { type: string }
                 device_model: { type: string }
                 firmware_version: { type: string }
+                problem_category: { type: string, maxLength: 80, default: unknown }
+                chat_profile_id: { type: [string, 'null'], maxLength: 40, default: null }
+                model_egress_approved: { type: boolean, default: true, description: New-case consent only; explicit false is preserved and endpoint policy still applies. }
       responses:
         '200': { description: Created }
   /cases/{case_id}/artifacts:
     post:
       operationId: uploadDebugArtifact
+      x-allowed-roles: [ADMIN, ENGINEER]
       parameters:
         - in: path
           name: case_id
@@ -82,6 +90,7 @@ paths:
   /cases/{case_id}/artifacts/{artifact_id}/parse:
     post:
       operationId: parseDebugArtifact
+      x-allowed-roles: [ADMIN, ENGINEER]
       parameters:
         - in: path
           name: case_id
@@ -96,6 +105,7 @@ paths:
   /cases/{case_id}/analyses:
     post:
       operationId: startDiagnosis
+      x-allowed-roles: [ADMIN, ENGINEER]
       parameters:
         - in: path
           name: case_id
@@ -106,6 +116,7 @@ paths:
   /cases/{case_id}/artifacts/{artifact_id}/triage:
     post:
       operationId: planLogTriage
+      x-allowed-roles: [ADMIN, ENGINEER]
       description: Starts background LLM planning followed by local three-bucket log scanning.
       parameters:
         - in: path
@@ -122,6 +133,7 @@ paths:
   /cases/{case_id}/log-triage/{triage_run_id}:
     get:
       operationId: getLogTriage
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: case_id
@@ -136,6 +148,7 @@ paths:
   /cases/{case_id}/log-triage/{triage_run_id}/evidence:
     get:
       operationId: listLogTriageEvidence
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: case_id
@@ -162,6 +175,7 @@ paths:
   /cases/{case_id}/log-triage/{triage_run_id}/evidence/{match_id}/occurrences:
     get:
       operationId: listLogTriageMatchOccurrences
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: case_id
@@ -187,6 +201,7 @@ paths:
   /cases/{case_id}/chat:
     post:
       operationId: askAboutCase
+      x-allowed-roles: [ADMIN, ENGINEER]
       parameters:
         - in: path
           name: case_id
@@ -208,6 +223,7 @@ paths:
   /cases/{case_id}/conversations:
     get:
       operationId: listCaseConversation
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: case_id
@@ -218,6 +234,7 @@ paths:
   /cases/{case_id}/analysis-revisions:
     get:
       operationId: listAnalysisRevisions
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: case_id
@@ -228,6 +245,7 @@ paths:
   /cases/{case_id}/analysis-revisions/{revision_id}:
     get:
       operationId: getAnalysisRevision
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: case_id
@@ -242,6 +260,7 @@ paths:
   /cases/{case_id}/analysis-revisions/{revision_id}/apply:
     post:
       operationId: applyAnalysisRevision
+      x-allowed-roles: [ADMIN, ENGINEER]
       description: Human approval creates a new immutable analysis and report source.
       parameters:
         - in: path
@@ -265,6 +284,7 @@ paths:
   /cases/{case_id}/analysis-revisions/{revision_id}/reject:
     post:
       operationId: rejectAnalysisRevision
+      x-allowed-roles: [ADMIN, ENGINEER]
       parameters:
         - in: path
           name: case_id
@@ -286,6 +306,7 @@ paths:
   /cases/{case_id}/agent-runs/{run_id}:
     get:
       operationId: getCaseAgentRun
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       description: Returns a case-scoped redacted planning trace for authorized case members.
       parameters:
         - in: path
@@ -302,6 +323,7 @@ paths:
   /cases/{case_id}/analyses/{analysis_id}/report/preview:
     get:
       operationId: previewDiagnosisReport
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: case_id
@@ -320,6 +342,7 @@ paths:
   /knowledge/upload:
     post:
       operationId: uploadKnowledgeDocument
+      x-allowed-roles: [ADMIN]
       description: Saves the upload and returns a background import job.
       requestBody:
         required: true
@@ -340,6 +363,7 @@ paths:
   /knowledge-routing/import:
     post:
       operationId: importMarkdownForRouting
+      x-allowed-roles: [ADMIN]
       description: >-
         Accepts one or more Markdown files and creates one independent inactive
         knowledge DRAFT per file. Web requests use a selected or active platform
@@ -383,6 +407,7 @@ paths:
   /cases/{case_id}/repositories:
     post:
       operationId: uploadSourceRepository
+      x-allowed-roles: [ADMIN, ENGINEER]
       description: Saves ZIP/TAR/Git Bundle input and imports it in a background job.
       parameters:
         - in: path
@@ -403,6 +428,7 @@ paths:
   /repositories/{repository_id}/index:
     post:
       operationId: indexSourceRepository
+      x-allowed-roles: [ADMIN, ENGINEER]
       parameters:
         - in: path
           name: repository_id
@@ -414,6 +440,7 @@ paths:
   /jobs/{job_id}:
     get:
       operationId: getBackgroundJob
+      x-allowed-roles: [ADMIN, ENGINEER, VIEWER]
       parameters:
         - in: path
           name: job_id
@@ -424,6 +451,7 @@ paths:
   /cases/{case_id}/agentic-search:
     post:
       operationId: runAgenticSearch
+      x-allowed-roles: [ADMIN, ENGINEER]
       parameters:
         - in: path
           name: case_id
@@ -448,6 +476,7 @@ paths:
   /knowledge-curations:
     get:
       operationId: listKnowledgeCurations
+      x-allowed-roles: [ADMIN]
       parameters:
         - in: query
           name: limit
@@ -456,6 +485,7 @@ paths:
         '200': { description: Knowledge curation sessions }
     post:
       operationId: createKnowledgeCuration
+      x-allowed-roles: [ADMIN]
       description: >-
         Stores source files locally and starts an evidence-gated background
         extraction. API model egress requires explicit consent.
@@ -490,6 +520,7 @@ paths:
   /knowledge-curations/{session_id}:
     get:
       operationId: getKnowledgeCuration
+      x-allowed-roles: [ADMIN]
       parameters:
         - in: path
           name: session_id
@@ -500,6 +531,7 @@ paths:
   /knowledge-curations/{session_id}/chat:
     post:
       operationId: refineKnowledgeCuration
+      x-allowed-roles: [ADMIN]
       parameters:
         - in: path
           name: session_id
@@ -521,6 +553,7 @@ paths:
   /knowledge-curations/{session_id}/confirm:
     post:
       operationId: confirmKnowledgeCurationDraft
+      x-allowed-roles: [ADMIN]
       description: Creates an inactive DRAFT document; it does not publish knowledge.
       parameters:
         - in: path
@@ -542,6 +575,7 @@ paths:
   /agent-runs:
     get:
       operationId: listAgentRuns
+      x-allowed-roles: [ADMIN]
       description: Lists redacted execution metadata; raw uploaded content is never returned.
       parameters:
         - in: query
@@ -564,6 +598,7 @@ paths:
   /agent-runs/{run_id}:
     get:
       operationId: getAgentRun
+      x-allowed-roles: [ADMIN]
       parameters:
         - in: path
           name: run_id
@@ -575,6 +610,7 @@ paths:
   /agent-runs/{run_id}/replay:
     post:
       operationId: replayAgentRun
+      x-allowed-roles: [ADMIN]
       description: >-
         Replays an eligible search from a redacted payload in read-only mode;
         memory writes and knowledge publication remain disabled.
@@ -586,7 +622,1030 @@ paths:
       responses:
         '200': { description: New traceable read-only search result }
         '409': { description: The run has no safe replay payload }
+  /workbench/bootstrap:
+    get:
+      tags:
+      - workbench
+      summary: Bootstrap
+      operationId: bootstrap_api_v1_workbench_bootstrap_get
+      parameters:
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      - ENGINEER
+      - VIEWER
+      x-agent-callable: true
+  /workbench/preferences:
+    put:
+      tags:
+      - workbench
+      summary: Preferences
+      operationId: preferences_api_v1_workbench_preferences_put
+      parameters:
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Preferences'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      - ENGINEER
+      x-agent-callable: true
+      description: Select an enabled administrator-preset chat model for the current user only. Does not activate
+        or modify global profiles.
+  /workbench/templates/{category_id}:
+    put:
+      tags:
+      - workbench
+      summary: Choose Template
+      operationId: choose_template_api_v1_workbench_templates__category_id__put
+      parameters:
+      - name: category_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Category Id
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateChoice'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/categories:
+    post:
+      tags:
+      - workbench
+      summary: Add Category
+      operationId: add_category_api_v1_workbench_categories_post
+      parameters:
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryInput'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/knowledge:
+    get:
+      tags:
+      - workbench
+      summary: Knowledge
+      operationId: knowledge_api_v1_workbench_knowledge_get
+      parameters:
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      - ENGINEER
+      - VIEWER
+      x-agent-callable: true
+  /workbench/library:
+    post:
+      tags:
+      - workbench
+      summary: Submit Library
+      operationId: submit_library_api_v1_workbench_library_post
+      parameters:
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibrarySubmission'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      - ENGINEER
+      x-agent-callable: true
+      description: Submit PENDING case knowledge. A supplied case must exist and be owned by the engineer (or submitted
+        by ADMIN); a report requires a matching COMPLETED analysis and is rendered on the server. Only an administrator
+        can confirm sharing.
+    get:
+      tags:
+      - workbench
+      summary: Library
+      operationId: library_api_v1_workbench_library_get
+      parameters:
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      - ENGINEER
+      - VIEWER
+      x-agent-callable: true
+  /workbench/library/{record_id}/review:
+    post:
+      tags:
+      - workbench
+      summary: Review Library
+      operationId: review_library_api_v1_workbench_library__record_id__review_post
+      parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Record Id
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewInput'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant:
+    post:
+      tags:
+      - knowledge-assistant
+      summary: Create Session
+      operationId: create_session_api_v1_workbench_assistant_post
+      parameters:
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_create_session_api_v1_workbench_assistant_post'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+    get:
+      tags:
+      - knowledge-assistant
+      summary: Sessions
+      operationId: sessions_api_v1_workbench_assistant_get
+      parameters:
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant/{session_id}:
+    get:
+      tags:
+      - knowledge-assistant
+      summary: Read Session
+      operationId: read_session_api_v1_workbench_assistant__session_id__get
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant/{session_id}/messages:
+    post:
+      tags:
+      - knowledge-assistant
+      summary: Converse
+      operationId: converse_api_v1_workbench_assistant__session_id__messages_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationInput'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant/{session_id}/confirm:
+    post:
+      tags:
+      - knowledge-assistant
+      summary: Confirm
+      operationId: confirm_api_v1_workbench_assistant__session_id__confirm_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Confirmation'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant/{session_id}/cancel:
+    post:
+      tags:
+      - knowledge-assistant
+      summary: Cancel
+      operationId: cancel_api_v1_workbench_assistant__session_id__cancel_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionInput'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant/{session_id}/pause:
+    post:
+      tags:
+      - knowledge-assistant
+      summary: Pause
+      operationId: pause_api_v1_workbench_assistant__session_id__pause_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionInput'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant/{session_id}/retry:
+    post:
+      tags:
+      - knowledge-assistant
+      summary: Retry
+      operationId: retry_api_v1_workbench_assistant__session_id__retry_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionInput'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant/{session_id}/consent:
+    patch:
+      tags:
+      - knowledge-assistant
+      summary: Consent
+      operationId: consent_api_v1_workbench_assistant__session_id__consent_patch
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsentInput'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant/{session_id}/source:
+    get:
+      tags:
+      - knowledge-assistant
+      summary: Source
+      operationId: source_api_v1_workbench_assistant__session_id__source_get
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+          maxLength: 512
+          title: Path
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Cursor
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
+  /workbench/assistant/{session_id}/readings:
+    get:
+      tags:
+      - knowledge-assistant
+      summary: Readings
+      operationId: readings_api_v1_workbench_assistant__session_id__readings_get
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+          maxLength: 512
+          title: Path
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Cursor
+      - name: x-api-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '403':
+          description: Role or resource scope does not authorize this operation
+      x-allowed-roles:
+      - ADMIN
+      x-agent-callable: false
+      description: Administrator-only REST operation; not part of the agent or MCP write allowlist.
 components:
+  schemas:
+    Body_create_session_api_v1_workbench_assistant_post:
+      properties:
+        files:
+          items:
+            type: string
+            contentMediaType: application/octet-stream
+          type: array
+          title: Files
+          default: []
+        paths:
+          type: string
+          maxLength: 34000
+          title: Paths
+          default: '[]'
+        message:
+          type: string
+          maxLength: 12000
+          minLength: 1
+          title: Message
+          default: 请完整阅读资料，比较已有知识，给出归类和新增、合并或替换方案。
+        model_egress_approved:
+          type: boolean
+          title: Model Egress Approved
+          default: true
+        mode:
+          type: string
+          enum:
+          - auto
+          - answer
+          - edit
+          title: Mode
+          default: auto
+      type: object
+      title: Body_create_session_api_v1_workbench_assistant_post
+    CategoryInput:
+      properties:
+        name:
+          type: string
+          maxLength: 60
+          minLength: 1
+          title: Name
+      type: object
+      required:
+      - name
+      title: CategoryInput
+    Confirmation:
+      properties:
+        version:
+          type: integer
+          minimum: 1.0
+          title: Version
+        review_digest:
+          anyOf:
+          - type: string
+            maxLength: 64
+            minLength: 64
+          - type: 'null'
+          title: Review Digest
+      additionalProperties: false
+      type: object
+      required:
+      - version
+      title: Confirmation
+    ConsentInput:
+      properties:
+        version:
+          type: integer
+          minimum: 1.0
+          title: Version
+        model_egress_approved:
+          type: boolean
+          title: Model Egress Approved
+      additionalProperties: false
+      type: object
+      required:
+      - version
+      - model_egress_approved
+      title: ConsentInput
+    ConversationInput:
+      properties:
+        version:
+          type: integer
+          minimum: 1.0
+          title: Version
+        message:
+          type: string
+          maxLength: 12000
+          minLength: 1
+          pattern: \S
+          title: Message
+        mode:
+          anyOf:
+          - type: string
+            enum:
+            - auto
+            - answer
+            - edit
+          - type: 'null'
+          title: Mode
+        model_egress_approved:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Model Egress Approved
+      additionalProperties: false
+      type: object
+      required:
+      - version
+      - message
+      title: ConversationInput
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    LibrarySubmission:
+      properties:
+        title:
+          type: string
+          maxLength: 255
+          minLength: 2
+          title: Title
+        problem_category:
+          type: string
+          title: Problem Category
+          default: unknown
+        content:
+          type: string
+          maxLength: 500000
+          minLength: 5
+          title: Content
+        case_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Case Id
+        analysis_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Analysis Id
+      type: object
+      required:
+      - title
+      - content
+      title: LibrarySubmission
+    Preferences:
+      properties:
+        chat_profile_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Chat Profile Id
+      type: object
+      title: Preferences
+    ReviewInput:
+      properties:
+        version:
+          type: integer
+          title: Version
+        approve:
+          type: boolean
+          title: Approve
+      type: object
+      required:
+      - version
+      - approve
+      title: ReviewInput
+    TemplateChoice:
+      properties:
+        document_id:
+          type: string
+          title: Document Id
+        version:
+          type: integer
+          title: Version
+      type: object
+      required:
+      - document_id
+      - version
+      title: TemplateChoice
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    VersionInput:
+      properties:
+        version:
+          type: integer
+          minimum: 1.0
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - version
+      title: VersionInput
   securitySchemes:
     ApiKey:
       type: apiKey

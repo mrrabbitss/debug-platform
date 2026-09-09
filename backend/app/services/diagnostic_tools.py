@@ -127,6 +127,12 @@ def _read_handler(
     unknown = set(requested).difference(environment.method_by_id)
     if unknown:
         raise ValueError("Tool requested unknown diagnostic method documents")
+    for document_id in requested:
+        for dependency in environment.method_by_id[document_id].dependency_ids:
+            if dependency not in environment.method_by_id:
+                raise ValueError("Skill dependency is absent from the pinned method snapshot")
+            if dependency not in requested:
+                requested.append(dependency)
     documents = [
         {
             **environment.method_by_id[document_id].public_snapshot(),

@@ -1,0 +1,3 @@
+# User-requested early compaction: 85% of the active 258,400-token window.
+model_auto_compact_token_limit = 219640
+model_auto_compact_token_limit_scope = "total"

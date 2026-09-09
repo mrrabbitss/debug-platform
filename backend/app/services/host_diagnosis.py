@@ -23,6 +23,7 @@ from app.services.diagnostic_planning_coverage import (
     initial_fault_tree_coverage,
 )
 from app.services.diagnosis_contract import validate_llm_diagnosis
+from app.services.workbench import validate_category_suggestion
 from app.services.host_agent_session_contracts import (
     HostAgentPlanningRoundAppend,
     HostAgentSessionCoverageUpdate,
@@ -112,6 +113,7 @@ def begin_host_diagnosis(
                     "method_manifest": context["method_manifest"],
                     "personal_knowledge_revisions": knowledge_view,
                     "prompt_version": context["prompt_version"],
+                    "workbench_snapshot_id": context.get("workbench_snapshot_id"),
                 },
                 ttl_seconds=ttl_seconds,
             ),
@@ -177,6 +179,8 @@ def require_unchanged_host_snapshot(
         view.case_id,
         session_factory=session_factory,
         knowledge_view=view.snapshot.get("personal_knowledge_revisions", []),
+        configuration={"workbench_snapshot_id": view.snapshot["workbench_snapshot_id"]}
+            if view.snapshot.get("workbench_snapshot_id") else None,
     )
     mismatches: list[str] = []
     if snapshot.case_snapshot_hash != view.case_snapshot_hash:
@@ -454,8 +458,11 @@ def finalize_host_diagnosis(
             request.diagnosis,
             set(evidence_cache),
             required_items if snapshot.fault_tree_items else None,
+            report_template=snapshot.configuration.get("report_template"),
+            case_evidence_ids={key for key, item in evidence_cache.items() if is_case_log_evidence(item)},
         )
         missing_cached = _referenced_diagnosis_ids(validated).difference(evidence_cache)
+        validate_category_suggestion(validated, snapshot.configuration.get("problem_categories"))
         if missing_cached:
             raise HostDiagnosisError(
                 "Diagnosis cited evidence without a persisted server observation"
@@ -511,6 +518,10 @@ def finalize_host_diagnosis(
             model_profile_id=None,
             agent_run_id=view.agent_run_id,
             model_config_json=json_dumps({
+                "workbench_snapshot_id": view.snapshot.get("workbench_snapshot_id"),
+                "problem_category": snapshot.configuration.get("problem_category"),
+                "report_template": {key: snapshot.configuration.get("report_template", {}).get(key)
+                                    for key in ("id", "version", "category", "sha256")},
                 "execution_mode": "host_cli_mcp",
                 "executor": view.executor,
                 "skill_version": view.skill_version,

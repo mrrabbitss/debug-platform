@@ -121,7 +121,7 @@ class JobContext:
         self.raise_if_cancelled()
         raise JobLeaseLostError("Background job lease is no longer owned")
 
-    def raise_if_cancelled(self) -> None:
+    def raise_if_cancelled(self, *, allow_completed: bool = False) -> None:
         now = utcnow()
         with SessionLocal() as db:
             job = db.get(Job, self.job_id)
@@ -129,6 +129,8 @@ class JobContext:
                 raise JobCancelledError("Job cancellation requested")
             if not job:
                 raise JobLeaseLostError("Background job no longer exists")
+            if allow_completed and job.status == "COMPLETED":
+                return
             if self.lease_owner and job.lease_owner != self.lease_owner:
                 raise JobLeaseLostError("Background job lease is no longer owned")
             expired = db.scalar(select(Job.id).where(
@@ -465,6 +467,8 @@ class JobRunner:
             )
             from app.services.knowledge_publication import recover_abandoned_publications
             recover_abandoned_publications(db)
+            from app.services.assistant_state import recover_abandoned_assistant_sessions
+            recover_abandoned_assistant_sessions(db)
             db.commit()
             job_ids = list(db.scalars(
                 select(Job.id)
@@ -554,7 +558,7 @@ class JobRunner:
         with SessionLocal() as db:
             db.execute(
                 update(Job)
-                .where(Job.id == job_id, Job.status.in_(ACTIVE_JOB_STATUSES))
+                .where(Job.id == job_id, Job.status.in_(ACTIVE_JOB_STATUSES), Job.lease_owner == self.worker_id)
                 .values(
                     status="CANCELLED",
                     message="Cancelled",
@@ -570,7 +574,9 @@ class JobRunner:
         now = utcnow()
         error_message = (str(exc) or type(exc).__name__)[:4000]
         with SessionLocal() as db:
-            job = db.get(Job, job_id)
+            job = db.scalars(update(Job).where(Job.id == job_id,
+                Job.status.in_(ACTIVE_JOB_STATUSES), Job.lease_owner == self.worker_id)
+                .values(status=Job.status).returning(Job)).first()
             if not job or job.status not in ACTIVE_JOB_STATUSES:
                 return
             if job.status == "CANCEL_REQUESTED":
@@ -661,7 +667,7 @@ class JobRunner:
             )
             heartbeat_thread.start()
             result = function(context, *args)
-            context.raise_if_cancelled()
+            context.raise_if_cancelled(allow_completed=True)
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=2)
             with SessionLocal() as db:
@@ -705,6 +711,8 @@ class JobRunner:
                 db.commit()
         except JobCancelledError:
             self._mark_cancelled(job_id)
+        except JobLeaseLostError:
+            pass  # The replacement worker owns all further state changes.
         except Exception as exc:  # noqa: BLE001
             logger.exception("Background job %s failed", job_id)
             self._fail_or_retry(job_id, exc)

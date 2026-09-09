@@ -8,6 +8,9 @@ import DiagnosticPlanningPanel from '../components/diagnosis/DiagnosticPlanningP
 import LogBrowserPanel from '../components/diagnosis/LogBrowserPanel.vue'
 import LogTriagePanel from '../components/diagnosis/LogTriagePanel.vue'
 import PlanningTracePanel from '../components/diagnosis/PlanningTracePanel.vue'
+import CaseOptionsPanel from '../components/diagnosis/CaseOptionsPanel.vue'
+import LibrarySubmissionDialog from '../components/knowledge/LibrarySubmissionDialog.vue'
+import { useWorkbench, failure } from '../composables/useWorkbench'
 import type {
   Analysis,
   Artifact,
@@ -15,27 +18,23 @@ import type {
   CaseMember,
   CasePermission,
   Job,
-  LogEvent,
   Principal,
   UserDirectoryEntry
 } from '../types'
 
 const route = useRoute()
 const caseId = String(route.params.id)
+const { config, caseCategories, loadConfig, categoryName } = useWorkbench()
+const loading = ref(true), loadError = ref(''), submittingLibrary = ref(false), actionBusy = ref(false), consentBusy = ref(false)
+let disposed = false
 const caseInfo = ref<CaseItem | null>(null)
 const artifacts = ref<Artifact[]>([])
-const events = ref<LogEvent[]>([])
 const analyses = ref<Analysis[]>([])
 const repositories = ref<any[]>([])
 const symbols = ref<any[]>([])
 const eventStats = ref<{total:number, filtered_total:number, level_counts:Record<string,number>, module_counts:Record<string,number>}>({
   total: 0, filtered_total: 0, level_counts: {}, module_counts: {}
 })
-const eventPage = ref(1)
-const eventPageSize = ref(200)
-const eventView = ref('table')
-const timelineItems = ref<any[]>([])
-const timelineModuleCounts = ref<Record<string, number>>({})
 const activeTab = ref('overview')
 const debugFile = ref<File | null>(null)
 const debugSourceDeviceType = ref<'GW' | 'AP' | 'UNKNOWN'>('UNKNOWN')
@@ -44,11 +43,9 @@ const debugFileInput = ref<HTMLInputElement | null>(null)
 const repoFile = ref<File | null>(null)
 const currentJob = ref<Job | null>(null)
 const jobTimer = ref<number | null>(null)
-const eventFilter = reactive({ level: '', module: '', search: '' })
 const diagnosis = ref<any>({})
 const reportHtml = ref('')
 const reportPreviewAnalysisId = ref('')
-const selectedEvent = ref<LogEvent | null>(null)
 const logBrowser = ref<{
   loadManifest: (artifactId: string) => Promise<void>
   openSource: (payload: { artifactId: string, sourceFile: string, line: number }) => Promise<void>
@@ -73,15 +70,8 @@ const availableMemberUsers = computed(() => {
   const assigned = new Set(caseMembers.value.map(item => item.user_id))
   return memberDirectory.value.filter(item => item.id !== caseInfo.value?.owner_id && !assigned.has(item.id))
 })
-const eventDrawerVisible = computed({
-  get: () => selectedEvent.value !== null,
-  set: (visible: boolean) => {
-    if (!visible) selectedEvent.value = null
-  }
-})
-const criticalCount = computed(() => eventStats.value.level_counts.CRITICAL || 0)
-const errorCount = computed(() => eventStats.value.level_counts.ERROR || 0)
-const modules = computed(() => Object.keys(eventStats.value.module_counts || {}).sort())
+const canSubmitResult = computed(() => principal.value?.role === 'ADMIN' || (principal.value?.role === 'ENGINEER' && caseAccess.value?.permission === 'OWNER'))
+const jobRunning = computed(() => !!currentJob.value && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(currentJob.value.status))
 const synthesisStatus = computed(() => diagnosis.value.synthesis_status || null)
 const synthesisFailure = computed(() => synthesisStatus.value?.failure || null)
 const isDemoSnapshot = computed(() => Boolean(
@@ -172,8 +162,7 @@ async function loadAll() {
     reportPreviewAnalysisId.value = ''
   }
   await loadAccessContext()
-  await loadEvents()
-  await loadTimeline()
+  try { eventStats.value = (await api.get(`/cases/${caseId}/events/stats`)).data } catch { /* Summary counts are optional. */ }
 }
 
 async function loadAccessContext() {
@@ -241,38 +230,17 @@ async function removeCaseMember(member: CaseMember) {
   }
 }
 
-async function loadEvents(resetPage = false) {
-  if (resetPage) eventPage.value = 1
-  const params: any = {
-    limit: eventPageSize.value,
-    offset: (eventPage.value - 1) * eventPageSize.value
-  }
-  if (eventFilter.level) params.level = eventFilter.level
-  if (eventFilter.module) params.module = eventFilter.module
-  if (eventFilter.search) params.search = eventFilter.search
-  const [eventsResponse, statsResponse] = await Promise.all([
-    api.get(`/cases/${caseId}/events`, { params }),
-    api.get(`/cases/${caseId}/events/stats`, { params })
-  ])
-  events.value = eventsResponse.data
-  eventStats.value = statsResponse.data
-}
-
-async function loadTimeline() {
-  const { data } = await api.get(`/cases/${caseId}/timeline`, { params: { limit: 300 } })
-  timelineItems.value = data.items || []
-  timelineModuleCounts.value = data.module_counts || {}
-}
-
-function timelineType(level: string): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
-  const types: Record<string, 'primary' | 'success' | 'warning' | 'danger' | 'info'> = {
-    CRITICAL: 'danger', ERROR: 'danger', WARN: 'warning', NOTICE: 'primary', INFO: 'success'
-  }
-  return types[level] || 'info'
+async function initialize() {
+  loading.value = true; loadError.value = ''
+  try { await Promise.all([loadConfig(), loadAll()]) }
+  catch (cause) { loadError.value = failure(cause) }
+  finally { loading.value = false }
 }
 
 async function uploadDebug() {
+  if (actionBusy.value || !canEditCase.value) return
   if (!debugFile.value) return ElMessage.warning('请选择 collectDebuginfo 或日志文件')
+  actionBusy.value = true
   try {
     const selectedName = debugFile.value.name
     const data = new FormData()
@@ -292,7 +260,7 @@ async function uploadDebug() {
     watchJob(parseJob)
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || error?.message || '日志上传或解析启动失败')
-  }
+  } finally { actionBusy.value = false }
 }
 
 function selectDebugFile(event: Event) {
@@ -320,25 +288,28 @@ async function deleteArtifact(artifact: Artifact) {
 }
 
 async function analyze() {
+  if (actionBusy.value || jobRunning.value || !canEditCase.value) return
+  actionBusy.value = true
   try {
     const { data } = await api.post(`/cases/${caseId}/analyses`)
-    await loadAll()
     watchJob(data)
+    activeTab.value = 'diagnosis'
+    await loadAll()
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || error?.message || '综合诊断启动失败')
-  }
+  } finally { actionBusy.value = false }
 }
 
 async function updateModelEgress(value: boolean) {
-  if (!caseInfo.value) return
+  if (!caseInfo.value || consentBusy.value || !canEditCase.value) return
+  consentBusy.value = true
   try {
     const { data } = await api.patch(`/cases/${caseId}`, { model_egress_approved: value })
     caseInfo.value = data
     ElMessage.success(value ? '已授权模型读取问题描述与脱敏证据' : '已关闭模型出站授权')
   } catch (error: any) {
-    if (caseInfo.value) caseInfo.value.model_egress_approved = !value
     ElMessage.error(error?.response?.data?.detail || error?.message || '模型授权更新失败')
-  }
+  } finally { consentBusy.value = false }
 }
 
 function watchJob(job: Job) {
@@ -347,6 +318,7 @@ function watchJob(job: Job) {
   const poll = async () => {
     try {
       const { data } = await api.get(`/jobs/${job.id}`)
+      if (disposed) return
       currentJob.value = data
       if (['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(data.status)) {
         jobTimer.value = null
@@ -397,15 +369,6 @@ async function openLogSource(payload: { artifactId: string, sourceFile: string, 
   activeTab.value = 'logs'
   await nextTick()
   await logBrowser.value?.openSource(payload)
-}
-
-async function openEventSource(event: LogEvent) {
-  selectedEvent.value = null
-  await openLogSource({ artifactId: event.artifact_id, sourceFile: event.source_file, line: event.line_start })
-}
-
-async function openTimelineSource(item: any) {
-  await openLogSource({ artifactId: item.artifact_id, sourceFile: item.source_file, line: Number(item.line_start || 1) })
 }
 
 async function openTriageSource(payload: { artifactId: string, sourceFile: string, line: number }) {
@@ -486,22 +449,25 @@ async function suggestPatch(symbolId: string) {
   }
 }
 
-onMounted(loadAll)
+onMounted(initialize)
 onBeforeUnmount(() => {
+  disposed = true
   if (jobTimer.value) window.clearTimeout(jobTimer.value)
 })
 </script>
 
 <template>
-  <div v-if="caseInfo">
+  <div v-if="loadError" class="state-panel" role="alert"><h2>案例暂时无法加载</h2><p>{{ loadError }}</p><el-button type="primary" @click="initialize">重新加载</el-button></div>
+  <el-skeleton v-else-if="loading" :rows="8" animated />
+  <div v-else-if="caseInfo" class="workspace-page case-detail">
+    <router-link class="back-link" to="/cases">← 返回故障定位</router-link>
     <div class="toolbar">
       <div style="margin-right:auto">
         <h1 class="page-title" style="margin-bottom:4px">{{ caseInfo.title }}</h1>
-        <span class="muted">{{ caseInfo.id }} · {{ caseInfo.device_type }} {{ caseInfo.device_model || '' }} · {{ caseInfo.firmware_version || '固件版本未填' }}</span>
+        <span class="muted">{{ categoryName(caseInfo.problem_category) }} · {{ caseInfo.device_type }} {{ caseInfo.device_model || '' }} · {{ caseInfo.firmware_version || '固件版本未填' }}</span>
       </div>
-      <el-tag>{{ caseInfo.status }}</el-tag>
-      <el-tag v-if="caseAccess" effect="plain">权限：{{ caseAccess.permission }}</el-tag>
-      <el-button type="primary" :disabled="!canEditCase" @click="analyze">开始综合诊断</el-button>
+      <el-button v-if="canSubmitResult" :disabled="!latestAnalysis" @click="submittingLibrary=true">提交案例与报告</el-button>
+      <el-button type="primary" :disabled="!canEditCase || jobRunning || !artifacts.length" :loading="actionBusy" @click="analyze">开始综合诊断</el-button>
     </div>
 
     <el-alert v-if="caseAccess && !canEditCase" type="info" :closable="false" title="当前账号对这个案例只有只读权限。" style="margin-bottom:14px" />
@@ -529,14 +495,8 @@ onBeforeUnmount(() => {
 
     <el-tabs v-model="activeTab" type="border-card" @tab-change="handleTabChange">
       <el-tab-pane label="案例概览" name="overview">
-        <div class="card-grid">
-          <div class="stat-card"><div class="muted">已结构化日志记录</div><strong style="font-size:28px">{{ eventStats.total }}</strong></div>
-          <div class="stat-card"><div class="muted">CRITICAL 级记录</div><strong style="font-size:28px;color:#991b1b">{{ criticalCount }}</strong></div>
-          <div class="stat-card"><div class="muted">ERROR 级记录</div><strong style="font-size:28px;color:#dc2626">{{ errorCount }}</strong></div>
-          <div class="stat-card"><div class="muted">知识增强</div><strong style="font-size:28px">{{ diagnosis.retrieved_knowledge?.length || 0 }}</strong></div>
-        </div>
-        <p class="muted">以上是解析器按日志级别统计的记录条数，不等同于独立故障数或真实严重事件数。</p>
-        <h3 class="section-title">问题现象</h3><p>{{ caseInfo.description || '未填写' }}</p>
+        <div class="case-journey" aria-label="定位流程"><span :class="{done:artifacts.length}">1 · 上传问题日志</span><span :class="{done:latestAnalysis}">2 · 诊断与核对</span><span>3 · 报告与知识沉淀</span></div>
+        <CaseOptionsPanel :case-info="caseInfo" :can-edit="canEditCase" :categories="caseCategories" :models="config.models" @updated="value => caseInfo=value" />
         <el-card shadow="never" style="margin:14px 0">
           <div class="toolbar">
             <div style="margin-right:auto">
@@ -544,16 +504,17 @@ onBeforeUnmount(() => {
               <div class="muted">开启后，系统可将问题描述、已发布方法文档和脱敏证据发送到当前 Chat 模型；原始日志正文仍由本机扫描。</div>
             </div>
             <el-switch
-              v-model="caseInfo.model_egress_approved"
-              :disabled="!canEditCase"
+              :model-value="caseInfo.model_egress_approved"
+              aria-label="案例模型出站授权" :loading="consentBusy"
+              :disabled="!canEditCase || consentBusy"
               active-text="已授权"
               inactive-text="未授权"
               @change="(value:string | number | boolean) => updateModelEgress(value === true)"
             />
           </div>
         </el-card>
-        <template v-if="canManageMembers">
-          <h3 class="section-title">案例成员与权限</h3>
+        <details v-if="canManageMembers" class="technical-details">
+          <summary>案例协作与成员权限</summary>
           <el-card shadow="never" style="margin-bottom:16px">
             <div class="toolbar">
               <el-select v-model="memberForm.user_id" filterable placeholder="选择用户" style="width:260px">
@@ -580,10 +541,10 @@ onBeforeUnmount(() => {
               <el-table-column label="操作" width="100"><template #default="scope"><el-button link type="danger" @click="removeCaseMember(scope.row as CaseMember)">移除</el-button></template></el-table-column>
             </el-table>
           </el-card>
-        </template>
-        <h3 class="section-title">上传 collectDebuginfo</h3>
+        </details>
+        <h3 class="section-title">上传问题日志</h3>
         <div class="toolbar">
-          <input ref="debugFileInput" type="file" :disabled="!canEditCase" @change="selectDebugFile"/>
+          <input ref="debugFileInput" type="file" aria-label="选择问题日志" :disabled="!canEditCase || actionBusy" @change="selectDebugFile"/>
           <el-select v-model="debugSourceDeviceType" style="width:145px" aria-label="日志来源设备">
             <el-option label="来源未知" value="UNKNOWN" />
             <el-option label="GW 日志" value="GW" />
@@ -594,7 +555,7 @@ onBeforeUnmount(() => {
             <el-option label="主设备" value="PRIMARY" />
             <el-option label="从设备" value="SECONDARY" />
           </el-select>
-          <el-button type="primary" :disabled="!canEditCase" @click="uploadDebug">上传并解析</el-button>
+          <el-button type="primary" :disabled="!canEditCase || !debugFile || jobRunning" :loading="actionBusy" @click="uploadDebug">上传并解析</el-button>
           <span class="muted">支持 ZIP/TAR/TGZ、常见日志和无后缀纯文本 collectDebuginfo；无后缀日志上传时会自动追加 .txt。</span>
         </div>
         <el-table :data="artifacts">
@@ -615,90 +576,14 @@ onBeforeUnmount(() => {
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane label="日志浏览" name="logs">
+      <el-tab-pane label="日志与筛查" name="logs" lazy>
+        <LogTriagePanel v-if="activeTab==='logs'" :case-id="caseId" :artifacts="artifacts" :can-edit="canEditCase" :model-egress-approved="caseInfo.model_egress_approved" @open-source="openTriageSource" />
+        <h3 class="section-title">原始日志与证据位置</h3>
         <LogBrowserPanel ref="logBrowser" :artifacts="artifacts" />
       </el-tab-pane>
 
-      <el-tab-pane label="智能日志筛查" name="triage">
-        <LogTriagePanel
-          :case-id="caseId"
-          :artifacts="artifacts"
-          :can-edit="canEditCase"
-          :model-egress-approved="caseInfo.model_egress_approved"
-          @open-source="openTriageSource"
-        />
-      </el-tab-pane>
-
-      <el-tab-pane label="事件与时间线" name="events">
-        <el-tabs v-model="eventView">
-          <el-tab-pane label="事件列表" name="table" />
-          <el-tab-pane label="时间线" name="timeline" />
-        </el-tabs>
-        <template v-if="eventView === 'table'">
-        <div class="toolbar">
-          <el-select v-model="eventFilter.level" clearable placeholder="级别" style="width:120px"><el-option v-for="x in ['CRITICAL','ERROR','WARN','NOTICE','INFO','DEBUG','TRACE']" :key="x" :label="x" :value="x" /></el-select>
-          <el-select v-model="eventFilter.module" clearable placeholder="模块" style="width:130px"><el-option v-for="x in modules" :key="x" :label="x" :value="x" /></el-select>
-          <el-input v-model="eventFilter.search" placeholder="错误码/关键词" style="width:260px" @keyup.enter="loadEvents" />
-          <el-button @click="loadEvents(true)">筛选</el-button>
-          <span class="muted">匹配 {{ eventStats.filtered_total }} / 总计 {{ eventStats.total }}</span>
-        </div>
-        <el-table :data="events" height="590" @row-click="(row:LogEvent) => selectedEvent = row">
-          <el-table-column prop="timestamp_normalized" label="时间" width="190" />
-          <el-table-column prop="level" label="级别" width="90"><template #default="scope"><span :class="`log-${scope.row.level.toLowerCase()}`">{{ scope.row.level }}</span></template></el-table-column>
-          <el-table-column prop="module" label="模块" width="100" />
-          <el-table-column label="设备/角色" width="135"><template #default="scope">{{ scope.row.source_device_type }} / {{ scope.row.source_device_role }}</template></el-table-column>
-          <el-table-column prop="component" label="组件" width="120" />
-          <el-table-column prop="event_code" label="事件码" width="190" />
-          <el-table-column prop="message" label="日志内容" min-width="400" show-overflow-tooltip />
-          <el-table-column prop="source_file" label="来源" width="210" show-overflow-tooltip />
-        </el-table>
-        <el-pagination
-          v-model:current-page="eventPage"
-          v-model:page-size="eventPageSize"
-          :total="eventStats.filtered_total"
-          :page-sizes="[100, 200, 500, 1000]"
-          layout="total, sizes, prev, pager, next, jumper"
-          style="margin-top:12px;justify-content:flex-end"
-          @current-change="loadEvents()"
-          @size-change="loadEvents(true)"
-        />
-        <el-drawer v-model="eventDrawerVisible" title="事件证据详情" size="52%">
-          <div v-if="selectedEvent">
-            <el-descriptions :column="2" border><el-descriptions-item label="可信度">{{ selectedEvent.confidence }}</el-descriptions-item><el-descriptions-item label="文件">{{ selectedEvent.source_file }}</el-descriptions-item><el-descriptions-item label="行号">{{ selectedEvent.line_start }}-{{ selectedEvent.line_end }}</el-descriptions-item></el-descriptions>
-            <pre class="mono evidence-box">{{ selectedEvent.raw_text }}</pre>
-            <el-button type="primary" @click="openEventSource(selectedEvent)">查看原始日志第 {{ selectedEvent.line_start }} 行</el-button>
-          </div>
-        </el-drawer>
-        </template>
-        <template v-else>
-          <el-alert
-            type="info"
-            :closable="false"
-            :title="`按时间展示前 ${timelineItems.length} 条关键事件；完整事件请使用事件列表分页查看。`"
-            style="margin-bottom:14px"
-          />
-          <div class="toolbar">
-            <el-tag v-for="(count, moduleName) in timelineModuleCounts" :key="moduleName" effect="plain">{{ moduleName }} {{ count }}</el-tag>
-          </div>
-          <el-timeline style="max-height:620px;overflow:auto;padding:12px 24px">
-            <el-timeline-item
-              v-for="item in timelineItems"
-              :key="item.id"
-              :timestamp="item.time || '无绝对时间'"
-              :type="timelineType(item.level)"
-              placement="top"
-            >
-              <el-card shadow="hover" style="cursor:pointer" @click="openTimelineSource(item)">
-                <div class="toolbar" style="margin-bottom:4px"><el-tag size="small">{{ item.level }}</el-tag><el-tag size="small" type="info">{{ item.source_device_type }} / {{ item.source_device_role }}</el-tag><strong>{{ item.module }} / {{ item.component }}</strong><span class="mono">{{ item.event_code }}</span></div>
-                <div>{{ item.message }}</div>
-                <div class="muted">{{ item.source_file }}:{{ item.line_start }}</div>
-              </el-card>
-            </el-timeline-item>
-          </el-timeline>
-        </template>
-      </el-tab-pane>
-
       <el-tab-pane label="综合诊断" name="diagnosis">
+        <details v-if="latestAnalysisWithTrace?.agent_run_id" class="technical-details"><summary>技术轨迹与执行记录</summary>
         <PlanningTracePanel
           v-if="latestAnalysisWithTrace?.agent_run_id"
           :case-id="caseId"
@@ -707,6 +592,7 @@ onBeforeUnmount(() => {
           :title="isDemoSnapshot ? '真实 GLM-5.2 历史诊断轨迹（脱敏快照）' : '综合诊断多轮 LLM Planning 轨迹'"
           style="margin-bottom:14px"
         />
+        </details>
         <el-empty v-if="!latestAnalysis" description="请先完成日志解析并启动综合诊断" />
         <template v-else>
           <el-alert type="info" :closable="false" :title="displayDiagnosisText(diagnosis.summary || '诊断完成')" />
@@ -729,7 +615,7 @@ onBeforeUnmount(() => {
             :description="synthesisFailure ? `${synthesisFailure.code} · ${synthesisFailure.message}${synthesisFailure.field_path ? ` · 字段 ${synthesisFailure.field_path}` : ''}${synthesisStatus.finish_reason ? ` · 模型停止原因 ${synthesisStatus.finish_reason}` : ''}` : synthesisStatus.mode"
             style="margin-top:10px"
           />
-          <DiagnosticPlanningPanel :planning="diagnosis.diagnostic_planning" :evidence-labels="analysisEvidenceLabels" />
+          <details v-if="diagnosis.diagnostic_planning" class="technical-details"><summary>诊断方法与故障树覆盖</summary><DiagnosticPlanningPanel :planning="diagnosis.diagnostic_planning" :evidence-labels="analysisEvidenceLabels" /></details>
           <h3 class="section-title">根因候选</h3>
           <el-collapse>
             <el-collapse-item v-for="item in diagnosis.hypotheses || []" :key="item.rank" :name="item.rank">
@@ -745,7 +631,7 @@ onBeforeUnmount(() => {
         </template>
       </el-tab-pane>
 
-      <el-tab-pane label="交互问答" name="chat">
+      <el-tab-pane label="交互问答" name="chat" lazy>
         <CaseChatPanel
           :case-id="caseId"
           :can-edit="canEditCase"
@@ -755,11 +641,11 @@ onBeforeUnmount(() => {
         />
       </el-tab-pane>
 
-      <el-tab-pane label="代码仓库" name="code">
+      <el-tab-pane label="补充资料" name="code" lazy>
         <div class="toolbar">
           <input type="file" accept=".zip,.tar,.gz,.tgz,.bundle" :disabled="!canEditCase" @change="(e:any) => repoFile = e.target.files?.[0] || null"/>
           <el-button type="primary" :disabled="!canEditCase" @click="uploadRepo">上传代码仓库</el-button>
-          <router-link :to="{ path: '/cognitive-search', query: { case: caseId } }">
+          <router-link v-if="principal?.role==='ADMIN'" :to="{ path: '/admin/cognitive-search', query: { case: caseId } }">
             <el-button>打开认知检索</el-button>
           </router-link>
         </div>
@@ -786,10 +672,11 @@ onBeforeUnmount(() => {
       </el-tab-pane>
 
       <el-tab-pane label="诊断报告" name="report">
-        <div class="toolbar"><el-button type="primary" :disabled="!canEditCase" @click="exportReport('pdf')">导出 PDF</el-button><el-button :disabled="!canEditCase" @click="exportReport('docx')">导出 Word</el-button><el-button :disabled="!canEditCase" @click="exportReport('html')">导出 HTML</el-button></div>
+        <div class="toolbar"><el-button type="primary" :disabled="!canEditCase || !latestAnalysis" @click="exportReport('pdf')">导出 PDF</el-button><el-button :disabled="!canEditCase || !latestAnalysis" @click="exportReport('docx')">导出 Word</el-button><el-button :disabled="!canEditCase || !latestAnalysis" @click="exportReport('html')">导出 HTML</el-button></div>
         <iframe v-if="activeTab === 'report' && reportHtml" class="report-frame" title="诊断报告预览" :srcdoc="reportHtml" sandbox="allow-scripts" style="width:100%;height:720px;border:1px solid #d1d5db;background:white" />
         <el-empty v-else description="暂无报告" />
       </el-tab-pane>
     </el-tabs>
+    <LibrarySubmissionDialog v-if="canSubmitResult" v-model="submittingLibrary" :categories="config.categories" :source-case="caseInfo" :analysis-id="latestAnalysis?.id" />
   </div>
 </template>

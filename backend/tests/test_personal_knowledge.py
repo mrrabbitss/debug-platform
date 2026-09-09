@@ -1,4 +1,4 @@
-"""Personal corrections improve retrieval without replacing other users' evidence."""
+"""Historical personal snapshots survive the administrator-only knowledge policy."""
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -9,7 +9,7 @@ from app.services import knowledge_publication
 from app.services.knowledge import index_document
 from app.services.knowledge_access import require_knowledge_access, require_publisher
 from app.services.knowledge_drafts import save_draft
-from app.services.knowledge_personal import personal_view
+from app.services.knowledge_personal import personal_view, preserve_working_revision
 from app.services.diagnostic_methods import load_applicable_diagnostic_methods
 from app.services.rag import retriever
 from app.services.model_profiles import seed_model_profiles
@@ -33,15 +33,21 @@ def knowledge(tmp_path):
     engine.dispose()
 
 
-def test_two_engineers_have_independent_immutable_views(knowledge):
+def test_historical_engineer_views_remain_immutable_without_new_overrides(knowledge):
     with knowledge() as db:
         doc = db.get(KnowledgeDocument, "DOC-team")
+        historical_views = {}
         for author, text in (("alice", "POWER_FAILURE"), ("bob", "DHCP_RENEW_FAILED")):
-            require_knowledge_access(db, doc.id, {"id": author, "role": "ENGINEER"}, write=True)
-            save_draft(db, doc, {"content": f"# Logs\n`{text}`\nCheck the power supply or lease."},
+            with pytest.raises(HTTPException) as exc:
+                require_knowledge_access(db, doc.id, {"id": author, "role": "ENGINEER"}, write=True)
+            assert exc.value.status_code == 403
+            # Seed revisions pinned by runs before the permission change.
+            draft = save_draft(db, doc, {"content": f"# Logs\n`{text}`\nCheck the power supply or lease."},
                 expected_lock_version=doc.lock_version, expected_draft_version=None, author=author)
-        alice = personal_view(db, "alice")
-        bob = personal_view(db, "bob")
+            historical_views[author] = [preserve_working_revision(db, draft).id]
+            assert personal_view(db, author) == []
+        alice = historical_views["alice"]
+        bob = historical_views["bob"]
         assert alice and bob and alice != bob
         assert not personal_view(db, "charlie")
         db.commit()
@@ -63,10 +69,12 @@ def test_two_engineers_have_independent_immutable_views(knowledge):
         assert db.get(KnowledgeDocument, doc.id).content == "# Logs\n`OLD_AUTH_TIMEOUT`"
 
 
-def test_only_admin_or_original_publisher_may_publish(knowledge):
+def test_only_admin_may_publish_even_for_original_publisher(knowledge):
     with knowledge() as db:
         doc = db.get(KnowledgeDocument, "DOC-team")
-        require_publisher(db, doc, {"id": "publisher", "role": "ENGINEER"})
+        with pytest.raises(HTTPException) as publisher_error:
+            require_publisher(db, doc, {"id": "publisher", "role": "ENGINEER"})
+        assert publisher_error.value.status_code == 403
         require_publisher(db, doc, {"id": "other-admin", "role": "ADMIN"})
         with pytest.raises(HTTPException) as exc:
             require_publisher(db, doc, {"id": "alice", "role": "ENGINEER"})
@@ -112,7 +120,7 @@ def test_crashed_publication_releases_only_its_own_build(knowledge):
         assert db.get(KnowledgeDocument, "DOC-team").active
 
 
-def test_web_and_host_entrypoints_pin_the_authors_revision(knowledge, monkeypatch):
+def test_web_and_host_entrypoints_do_not_pin_personal_revisions(knowledge, monkeypatch):
     from app.core.utils import json_loads
     from app.models import ModelProfile
     from app.services import diagnosis, host_diagnosis
@@ -129,7 +137,7 @@ def test_web_and_host_entrypoints_pin_the_authors_revision(knowledge, monkeypatc
             'provider': 'mock', 'model': 'synthetic', 'profile_id': profile.id})
         run, _ = diagnosis.prepare_analysis_run(db, case=db.get(Case, 'CASE-team'), created_by='alice')
         pinned = json_loads(run.model_config_json, {})['personal_knowledge_revisions']
-        assert pinned == personal_view(db, 'alice')
+        assert pinned == personal_view(db, 'alice') == []
         db.commit()
     host = host_diagnosis.begin_host_diagnosis('CASE-host-finalize', executor='codex_cli',
         client_model_claim='synthetic-no-model-call', skill_version='test', created_by='alice', session_factory=knowledge)
@@ -142,4 +150,6 @@ def test_web_and_host_entrypoints_pin_the_authors_revision(knowledge, monkeypatc
             expected_draft_version=draft.version, author='alice')
         db.commit()
     snapshot = host_diagnosis.require_unchanged_host_snapshot(view, session_factory=knowledge)
-    assert 'PERSONAL_POWER_FAULT' in next(m.content for m in snapshot.methods if m.id == 'DOC-team')
+    method = next(m for m in snapshot.methods if m.id == 'DOC-team')
+    assert 'OLD_AUTH_TIMEOUT' in method.content
+    assert 'PERSONAL_POWER_FAULT' not in method.content and 'LATER_CORRECTION' not in method.content

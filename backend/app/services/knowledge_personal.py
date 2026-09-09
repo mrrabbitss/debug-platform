@@ -2,9 +2,7 @@
 from sqlalchemy import select
 
 from app.core.utils import json_dumps, json_loads, new_id
-from app.models import KnowledgeDocument, KnowledgeDraft, KnowledgeWorkingRevision
-
-PERSONAL_STATES = {"DRAFT", "IN_REVIEW", "REJECTED", "FAILED", "BUILDING"}
+from app.models import KnowledgeDocument, KnowledgeWorkingRevision
 
 
 def preserve_working_revision(db, draft):
@@ -21,15 +19,12 @@ def preserve_working_revision(db, draft):
 
 
 def personal_view(db, actor: str | None) -> list[str]:
-    if not actor:
-        return []
-    drafts = db.scalars(select(KnowledgeDraft).join(KnowledgeDocument).where(
-        KnowledgeDraft.owner_key == actor, KnowledgeDraft.status.in_(PERSONAL_STATES),
-        KnowledgeDocument.active.is_(True), KnowledgeDocument.review_status == "ACTIVE"))
-    selected = list(drafts)
-    if len(selected) > 50:
-        raise ValueError("More than 50 personal knowledge overrides; publish or withdraw older proposals first")
-    return [preserve_working_revision(db, draft).id for draft in selected]
+    """0.4.0 runs use publications for every actor, including ADMIN.
+
+    Do not select the latest draft or delete old working revisions here: historic
+    runs resolve their already-pinned IDs through working_documents instead.
+    """
+    return []
 
 
 def working_documents(db, revision_ids: list[str] | None) -> list[KnowledgeDocument]:

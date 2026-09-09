@@ -11,6 +11,8 @@ export interface CaseItem {
   status: string
   severity: string
   model_egress_approved: boolean
+  problem_category?: string
+  chat_profile_id?: string | null
   owner_id?: string
   created_at: string
   updated_at: string

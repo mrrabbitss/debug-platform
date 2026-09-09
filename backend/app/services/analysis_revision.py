@@ -26,6 +26,10 @@ from app.services.evidence_display import (
 )
 from app.services.jobs import JobCancelledError, JobContext
 from app.services.llm import get_llm_provider
+from app.services.workbench import case_model_job, case_category, case_template
+from app.services.report_contract import report_instructions
+from app.services.workbench import category_instructions, validate_category_suggestion
+from app.services.diagnostic_fault_tree_baseline import is_case_log_evidence
 
 
 REVISION_PROMPT_VERSION = "diagnosis-revision-v1-evidence-validated"
@@ -172,6 +176,8 @@ async def _generate_revision(
         raise ValueError("A configured Chat model is required to revise a diagnosis")
     source_result = json_loads(source.result_json, {})
     prompt = {
+        **report_instructions({"problem_category": case_category.get(), "report_template": case_template.get()}),
+        **category_instructions(),
         "case": {
             "id": case.id,
             "title": case.title,
@@ -224,8 +230,12 @@ async def _generate_revision(
         parsed.revised_diagnosis,
         valid_ids,
         required_fault_tree_items,
+        report_template=case_template.get(),
+        case_evidence_ids={str(item["evidence_id"]) for item in evidence
+                           if item.get("evidence_id") and is_case_log_evidence(item)},
     )
     proposed = {**source_result, **validated}
+    validate_category_suggestion(validated)
     for field in (
         "case", "retrieved_knowledge", "related_code", "agentic_search",
         "diagnostic_planning", "deterministic_baseline",
@@ -277,6 +287,7 @@ def _mark_failure(
         )
 
 
+@case_model_job
 def analysis_revision_job(
     ctx: JobContext,
     revision_id: str,
@@ -453,8 +464,13 @@ def apply_analysis_revision(
         for item in evidence if isinstance(item, dict) and item.get("evidence_id")
     }
     proposed = json_loads(revision.proposed_result_json, {})
-    validated = _validate_llm_diagnosis(proposed, valid_ids)
+    from app.services.workbench import resolve_configuration
+    config = resolve_configuration(db, json_loads(source.model_config_json, {}))
+    validated = _validate_llm_diagnosis(proposed, valid_ids, report_template=config.get("report_template"),
+        case_evidence_ids={str(item["evidence_id"]) for item in evidence
+                           if item.get("evidence_id") and is_case_log_evidence(item)})
     result = {**proposed, **validated}
+    validate_category_suggestion(validated, config.get("problem_categories"))
     applied = AnalysisRun(
         id=new_id("RUN"), case_id=revision.case_id, status="COMPLETED",
         provider=source.provider, model=source.model,

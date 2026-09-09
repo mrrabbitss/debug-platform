@@ -33,17 +33,12 @@ class DraftReview(BaseModel):
 @router.post("/knowledge/{document_id}/draft/review")
 def review_proposal(document_id: str, payload: DraftReview, request: Request, db: Db) -> dict:
     principal = getattr(request.state, "principal", {})
-    from app.services.knowledge_access import require_knowledge_access, require_publisher, can_publish
+    from app.services.knowledge_access import require_knowledge_access, require_publisher
     document = require_knowledge_access(db, document_id, principal)
-    draft = db.get(KnowledgeDraft, payload.draft_id) if payload.draft_id else draft_for_document(db, document_id,
-        author=None if principal.get("role") == "ADMIN" else str(principal.get("id") or ""))
+    require_publisher(db, document, principal)
+    draft = db.get(KnowledgeDraft, payload.draft_id) if payload.draft_id else draft_for_document(db, document_id)
     if not draft or draft.document_id != document_id:
         raise HTTPException(404, "Knowledge proposal not found")
-    if payload.action in {"APPROVE", "REJECT"}:
-        require_publisher(db, document, principal)
-    elif not can_publish(db, document, principal) and (
-        principal.get("role") != "ENGINEER" or not principal.get("id") or draft.owner_key != principal["id"]):
-        raise HTTPException(403, "Only the proposal author or publisher may submit or withdraw it")
     try:
         if payload.action == "APPROVE":
             if draft.version != payload.expected_version or draft.status != "IN_REVIEW":

@@ -370,7 +370,8 @@ class OpenAICompatibleProvider(LLMProvider):
 
 
 def get_llm_provider(profile: ModelProfile | None = None) -> LLMProvider:
-    selected = profile or get_active_model_profile("chat")
+    from app.services.workbench import selected_profile
+    selected = profile or selected_profile() or get_active_model_profile("chat")
     if selected:
         if selected.provider == "openai_compatible":
             return OpenAICompatibleProvider(selected)
@@ -381,7 +382,8 @@ def get_llm_provider(profile: ModelProfile | None = None) -> LLMProvider:
 
 
 def get_active_chat_model_info() -> dict[str, Any]:
-    profile = get_active_model_profile("chat")
+    from app.services.workbench import selected_profile
+    profile = selected_profile() or get_active_model_profile("chat")
     if profile:
         proxy_enabled = profile_uses_proxy(profile)
         return {

@@ -15,7 +15,9 @@ async def verify_api_key(
 ) -> None:
     settings = get_settings()
     path = request.url.path
-    if path.endswith("/health") or "/health/" in path or path.endswith("/system/auth-info"):
+    public_paths = {settings.api_prefix.rstrip("/") + suffix for suffix in
+                    ("/health", "/health/live", "/health/ready", "/system/auth-info")}
+    if request.method in {"GET", "HEAD"} and path in public_paths:
         request.state.principal = {"id": "health-check", "type": "anonymous", "role": "VIEWER"}
         return
 

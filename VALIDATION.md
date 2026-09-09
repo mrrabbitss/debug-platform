@@ -1,6 +1,52 @@
 # Validation Record
 
-## Latest: trusted LAN personal-code login, 0.3.3 (2026-09-08)
+## Latest: three-section workbench, 0.4.0 (2026-09-09)
+
+Only new or changed behavior was checked. Historical passing suites, Full, External and manual CI
+were not rerun, following the user's instruction. The package was built from `release` base
+`46c3b1f47529ab17095d5e4e01ef8bb6ea59b671` plus the workbench changes; unrelated local writing
+was preserved. The user-requested GitHub delivery records this implementation under `v0.4.0`.
+
+| New checks | Latest result | Evidence |
+| --- | --- | --- |
+| Fixed knowledge/configuration, dependencies, migration and personal model choice | 10 distinct checks passed | `artifacts/validation/workbench-20260908/`; [checkpoint](docs/workbench-iteration-20260908.md) identifies the corrected fixture and final result |
+| Main flows: owner submission, review conflicts, immutable reports, category/model routing and graph paths | 11 passed across targeted selections | `artifacts/validation/workbench-20260909/flows.xml`, `model-deleted.xml`, `bundle-category-integration.xml`, `graph-path-integration.xml`, `report-library-final.xml` |
+| Transactional completion, stale-worker failure/cancel fencing and missing-context terminal status | 5 passed | `transactional-job.xml`, `stale-job-fence.xml`, `missing-context.xml` in the same directory |
+| REST/MCP/domain access and workbench contract | 25 distinct checks passed | [permission handoff](docs/security-handoff-20260909.md) |
+| Full-source assistant, exact plans, approval invalidation, atomic publication, concurrency and recovery | 56 distinct checks passed | [assistant handoff](docs/assistant-handoff-20260909.md); 55 passed in 181.08s, then four affected checks in 12.37s including one added case |
+| Template/structure/evidence and HTML/DOCX/PDF export | 41 distinct checks passed | [report handoff](docs/report-handoff-20260909.md), `artifacts/validation/report-20260909/summary.json` |
+| Frontend production build and new browser scenarios | Build PASS; 9 E2E passed in 15.7s | [frontend handoff](docs/frontend-handoff-20260909.md), `frontend-e2e.xml` |
+| Repository harness / architecture | 24/24 PASS; 182 Python and 28 Vue files PASS | `repo-harness.json`, `architecture.json` under `artifacts/validation/workbench-20260909/` |
+| New server payload and isolated packaged application | 10,181 manifest files verified; 257 backend/frontend source files identical; HTTP and restart PASS | `artifacts/lan/workbench-0.4.0/server-payload-build.log`, `artifacts/validation/workbench-20260909/package-runtime/result.json` |
+| Client ZIP, manifest, guide and canonical Skill | 24 files PASS | `artifacts/validation/workbench-20260909/client-integrity.json` |
+
+The new runtime verifier uses the packaged Python interpreter, a fresh synthetic SQLite database
+and dynamic loopback port. It verified migrations through 0022, all three SPA routes, default true
+egress with explicit false retained, mock diagnosis, HTML/DOCX/PDF creation and download hashes,
+server-generated fixed report submission/confirmation, a no-egress PAUSED assistant and persistence
+after stopping/restarting its own process. No external model calls or installed-server data were used.
+
+Browser tests use the real production frontend with synthetic HTTP responses. Assistant index/Chat
+tests use fakes. PDF's four representative pages were visually checked; Word content, fonts, repeated
+headers and widths passed structural checks, but actual Word pagination was not rendered because
+LibreOffice was unavailable. These results do not establish real-model semantic accuracy, remote
+vector/PostgreSQL concurrency, TLS/physical-client acceptance, clean-machine installation, code
+signing or a green CI merge gate. Existing historical GGUF evidence retains its original scope;
+the new package revalidates pinned component hashes and native DLL loading without repeating it.
+
+Final delivery: `artifacts/lan/workbench-0.4.0/delivery`; complete server EXE **920,949,842 bytes**,
+SHA-256 `47b437e9ee743dd379ef0f780f759b77f05008853fa6bdb7b92aba809a143452`;
+client ZIP **44,858 bytes**, SHA-256 `a569540f4ba4c1288cb063ac889d5f47473cad3b24c2204cf4d3965661971ab1`.
+The exact files, upgrade procedure and remaining acceptance boundaries are recorded in the
+[0.4.0 delivery note](deploy/releases/20260909/0.4.0/README.md).
+
+GitHub delivery rechecked the existing binary sizes and SHA-256 values and the 257 application/
+frontend source matches. No runtime database or server credentials were found in the payload.
+The separately distributed server guide now explicitly documents same-Windows-user in-place
+upgrade without uninstall, stopped-server backup and database-aware rollback. These are
+installer/source checks, not a new physical-machine 0.3.3-to-0.4.0 upgrade acceptance run.
+
+## Earlier: trusted LAN personal-code login, 0.3.3 (2026-09-08)
 
 - New identity API checks in an isolated database PASS: strict lowercase-letter/eight-ASCII-digit
   format, stable identity on repeated sign-in, fixed ENGINEER role, rejection of administrator

@@ -34,6 +34,10 @@ from app.services.diagnostic_scope import normalize_artifact_source
 from app.services.events import active_log_event_clause
 from app.services.jobs import JobCancelledError, JobContext
 from app.services.llm import LLMError, get_active_chat_model_info, get_llm_provider
+from app.services.workbench import case_model_job, case_category, case_template, run_configuration
+from app.services.report_contract import report_instructions
+from app.services.workbench import category_instructions, validate_category_suggestion
+from app.services.diagnostic_fault_tree_baseline import is_case_log_evidence
 from app.services.memory import (
     extract_memories_from_analysis,
     record_failed_analysis_memory,
@@ -280,6 +284,8 @@ async def _augment_with_llm_with_metadata(
         and item.get("id")
     }
     prompt = {
+        **report_instructions({"problem_category": case_category.get(), "report_template": case_template.get()}),
+        **category_instructions(),
         "case": result["case"],
         "deterministic_result": deterministic_baseline,
         "evidence": compact_evidence,
@@ -357,7 +363,11 @@ async def _augment_with_llm_with_metadata(
                     llm_result,
                     {str(item["evidence_id"]) for item in evidence if item.get("evidence_id")},
                     required_fault_tree_items,
+                    report_template=case_template.get(),
+                    case_evidence_ids={str(item["evidence_id"]) for item in evidence
+                                       if item.get("evidence_id") and is_case_log_evidence(item)},
                 )
+                validate_category_suggestion(validated)
                 break
             except (ValidationError, ValueError) as exc:
                 validation_error = exc
@@ -420,6 +430,7 @@ def _synthesis_status(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@case_model_job
 def prepare_analysis_run(
     db: Any,
     *,
@@ -430,6 +441,10 @@ def prepare_analysis_run(
     knowledge_view = personal_view(db, created_by)
     model_info = get_active_chat_model_info()
     model_config = sanitize_model_config({
+        **run_configuration(),
+        "problem_category": case_category.get(),
+        "selected_chat_profile_id": run_configuration()["selected_chat_profile_id"],
+        "report_template": case_template.get(),
         "personal_knowledge_revisions": knowledge_view,
         "profile_name": model_info.get("profile_name"),
         "mode": model_info.get("mode"),
@@ -828,6 +843,7 @@ def _mark_analysis_interrupted(case_id: str, status: str, error_message: str | N
         db.commit()
 
 
+@case_model_job
 def analyze_case_job(
     ctx: JobContext,
     case_id: str,

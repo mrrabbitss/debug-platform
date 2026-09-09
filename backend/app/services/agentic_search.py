@@ -217,13 +217,16 @@ def agentic_search(
         Repository.case_id == case_id
     )).all())
     graph_status = domain_graph_status(db, include_counts=False)
+    from app.services.workbench import case_knowledge, case_graph_generation, case_category, matches_category
+    pinned_knowledge = case_knowledge.get() is not None
+    graph_compatible = not pinned_knowledge or case_graph_generation.get() == graph_status.get("active_generation_id")
     plan = build_search_plan(
         query,
         repository_count=len(repositories),
         requested_modules=requested_modules,
         max_hops=max_hops,
         domain_graph_available=bool(
-            graph_status.get("active_generation_id")
+            graph_status.get("active_generation_id") and graph_compatible
         ),
     )
     traces: list[dict[str, Any]] = []
@@ -256,17 +259,19 @@ def agentic_search(
                 )
                 paths: list[dict[str, Any]] = []
             elif module == "domain_graph":
-                if graph_status.get("active_generation_id") and not knowledge_view:
+                if graph_status.get("active_generation_id") and not knowledge_view and graph_compatible:
                     candidates, paths = domain_graph_candidates(
                         db,
                         query,
                         top_k=per_module_limit,
                         max_hops=max_hops,
                     )
+                    from app.services.workbench_retrieval import scope_graph
+                    candidates, paths = scope_graph(db, candidates, case)
                 else:
                     candidates, paths = [], []
                     stage_status = "SKIPPED"
-                    stage_reason = "Personal revisions use lexical retrieval and reranking; shared graph is bypassed" if knowledge_view else "No active domain knowledge graph"
+                    stage_reason = "固定知识版本使用原文检索与重排，避免混入后续发布的图谱" if pinned_knowledge else ("Personal revisions use lexical retrieval and reranking; shared graph is bypassed" if knowledge_view else "No active domain knowledge graph")
             elif module == "memory":
                 candidates = _memory_candidates(
                     db,
@@ -327,6 +332,7 @@ def agentic_search(
     ) or (
         "domain_graph" in plan["selected_modules"]
         and bool(graph_status.get("active_generation_id"))
+        and graph_compatible and not knowledge_view
     )
     traces.append({
         "stage": "graph_multi_hop",

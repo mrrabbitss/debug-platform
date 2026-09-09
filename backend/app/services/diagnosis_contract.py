@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.services.report_contract import REFERENCE, report_references, structured_template, validate_report_markdown
 
 
 _EvidenceId = Annotated[str, Field(min_length=1, max_length=128)]
@@ -52,6 +54,17 @@ class LLMFaultTreeConclusion(BaseModel):
 
 class LLMDiagnosis(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    report_markdown: str = Field(default="", max_length=100000)
+    suggested_problem_category: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")] | None = None
+    category_reason: str | None = Field(default=None, min_length=1, max_length=4000)
+
+    @model_validator(mode="after")
+    def category_suggestion(self):
+        if bool(self.suggested_problem_category) != bool(self.category_reason):
+            raise ValueError("Suggested problem category and category reason must be supplied together")
+        if self.suggested_problem_category == "unknown":
+            raise ValueError("Leave an unsupported category suggestion empty")
+        return self
 
     summary: Annotated[str, Field(min_length=1, max_length=8_000)]
     confirmed_facts: Annotated[list[LLMFact], Field(max_length=100)]
@@ -69,8 +82,31 @@ def validate_llm_diagnosis(
     payload: Any,
     valid_evidence_ids: set[str],
     required_fault_tree_items: dict[str, dict[str, Any]] | None = None,
+    *,
+    template_snapshot: dict[str, Any] | None = None,
+    case_evidence_ids: set[str] | None = None,
+    report_template: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Validate before persistence using the fixed template and case-only receipts.
+
+    Callers resolve_configuration first and pass config['report_template'] as
+    report_template (template_snapshot is an alias). Omission preserves legacy
+    free-form report structure.
+    Knowledge/method IDs may be in valid_evidence_ids but never case_evidence_ids.
+    """
+    if report_template is not None:
+        if template_snapshot is not None and template_snapshot != report_template:
+            raise ValueError("Conflicting report template snapshots")
+        template_snapshot = report_template
     parsed = LLMDiagnosis.model_validate(payload)
+    if parsed.report_markdown and structured_template(template_snapshot) and case_evidence_ids is None:
+        raise ValueError("Templated reports require the explicit case_evidence_ids allowlist")
+    report_ids = valid_evidence_ids if case_evidence_ids is None else case_evidence_ids & valid_evidence_ids
+    validate_report_markdown(parsed.report_markdown, report_ids, template_snapshot)
+    if parsed.category_reason:
+        references = report_references(parsed.category_reason)
+        if not references or set(REFERENCE.findall(parsed.category_reason)) - report_ids:
+            raise ValueError("Category suggestion requires valid case evidence references")
     referenced_ids: set[str] = set()
     for fact in parsed.confirmed_facts:
         referenced_ids.update(fact.evidence_ids)

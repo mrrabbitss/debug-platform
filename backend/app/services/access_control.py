@@ -25,17 +25,20 @@ from app.models import (
 VALID_ROLES = {"ADMIN", "ENGINEER", "VIEWER"}
 VALID_CASE_PERMISSIONS = {"EDITOR", "VIEWER"}
 ADMIN_ONLY_PREFIXES = (
-    "/system/audit",
-    "/system/status",
-    "/system/users",
     "/evaluation",
+    "/agent-runs",
+    "/memory-governance",
 )
-ENGINEER_READ_PREFIXES = (
+SYSTEM_READ_PATHS = {"/system/auth-info", "/system/me", "/system/client-info"}
+ENGINEER_READ_PATHS = {
+    "/system/model",
     "/system/models",
     "/system/model-downloads",
     "/system/retrieval",
     "/system/user-directory",
-)
+}
+WORKBENCH_READ_PATHS = {"/workbench/bootstrap", "/workbench/knowledge", "/workbench/library"}
+WORKBENCH_ENGINEER_OPERATIONS = {("PUT", "/workbench/preferences"), ("POST", "/workbench/library")}
 CASE_SCOPED_RESOURCES = {"cases", "artifacts", "analyses", "reports", "repositories", "jobs"}
 
 
@@ -105,10 +108,10 @@ def authenticate_access_token(db: Session, raw_token: str) -> dict[str, str] | N
 
 
 def _api_parts(path: str) -> list[str]:
-    parts = [part for part in path.split("/") if part]
-    if "v1" in parts:
-        return parts[parts.index("v1") + 1:]
-    return parts
+    prefix = get_settings().api_prefix.rstrip("/")
+    if prefix and (path == prefix or path.startswith(prefix + "/")):
+        path = path[len(prefix):]
+    return [part for part in path.split("/") if part]
 
 
 def resolve_request_case_id(db: Session, request: Request) -> str | None:
@@ -184,7 +187,7 @@ def authorize_case_action(
     if not permission:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No access to this case")
     role = principal.get("role", "VIEWER")
-    if write and (role == "VIEWER" or permission == "VIEWER"):
+    if write and (role not in {"ADMIN", "ENGINEER"} or permission == "VIEWER"):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Case permission is read-only",
@@ -209,37 +212,29 @@ def authorize_request(db: Session, request: Request, principal: dict[str, str]) 
     role = principal.get("role", "VIEWER")
     if role == "ADMIN":
         return
-    path = request.url.path
+    if role not in VALID_ROLES:
+        role = "VIEWER"
     method = request.method.upper()
     from app.services.knowledge_access import authorize_routing_job, authorize_knowledge_request
-    parts = _api_parts(path)
+    parts = _api_parts(request.url.path)
+    path = "/" + "/".join(parts)
     if parts and parts[0] == "jobs" and len(parts) >= 2 and authorize_routing_job(db, parts[1], principal):
         return
     authorize_knowledge_request(db, parts, method, principal)
-    if any(path.endswith(prefix) or f"{prefix}/" in path for prefix in ADMIN_ONLY_PREFIXES):
+    if any(path == prefix or path.startswith(prefix + "/") for prefix in ADMIN_ONLY_PREFIXES):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator role required")
-    if role == "VIEWER" and any(
-        path.endswith(prefix) or f"{prefix}/" in path
-        for prefix in ENGINEER_READ_PREFIXES
-    ):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Engineer or administrator role required")
-    if "/knowledge" in path and method != "GET" and parts[0] not in {"knowledge", "knowledge-routing"}:
-        allowed = role == "ENGINEER" and (
-            (parts == ["knowledge-routing", "import"] and method == "POST")
-            or (parts == ["knowledge"] and method == "POST")
-            or (len(parts) == 2 and parts[0] == "knowledge" and method == "PATCH"))
-        if not allowed:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only administrators may publish or manage shared knowledge")
-    if "/system/models" in path and method != "GET":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only administrators may modify model profiles")
-    if "/system/model-downloads" in path and method != "GET":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only administrators may download model weights")
-    if "/system/model/test" in path or "/knowledge/reindex" in path:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator role required")
+    if parts and parts[0] == "system":
+        readable = path in SYSTEM_READ_PATHS or (role == "ENGINEER" and path in ENGINEER_READ_PATHS)
+        if method != "GET" or not readable:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator role required for system configuration")
+    if parts and parts[0] == "workbench":
+        readable = method == "GET" and path in WORKBENCH_READ_PATHS
+        personal_write = role == "ENGINEER" and (method, path) in WORKBENCH_ENGINEER_OPERATIONS
+        if not (readable or personal_write):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator role required for workbench management")
     if role == "VIEWER" and method != "GET":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Viewer role is read-only")
 
-    parts = _api_parts(path)
     resource = parts[0] if parts else None
     case_id = resolve_request_case_id(db, request)
     if resource in CASE_SCOPED_RESOURCES and len(parts) >= 2 and not case_id:

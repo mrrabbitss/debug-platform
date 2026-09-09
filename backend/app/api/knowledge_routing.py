@@ -35,8 +35,8 @@ job_runner.register(
 
 def _require_admin(request: Request) -> dict[str, Any]:
     principal = getattr(request.state, "principal", {}) or {}
-    if principal.get("role") not in {"ADMIN", "ENGINEER"}:
-        raise HTTPException(403, "Engineer or administrator role required")
+    if principal.get("role") != "ADMIN":
+        raise HTTPException(403, "Administrator role required")
     return principal
 
 

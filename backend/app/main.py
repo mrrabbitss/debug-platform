@@ -22,6 +22,7 @@ from app.services.retrieval_models import ensure_builtin_embedding_index
 from app.services.static_frontend import mount_static_frontend
 from app.services.storage_capacity import StorageCapacityError
 from app.services.model_capacity import ModelCapacityError
+from app.services.workbench import WorkbenchConfigurationError
 
 
 @asynccontextmanager
@@ -59,6 +60,11 @@ app = FastAPI(
 @app.exception_handler(ModelCapacityError)
 async def capacity_error_handler(_request, error):
     return JSONResponse(status_code=503, content={"detail": str(error)}, headers={"Retry-After": "30"})
+
+
+@app.exception_handler(WorkbenchConfigurationError)
+async def workbench_configuration_error_handler(_request, error):
+    return JSONResponse(status_code=409, content={"detail": str(error)})
 
 
 app.add_middleware(

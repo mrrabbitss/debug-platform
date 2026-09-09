@@ -36,10 +36,14 @@ class CaseCreate(BaseModel):
     description: str = ""
     reproduction_steps: str | None = None
     issue_time: str | None = None
-    model_egress_approved: bool = False
+    model_egress_approved: bool = True
+    problem_category: str = Field(default="unknown", max_length=80)
+    chat_profile_id: str | None = Field(default=None, max_length=40)
 
 
 class CaseUpdate(BaseModel):
+    problem_category: str | None = Field(default=None, max_length=80)
+    chat_profile_id: str | None = Field(default=None, max_length=40)
     title: str | None = None
     device_model: str | None = None
     firmware_version: str | None = None
@@ -52,6 +56,8 @@ class CaseUpdate(BaseModel):
 
 
 class CaseOut(ORMModel):
+    problem_category: str = "unknown"
+    chat_profile_id: str | None = None
     id: str
     title: str
     device_type: str

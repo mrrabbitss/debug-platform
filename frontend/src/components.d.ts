@@ -11,7 +11,9 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AssistantSourceDialog: typeof import('./components/knowledge/AssistantSourceDialog.vue')['default']
     CaseChatPanel: typeof import('./components/diagnosis/CaseChatPanel.vue')['default']
+    CaseOptionsPanel: typeof import('./components/diagnosis/CaseOptionsPanel.vue')['default']
     CurationSourcePreviewDialog: typeof import('./components/curation/CurationSourcePreviewDialog.vue')['default']
     DiagnosticPlanningPanel: typeof import('./components/diagnosis/DiagnosticPlanningPanel.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
@@ -42,10 +44,13 @@ declare module 'vue' {
     ElOption: typeof import('element-plus/es')['ElOption']
     ElPagination: typeof import('element-plus/es')['ElPagination']
     ElProgress: typeof import('element-plus/es')['ElProgress']
+    ElRadio: typeof import('element-plus/es')['ElRadio']
     ElRadioButton: typeof import('element-plus/es')['ElRadioButton']
     ElRadioGroup: typeof import('element-plus/es')['ElRadioGroup']
+    ElResult: typeof import('element-plus/es')['ElResult']
     ElRow: typeof import('element-plus/es')['ElRow']
     ElSelect: typeof import('element-plus/es')['ElSelect']
+    ElSkeleton: typeof import('element-plus/es')['ElSkeleton']
     ElStatistic: typeof import('element-plus/es')['ElStatistic']
     ElSwitch: typeof import('element-plus/es')['ElSwitch']
     ElTable: typeof import('element-plus/es')['ElTable']
@@ -59,8 +64,10 @@ declare module 'vue' {
     ElTree: typeof import('element-plus/es')['ElTree']
     ElTreeSelect: typeof import('element-plus/es')['ElTreeSelect']
     EngineerLoginGate: typeof import('./components/EngineerLoginGate.vue')['default']
+    KnowledgeAssistantPane: typeof import('./components/knowledge/KnowledgeAssistantPane.vue')['default']
     KnowledgeDraftActions: typeof import('./components/KnowledgeDraftActions.vue')['default']
     KnowledgeQuality: typeof import('./components/KnowledgeQuality.vue')['default']
+    LibrarySubmissionDialog: typeof import('./components/knowledge/LibrarySubmissionDialog.vue')['default']
     LogBrowserPanel: typeof import('./components/diagnosis/LogBrowserPanel.vue')['default']
     LogTriagePanel: typeof import('./components/diagnosis/LogTriagePanel.vue')['default']
     MarkdownKnowledgeRoutingDialog: typeof import('./components/knowledge/MarkdownKnowledgeRoutingDialog.vue')['default']
@@ -68,6 +75,7 @@ declare module 'vue' {
     PlanningTracePanel: typeof import('./components/diagnosis/PlanningTracePanel.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    WorkbenchShell: typeof import('./components/WorkbenchShell.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

@@ -51,7 +51,9 @@ class Case(Base):
     issue_time: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="DRAFT", index=True)
     severity: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
-    model_egress_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    model_egress_approved: Mapped[bool] = mapped_column(Boolean, default=True)
+    problem_category: Mapped[str] = mapped_column(String(80), default="unknown", server_default="unknown")
+    chat_profile_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     owner_id: Mapped[str | None] = mapped_column(
         ForeignKey("user_accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -968,3 +970,4 @@ class AuditEvent(Base):
 
 from app import diagnostic_models as _diagnostic_models  # noqa: E402, F401
 from app import host_agent_models as _host_agent_models  # noqa: E402, F401
+from app import workbench_models as _workbench_models  # noqa: E402, F401

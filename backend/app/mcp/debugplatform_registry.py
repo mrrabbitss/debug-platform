@@ -540,8 +540,8 @@ class _DebugPlatformTools:
         context: MCPToolCallContext,
     ) -> dict[str, Any]:
         principal = _principal(context)
-        if principal["role"] not in {"ADMIN", "ENGINEER"}:
-            raise MCPToolError("Engineer or administrator role required")
+        from app.services.knowledge_access import require_knowledge_admin
+        require_knowledge_admin(principal)
         with self.session_factory() as db:
             from app.services.knowledge_access import require_knowledge_access
             for document_id in payload.document_ids:
@@ -579,8 +579,8 @@ class _DebugPlatformTools:
         context: MCPToolCallContext,
     ) -> dict[str, Any]:
         principal = _principal(context)
-        if principal["role"] not in {"ADMIN", "ENGINEER"}:
-            raise MCPToolError("Engineer or administrator role required")
+        from app.services.knowledge_access import require_knowledge_admin
+        require_knowledge_admin(principal)
         with self.session_factory() as db:
             from app.services.knowledge_access import require_knowledge_access
             for decision in payload.decisions:
@@ -690,7 +690,7 @@ def create_debugplatform_mcp_registry(
     register("debug_cancel_host_run", "Cancel an unfinished host diagnosis with a recorded reason.", DebugCancelHostRunInput, tools.cancel_host_run, read_only=False)
     register("debug_generate_report", "Render an existing completed analysis without another inference pass.", DebugGenerateReportInput, tools.generate_report, read_only=False)
     register("debug_open_ui", "Return the existing Web UI URL for a case; never launches a browser.", DebugOpenUIInput, tools.open_ui, read_only=True)
-    register("debug_get_knowledge_routing_context", "Read active knowledge taxonomy and bounded masked Markdown excerpts for host-model classification.", DebugKnowledgeRoutingContextInput, tools.get_knowledge_routing_context, read_only=True)
-    register("debug_read_knowledge_sections", "Read complete masked Markdown sections page by page; preserve returned section IDs for full-source classification.", DebugKnowledgeSectionsInput, tools.read_knowledge_sections, read_only=True)
-    register("debug_apply_knowledge_routing", "Atomically apply host-model category decisions to DRAFT knowledge without publishing it.", DebugApplyKnowledgeRoutingInput, tools.apply_knowledge_routing, read_only=False)
+    register("debug_get_knowledge_routing_context", "ADMIN only: read active knowledge taxonomy and bounded masked Markdown excerpts for host-model classification.", DebugKnowledgeRoutingContextInput, tools.get_knowledge_routing_context, read_only=True)
+    register("debug_read_knowledge_sections", "Read complete masked Markdown sections page by page. ENGINEER and VIEWER may read published visible knowledge only; ADMIN may also read drafts.", DebugKnowledgeSectionsInput, tools.read_knowledge_sections, read_only=True)
+    register("debug_apply_knowledge_routing", "ADMIN only: atomically apply host-model category decisions to DRAFT knowledge without publishing it.", DebugApplyKnowledgeRoutingInput, tools.apply_knowledge_routing, read_only=False)
     return registry

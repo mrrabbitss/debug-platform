@@ -57,6 +57,10 @@ METHOD_BUCKET = "METHOD_REQUIRED"
 OTHER_BUCKET = "OTHER"
 
 
+from app.services.workbench import case_model_job, run_configuration
+
+
+@case_model_job
 def submit_log_triage(
     db: Any,
     *,
@@ -95,6 +99,7 @@ def submit_log_triage(
         model_profile_id=triage.model_profile_id,
         model_name=triage.model_name,
         model_config={
+            **run_configuration(),
             "profile_name": model_info.get("profile_name"),
             "mode": model_info.get("mode"),
             "base_url": model_info.get("base_url"),
@@ -485,6 +490,7 @@ def _mark_triage_failure(
         db.commit()
 
 
+@case_model_job
 def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
     started = perf_counter()
     try:

@@ -50,6 +50,7 @@ from app.services.log_triage import (
 
 
 router = APIRouter(tags=["diagnostics"])
+from app.services.workbench import case_model_job, run_configuration
 Db = Annotated[Session, Depends(get_db)]
 
 job_runner.register(
@@ -105,6 +106,7 @@ def _triage_to_dict(triage: LogTriageRun) -> dict[str, Any]:
     response_model=ChatSubmission,
     status_code=status.HTTP_202_ACCEPTED,
 )
+@case_model_job
 def submit_case_chat(
     case_id: str,
     payload: ChatRequest,
@@ -158,6 +160,7 @@ def submit_case_chat(
         model_profile_id=str(model_info.get("profile_id") or "") or None,
         model_name=str(model_info.get("model") or "") or None,
         model_config={
+            **run_configuration(),
             "profile_name": model_info.get("profile_name"),
             "mode": model_info.get("mode"),
             "base_url": model_info.get("base_url"),

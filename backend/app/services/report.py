@@ -1,17 +1,23 @@
 from pathlib import Path
+from contextlib import nullcontext
+import re
 from typing import Any
 from xml.sax.saxutils import escape
 
 from docx import Document
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from docx.enum.section import WD_ORIENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Mm, Pt
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -25,10 +31,17 @@ from app.services.evidence_display import (
     replace_evidence_ids,
 )
 from app.services.storage import storage
+from app.services.category_report import html_report, inline_runs, markdown_blocks, report_markdown
 
 
-def get_report_context(case_id: str, analysis_id: str) -> dict[str, Any]:
-    with SessionLocal() as db:
+def get_report_context(case_id: str, analysis_id: str, db=None) -> dict[str, Any]:
+    """Read the immutable run snapshot; never commit or close a caller's session."""
+    from app.services import workbench
+    from app.services.report_contract import resolve_report_snapshot
+    from app.services.report_contract import structured_template
+    from app.services.diagnostic_fault_tree_baseline import is_case_log_evidence
+
+    with (nullcontext(db) if db is not None else SessionLocal()) as db:
         case = db.get(Case, case_id)
         analysis = db.get(AnalysisRun, analysis_id)
         if not case or not analysis or analysis.case_id != case_id:
@@ -40,7 +53,12 @@ def get_report_context(case_id: str, analysis_id: str) -> dict[str, Any]:
             for item in evidence_items
             if isinstance(item, dict) and item.get("evidence_id")
         }
+        configuration = workbench.resolve_configuration(db, json_loads(analysis.model_config_json, {}))
+        snapshot = resolve_report_snapshot(configuration) if configuration.get("report_template") else None
     evidence_labels = build_evidence_label_map(evidence.values())
+    if snapshot and structured_template(snapshot["report_template"]):
+        evidence_labels = {key: re.sub(r" - 第 (\d+)(?:-(\d+))? 行", lambda match:
+            f":L{match[1]}" + (f"-L{match[2]}" if match[2] else ""), value) for key, value in evidence_labels.items()}
     return {
         "title": get_settings().report_title,
         "case": case,
@@ -48,6 +66,9 @@ def get_report_context(case_id: str, analysis_id: str) -> dict[str, Any]:
         "result": result,
         "evidence": evidence,
         "evidence_labels": evidence_labels,
+        "configuration": configuration,
+        "report_template": snapshot["report_template"] if snapshot else None,
+        "case_evidence_ids": {key for key, item in evidence.items() if is_case_log_evidence(item)},
         "display_text": lambda value: replace_evidence_ids(
             str(value or ""), evidence_labels,
         ),
@@ -64,16 +85,7 @@ def _render_evidence_labels(
 
 def render_html(case_id: str, analysis_id: str) -> str:
     context = get_report_context(case_id, analysis_id)
-    template_dir = Path(__file__).resolve().parents[1] / "templates"
-    env = Environment(
-        loader=FileSystemLoader(template_dir),
-        autoescape=select_autoescape(
-            enabled_extensions=("html", "xml", "j2"),
-            default_for_string=True,
-            default=True,
-        ),
-    )
-    return env.get_template("report.html.j2").render(**context)
+    return html_report(context)
 
 
 def _reserve_report(case_id: str, analysis_id: str, fmt: str) -> Report:
@@ -145,144 +157,194 @@ def generate_html_file(case_id: str, analysis_id: str) -> Report:
         raise
 
 
-def generate_docx(case_id: str, analysis_id: str) -> Report:
-    context = get_report_context(case_id, analysis_id)
-    result = context["result"]
-    case = context["case"]
-    evidence_labels = context["evidence_labels"]
-    display_text = context["display_text"]
-    document = Document()
-    document.add_heading(context["title"], 0)
-    document.add_heading("一、基本信息", level=1)
-    for label, value in [
-        ("案例编号", case.id), ("问题标题", case.title), ("设备类型", case.device_type),
-        ("设备型号", case.device_model or "未提供"), ("固件版本", case.firmware_version or "未提供"),
-        ("问题发生时间", case.issue_time or "未提供"),
-    ]:
-        document.add_paragraph(f"{label}：{value}")
-    document.add_heading("二、综合摘要", level=1)
-    document.add_paragraph(display_text(result.get("summary", "暂无")))
-    document.add_heading("三、根因候选", level=1)
-    for item in result.get("hypotheses", []):
-        document.add_heading(
-            f"{item.get('rank', '-')}. {display_text(item.get('title', ''))}", level=2,
-        )
-        document.add_paragraph(display_text(item.get("description", "")))
-        document.add_paragraph(f"可信等级：{item.get('confidence_level', 'UNKNOWN')}；优先级：{item.get('priority', 'UNKNOWN')}")
-        document.add_paragraph(
-            "支持证据：" + _render_evidence_labels(
-                item.get("supporting_evidence"), evidence_labels,
-            )
-        )
-        document.add_paragraph(
-            "反证：" + _render_evidence_labels(
-                item.get("contradicting_evidence"), evidence_labels,
-            )
-        )
-    document.add_heading("四、建议排查步骤", level=1)
-    for action in result.get("recommended_actions", []):
-        document.add_paragraph(
-            f"[{action.get('priority')}] {display_text(action.get('action'))} — "
-            f"{display_text(action.get('reason'))}",
-            style="List Number",
-        )
-    document.add_heading("五、缺失信息与限制", level=1)
-    for item in result.get("missing_information", []) + result.get("limitations", []):
-        document.add_paragraph(display_text(item), style="List Bullet")
-    document.add_heading("六、已确认事实", level=1)
-    for fact in result.get("confirmed_facts", []):
-        document.add_paragraph(display_text(fact.get("statement", "")), style="List Bullet")
-        document.add_paragraph(
-            "证据：" + _render_evidence_labels(
-                fact.get("evidence_ids"), evidence_labels,
-            )
-        )
-    report = _reserve_report(case_id, analysis_id, "docx")
-    path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.docx"
+def generate_markdown(case_id: str, analysis_id: str) -> Report:
+    rendered = report_markdown(get_report_context(case_id, analysis_id))
+    return _export(case_id, analysis_id, "md", lambda path: path.write_text(rendered, encoding="utf-8"))
+
+
+def _export(case_id, analysis_id, fmt, writer):
+    report = _reserve_report(case_id, analysis_id, fmt)
+    path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.{fmt}"
     temporary = path.with_name(f".{path.name}.{report.id}.tmp")
     try:
-        document.save(temporary)
+        writer(temporary)
         return _publish_report(report, temporary, path)
     except Exception:
         temporary.unlink(missing_ok=True)
         _discard_report(report.id)
         raise
+
+
+def _word_runs(paragraph, text, size=None):
+    for value, bold, italic, code in inline_runs(text):
+        run = paragraph.add_run(value)
+        run.bold, run.italic = bold, italic
+        if size:
+            run.font.size = Pt(size)
+        if code:
+            run.font.name = "Consolas"
+        if code:
+            run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+
+
+def _word_table(document, block):
+    table = document.add_table(rows=1, cols=len(block["header"]), style="Table Grid")
+    table.autofit = False
+    width = Mm(267) / len(block["header"])
+    for column in table.columns:
+        column.width = int(width)
+    for values in [block["header"], *block["rows"]]:
+        cells = table.rows[0].cells if values is block["header"] else table.add_row().cells
+        for cell, value in zip(cells, values):
+            cell.width = int(width)
+            paragraph = cell.paragraphs[0]
+            paragraph.paragraph_format.space_after = Pt(3)
+            _word_runs(paragraph, value, 9)
+            if values is block["header"]:
+                for run in paragraph.runs:
+                    run.bold = True
+    header = OxmlElement("w:tblHeader")
+    table.rows[0]._tr.get_or_add_trPr().append(header)
+    document.add_paragraph().paragraph_format.space_after = Pt(0)
+
+
+def _word_document(blocks):
+    document = Document()
+    section = document.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = Mm(297), Mm(210)
+    section.left_margin = section.right_margin = Mm(15)
+    section.top_margin = section.bottom_margin = Mm(15)
+    for name in ("Normal", "Title", "Heading 1", "Heading 2", "Heading 3", "Heading 4", "Heading 5", "Heading 6", "List Bullet", "List Number", "Quote"):
+        style = document.styles[name]
+        style.font.name = "Microsoft YaHei"
+        style._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+        style.font.size = Pt(10.5 if name not in {"Title", "Heading 1", "Heading 2"} else 20 if name == "Title" else 14)
+    for block in blocks:
+        kind = block["kind"]
+        if kind == "table":
+            _word_table(document, block)
+        elif kind == "list":
+            for index, item in enumerate(block["items"], block["start"]):
+                # Explicit numbers preserve Markdown list starts/restarts across
+                # Word installations with different numbering style definitions.
+                paragraph = document.add_paragraph(style="Normal" if block["ordered"] else "List Bullet")
+                if block["ordered"]:
+                    paragraph.paragraph_format.left_indent = Mm(5)
+                    item = f"{index}. " + item
+                _word_runs(paragraph, item)
+        elif kind == "rule":
+            document.add_paragraph()
+        elif kind == "code":
+            for line in block["text"].splitlines():
+                paragraph = document.add_paragraph()
+                run = paragraph.add_run(line)
+                run.font.name = "Consolas"
+                run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+                run.font.size = Pt(9)
+        else:
+            style = "Title" if kind == "heading" and block["level"] == 1 else f"Heading {block['level']-1}" if kind == "heading" else "Quote" if kind == "quote" else "Normal"
+            paragraph = document.add_paragraph(style=style)
+            _word_runs(paragraph, block["text"])
+    return document
+
+
+def generate_docx(case_id: str, analysis_id: str) -> Report:
+    blocks = markdown_blocks(report_markdown(get_report_context(case_id, analysis_id)))
+    document = _word_document(blocks)
+    return _export(case_id, analysis_id, "docx", document.save)
+
+
+def _pdf_font():
+    name = "WorkbenchCJK"
+    if name in pdfmetrics.getRegisteredFontNames():
+        return name
+    # Embed the installed Windows CJK font when available, so exported Chinese
+    # does not depend on the receiving PDF reader's font substitution policy.
+    candidates = [Path("C:/Windows/Fonts/msyh.ttc"), Path("C:/Windows/Fonts/simsun.ttc")]
+    for path in candidates:
+        if path.is_file():
+            pdfmetrics.registerFont(TTFont(name, str(path), subfontIndex=0))
+            bold_path = path.with_name("msyhbd.ttc")
+            bold_name = name
+            if bold_path.is_file():
+                bold_name = name + "-Bold"
+                pdfmetrics.registerFont(TTFont(bold_name, str(bold_path), subfontIndex=0))
+            pdfmetrics.registerFontFamily(name, normal=name, bold=bold_name, italic=name, boldItalic=bold_name)
+            return name
+    name = "STSong-Light"
+    pdfmetrics.registerFont(UnicodeCIDFont(name))
+    pdfmetrics.registerFontFamily(name, normal=name, bold=name, italic=name, boldItalic=name)
+    return name
+
+
+def _pdf_symbol_text(value):
+    value = escape(value)
+    if not re.search("[✅❌✓✔✗✘]", value):
+        return value
+    name = "WorkbenchSymbols"
+    path = Path("C:/Windows/Fonts/seguisym.ttf")
+    if path.is_file():
+        if name not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont(name, str(path)))
+            pdfmetrics.registerFontFamily(name, normal=name, bold=name, italic=name, boldItalic=name)
+        return re.sub("[✅❌✓✔✗✘]\ufe0f?", lambda match: f'<font name="{name}">{match[0][0]}</font>', value)
+    # CID fallback environments may have no symbol font; preserve the explicit
+    # status meaning rather than producing missing-glyph boxes.
+    return re.sub("[✅✓✔]", "[正常]", re.sub("[❌✗✘]", "[异常]", value))
+
+
+def _pdf_inline(text):
+    chunks = []
+    for value, bold, italic, _code in inline_runs(text):
+        value = _pdf_symbol_text(value)
+        if bold:
+            value = "<b>" + value + "</b>"
+        if italic:
+            value = "<i>" + value + "</i>"
+        chunks.append(value)
+    return "".join(chunks)
+
+
+def _pdf_story(blocks):
+    font = _pdf_font()
+    styles = getSampleStyleSheet()
+    body = ParagraphStyle("ReportBody", parent=styles["BodyText"], fontName=font, fontSize=10.5, leading=16, wordWrap="CJK", splitLongWords=True, spaceAfter=6)
+    cell = ParagraphStyle("ReportCell", parent=body, fontSize=9, leading=13, spaceAfter=0)
+    title = ParagraphStyle("ReportTitle", parent=body, fontSize=20, leading=28, alignment=TA_CENTER, spaceAfter=16, keepWithNext=True)
+    heading = ParagraphStyle("ReportHeading", parent=body, fontSize=14, leading=20, spaceBefore=10, keepWithNext=True)
+    quote = ParagraphStyle("ReportQuote", parent=body, leftIndent=10, textColor=colors.HexColor("#52647a"))
+    story = []
+    for block in blocks:
+        kind = block["kind"]
+        if kind == "table":
+            rows = [[Paragraph(_pdf_inline(value), cell) for value in row] for row in [block["header"], *block["rows"]]]
+            table = Table(rows, colWidths=[267 * mm / len(block["header"])] * len(block["header"]), repeatRows=1, splitByRow=1, splitInRow=1)
+            table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d8e0e9")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#edf2f7")), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+            story.extend([table, Spacer(1, 3 * mm)])
+        elif kind == "list":
+            for index, item in enumerate(block["items"], block["start"]):
+                story.append(Paragraph(_pdf_inline(item), body, bulletText=f"{index}." if block["ordered"] else "•"))
+        elif kind == "rule":
+            story.append(Spacer(1, 5 * mm))
+        elif kind == "code":
+            story.extend(Paragraph(_pdf_symbol_text(line) or " ", cell) for line in block["text"].splitlines())
+        else:
+            style = title if kind == "heading" and block["level"] == 1 else heading if kind == "heading" else quote if kind == "quote" else body
+            story.append(Paragraph(_pdf_inline(block["text"]), style))
+    return story
 
 
 def generate_pdf(case_id: str, analysis_id: str) -> Report:
     context = get_report_context(case_id, analysis_id)
-    result = context["result"]
-    case = context["case"]
-    evidence_labels = context["evidence_labels"]
-    display_text = context["display_text"]
-    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("CNTitle", parent=styles["Title"], alignment=TA_CENTER, fontName="STSong-Light")
-    heading = ParagraphStyle("CNHeading", parent=styles["Heading2"], fontName="STSong-Light", spaceBefore=8)
-    body = ParagraphStyle("CNBody", parent=styles["BodyText"], fontName="STSong-Light", leading=15)
-    story = [Paragraph("GW/AP Intelligent Diagnosis Report", title_style), Spacer(1, 6 * mm)]
-    info = [
-        ["Case ID", case.id], ["Title", case.title], ["Device", f"{case.device_type} / {case.device_model or '-'}"],
-        ["Firmware", case.firmware_version or "-"], ["Issue time", case.issue_time or "-"],
-    ]
-    table = Table(info, colWidths=[35 * mm, 140 * mm])
-    table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    story += [
-        table,
-        Spacer(1, 5 * mm),
-        Paragraph("Summary", heading),
-        Paragraph(escape(display_text(result.get("summary", "N/A"))), body),
-    ]
-    story.append(Paragraph("Root-cause hypotheses", heading))
-    for item in result.get("hypotheses", []):
-        story.append(Paragraph(escape(
-            f"{item.get('rank')}. {display_text(item.get('title'))} "
-            f"[{item.get('confidence_level')}]"
-        ), body))
-        story.append(Paragraph(
-            escape(display_text(item.get("description", ""))),
-            body,
-        ))
-        story.append(Paragraph(escape(
-            "Evidence: " + _render_evidence_labels(
-                item.get("supporting_evidence"), evidence_labels,
-            )
-        ), body))
-    story.append(PageBreak())
-    story.append(Paragraph("Recommended actions", heading))
-    for action in result.get("recommended_actions", []):
-        story.append(Paragraph(escape(
-            f"[{action.get('priority')}] {display_text(action.get('action'))} "
-            f"— {display_text(action.get('reason'))}"
-        ), body))
-    story.append(Paragraph("Missing information and limitations", heading))
-    for item in result.get("missing_information", []) + result.get("limitations", []):
-        story.append(Paragraph(escape("• " + display_text(item)), body))
-    story.append(Paragraph("Confirmed facts", heading))
-    for fact in result.get("confirmed_facts", [])[:30]:
-        story.append(Paragraph(
-            escape("• " + display_text(fact.get("statement", ""))),
-            body,
-        ))
-        story.append(Paragraph(escape(
-            "Evidence: " + _render_evidence_labels(
-                fact.get("evidence_ids"), evidence_labels,
-            )
-        ), body))
-    report = _reserve_report(case_id, analysis_id, "pdf")
-    path = storage.report_dir(case_id) / f"{analysis_id}_v{report.version}.pdf"
-    temporary = path.with_name(f".{path.name}.{report.id}.tmp")
-    try:
-        SimpleDocTemplate(
-            str(temporary),
-            pagesize=A4,
-            rightMargin=15 * mm,
-            leftMargin=15 * mm,
-            topMargin=15 * mm,
-            bottomMargin=15 * mm,
-        ).build(story)
-        return _publish_report(report, temporary, path)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        _discard_report(report.id)
-        raise
+    blocks = markdown_blocks(report_markdown(context))
+    story = _pdf_story(blocks)
+    def write(path):
+        document = SimpleDocTemplate(str(path), pagesize=landscape(A4),
+            rightMargin=15 * mm, leftMargin=15 * mm, topMargin=15 * mm, bottomMargin=15 * mm,
+            title=context["title"], author="GW/AP Debug Platform")
+        document.build(story)
+    return _export(case_id, analysis_id, "pdf", write)
