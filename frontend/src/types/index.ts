@@ -95,11 +95,27 @@ export interface Artifact {
   created_at: string
 }
 
+export interface JobProgressDetail {
+  stage: string
+  stage_index: number
+  stage_count: number
+  completed_percent: number
+  completed_units?: number
+  total_units?: number
+  unit?: string
+  round_number?: number
+  waiting_for_model: boolean
+  stage_started_at: string
+  model_started_at?: string
+  updated_at: string
+}
+
 export interface Job {
   id: string
   kind: string
   status: string
   progress: number
+  progress_detail?: Partial<JobProgressDetail>
   message: string
   result_json: string
   error_message?: string
@@ -115,6 +131,9 @@ export interface Job {
   resource_limits_json: string
   dead_letter_at?: string
   dead_letter_reason?: string
+  created_at?: string
+  started_at?: string
+  completed_at?: string
 }
 
 export interface LogEvent {
@@ -379,6 +398,7 @@ export interface KnowledgeCurationSession {
   revisions?: KnowledgeCurationRevision[]
   knowledge_document_id?: string
   job_id?: string
+  job?: Job
   error_message?: string
   created_by?: string
   created_at: string
@@ -500,6 +520,7 @@ export interface LogTriageRun {
   artifact_id: string
   parse_run_id?: string
   agent_run_id?: string
+  job_id?: string
   status: string
   issue_snapshot: string
   model_profile_id?: string

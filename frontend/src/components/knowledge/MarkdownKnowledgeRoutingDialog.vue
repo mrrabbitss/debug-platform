@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import {
@@ -7,7 +7,9 @@ import {
   loadKnowledgeRoutingModels,
   waitForKnowledgeRoutingJob
 } from '../../api/knowledgeRouting'
+import { api } from '../../api/client'
 import type { Job, KnowledgeRoutingJobResult, ModelProfile } from '../../types'
+import ModelTaskProgress from '../common/ModelTaskProgress.vue'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{
@@ -20,6 +22,7 @@ interface RoutingRow {
   documentId: string
   status: string
   message: string
+  job?: Job
   result?: KnowledgeRoutingJobResult
   error?: string
 }
@@ -29,6 +32,8 @@ const files = ref<File[]>([])
 const rows = ref<RoutingRow[]>([])
 const loadingModels = ref(false)
 const submitting = ref(false)
+let batchAbortController: AbortController | undefined
+let disposed = false
 const form = reactive({
   modelProfileId: '',
   consentModelEgress: false,
@@ -143,16 +148,28 @@ async function submit() {
       relativePath: item.relative_path,
       documentId: item.document_id,
       status: item.job.status,
-      message: item.job.message
+      message: item.job.message,
+      job: item.job
     }))
+    batchAbortController?.abort()
+    batchAbortController = new AbortController()
+    const signal = batchAbortController.signal
 
     const settled = await Promise.allSettled(response.items.map(async (item, index) => {
       const completed = await waitForKnowledgeRoutingJob(item.job, (job: Job) => {
+        if (disposed || signal.aborted) return
         const row = rows.value[index]
         if (!row) return
         row.status = job.status
         row.message = job.message
+        row.job = job
+      }, signal, error => {
+        if (!disposed && !signal.aborted) {
+          const row = rows.value[index]
+          if (row) row.error = `状态暂时无法刷新，保留最近一次确认的进度：${errorText(error)}`
+        }
       })
+      if (disposed || signal.aborted) return ''
       const row = rows.value[index]
       if (row) {
         row.status = completed.job.status
@@ -161,7 +178,8 @@ async function submit() {
       }
       return completed.result.document_id
     }))
-    const completedIds = settled.flatMap(item => item.status === 'fulfilled' ? [item.value] : [])
+    if (disposed || signal.aborted) return
+    const completedIds = settled.flatMap(item => item.status === 'fulfilled' && item.value ? [item.value] : [])
     settled.forEach((item, index) => {
       if (item.status !== 'rejected') return
       const row = rows.value[index]
@@ -179,8 +197,31 @@ async function submit() {
   } catch (error) {
     ElMessage.error(errorText(error))
   } finally {
-    submitting.value = false
+    if (!disposed) submitting.value = false
   }
+}
+
+async function cancelRow(index: number) {
+  const row = rows.value[index]
+  if (!row?.job) return
+  try { const { data } = await api.post<Job>(`/jobs/${row.job!.id}/cancel`); row.job = data; row.status = data.status; row.message = data.message }
+  catch (error) { row.error = errorText(error) }
+}
+
+async function retryRow(index: number) {
+  const row = rows.value[index]
+  if (!row?.job) return
+  try {
+    const { data } = await api.post<Job>(`/jobs/${row.job!.id}/retry`)
+    row.job = data; row.status = data.status; row.message = data.message; row.error = undefined
+    const completed = await waitForKnowledgeRoutingJob(data, job => { if (!disposed) { row.job = job; row.status = job.status; row.message = job.message } }, batchAbortController?.signal, error => {
+      if (!disposed) row.error = `状态暂时无法刷新，保留最近一次确认的进度：${errorText(error)}`
+    })
+    if (disposed) return
+    row.job = completed.job; row.status = completed.job.status; row.message = completed.job.message; row.result = completed.result
+    emit('completed', [completed.result.document_id])
+  }
+  catch (error) { row.error = errorText(error) }
 }
 
 watch(() => props.modelValue, visible => {
@@ -189,6 +230,7 @@ watch(() => props.modelValue, visible => {
     void loadModels()
   }
 })
+onBeforeUnmount(() => { disposed = true; batchAbortController?.abort() })
 </script>
 
 <template>
@@ -285,6 +327,9 @@ watch(() => props.modelValue, visible => {
           <el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="模型进度" min-width="250">
+        <template #default="scope"><ModelTaskProgress v-if="scope.row.job" :job="scope.row.job" compact :test-id="`knowledge-routing-progress-${scope.$index}`" /></template>
+      </el-table-column>
       <el-table-column label="自动分类" min-width="210">
         <template #default="scope">
           <span :data-testid="`knowledge-routing-category-${scope.$index}`">
@@ -306,6 +351,12 @@ watch(() => props.modelValue, visible => {
           <span :class="{ 'error-text': scope.row.error }">
             {{ scope.row.error || scope.row.result?.rationale || scope.row.message || '—' }}
           </span>
+        </template>
+      </el-table-column>
+      <el-table-column label="控制" width="105">
+        <template #default="{ row, $index }">
+          <el-button v-if="row.job && ['QUEUED','RUNNING'].includes(row.job.status)" link type="warning" @click="cancelRow($index)">取消</el-button>
+          <el-button v-if="row.job && ['FAILED','CANCELLED','DEAD_LETTER'].includes(row.job.status)" link type="primary" @click="retryRow($index)">重试</el-button>
         </template>
       </el-table-column>
     </el-table>

@@ -2,9 +2,12 @@
 from app.core.utils import json_dumps, stable_id
 from app.models import KnowledgeEntity, KnowledgeEntityMention, KnowledgeRelation
 from app.services.knowledge_graph import _chunk_for_text, _document_facts, _source_signature
+from app.services.job_progress import report_progress
 
 
 def stage_graph(session_factory, documents, chunks_by_document, generation_id, ctx) -> dict:
+    report_progress(ctx, 60, "正在构建对应的知识关联", stage="构建知识关联", stage_index=3, stage_count=4,
+        completed_units=0, total_units=len(documents), unit="份文档")
     facts = []
     definitions = {}
     for document in documents:
@@ -23,7 +26,7 @@ def stage_graph(session_factory, documents, chunks_by_document, generation_id, c
                                    metadata_json=json_dumps({"extractor": "deterministic_knowledge_graph_v1"})))
         db.commit()
     mentions = relations = 0
-    for document, value in facts:
+    for index, (document, value) in enumerate(facts):
         ctx.raise_if_cancelled()
         with session_factory() as db:
             chunks = chunks_by_document.get(document.id, [])
@@ -49,6 +52,9 @@ def stage_graph(session_factory, documents, chunks_by_document, generation_id, c
                     metadata_json=json_dumps({"excerpt": relation["excerpt"], "document_version": document.version})))
                 relations += 1
             db.commit()
+        report_progress(ctx, 60 + int(30 * (index + 1) / max(1, len(facts))), "正在保存知识关联",
+            stage="构建知识关联", stage_index=3, stage_count=4,
+            completed_units=index + 1, total_units=len(facts), unit="份文档")
     return {"generation_id": generation_id, "entities": len(ids), "mentions": mentions, "relations": relations,
             "documents": len(documents), "source_signature": _source_signature(documents),
             "extractor": "deterministic_knowledge_graph_v1"}

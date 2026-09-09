@@ -128,6 +128,8 @@ class Settings(BaseSettings):
         default=3_000, ge=256, le=100_000
     )
     model_secret_key: str = ""
+    # Accepted for older deployment files only. Chat HTTP(S) endpoints are
+    # unrestricted; neither legacy setting participates in endpoint validation.
     model_endpoint_allowlist: str = ""
     model_allow_private_endpoints: bool = False
     model_disable_in_process_local: bool = False

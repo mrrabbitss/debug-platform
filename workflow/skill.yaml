@@ -302,6 +302,26 @@ rest_only_endpoints:
     method: POST
     path: /api/v1/knowledge-contributions/{contribution_id}/review
     allowed_roles: [ADMIN, EXPERT]
+  submit_review_chat_job:
+    method: POST
+    path: /api/v1/knowledge-contributions/{contribution_id}/review-chat-jobs
+    allowed_roles: [ADMIN, EXPERT]
+    scope: authenticated_reviewer_and_expected_version
+  submit_curation_chat_job:
+    method: POST
+    path: /api/v1/knowledge-curations/{session_id}/chat-jobs
+    allowed_roles: [ADMIN, EXPERT, ENGINEER]
+    scope: authenticated_owner_and_expected_version
+  submit_chat_connection_test_job:
+    method: POST
+    path: /api/v1/system/models/{profile_id}/test-jobs
+    allowed_roles: [ADMIN, EXPERT, ENGINEER, VIEWER]
+    scope: caller_visible_chat_and_owner_scoped_job
+  submit_patch_suggestion_job:
+    method: POST
+    path: /api/v1/cases/{case_id}/patch-suggestion-jobs
+    allowed_roles: [ADMIN, EXPERT, ENGINEER]
+    scope: editable_case_fixed_personal_model_and_code_generation
 security:
   scheme: X-API-Key
   mcp_scheme: Bearer
@@ -327,6 +347,8 @@ model_policy:
   running_request_model: fixed_profile_and_configuration_fingerprint
   secret_values_in_responses: forbidden
 constraints:
+  - JobOut.progress_detail contains content-free durable stages, counts and observed model wait timestamps. Percentages estimate milestones, not model tokens or time remaining; a heartbeat never advances progress. Paused assistant iterations are not completed conversations.
+  - New Web review-chat-jobs, curation chat-jobs, Chat test-jobs and patch-suggestion-jobs use one attempt with a 7200-second budget and revalidate model snapshots and authority. They are REST-only and add no MCP or CLI agent tools; patches remain unapplied candidates.
   - Installer-owned default Skill imports are restricted to an empty knowledge corpus and a hash-verified release bundle; existing knowledge, publication/deletion history and completed initialization records prevent reseeding. This adds no agent publication permission.
   - Administrator recovery is a local stopped-server operation for an existing active ADMIN account. It is not a Web or MCP endpoint, cannot create or elevate accounts, and never returns credential content to an agent API.
   - rest_only_endpoints document owner-scoped contributions and ADMIN/EXPERT Web management; they are not agent entrypoints and add no MCP tools or MCP write permissions.

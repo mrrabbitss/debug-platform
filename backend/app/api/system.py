@@ -30,10 +30,12 @@ from app.schemas import (
     ModelProfileUpdate,
     UserCreate,
     UserUpdate,
+    JobOut,
 )
 from app.services.access_control import issue_access_token
 from app.services.audit import record_audit_event
 from app.services.health import readiness_report
+from app.services.interactive_model_jobs import submit_chat_model_connection_test
 from app.services.knowledge_graph import domain_graph_status
 from app.services.model_access import (
     ModelAccessError, can_manage_model, change_model_visibility, create_model_access, model_profile_payload,
@@ -581,6 +583,16 @@ async def test_model_profile(profile_id: str, request: Request, db: Db) -> dict:
         return await test_profile_connection(profile)
     except Exception as exc:
         raise HTTPException(502, safe_model_connection_error(exc, proxy_configured=profile_uses_proxy(profile))) from exc
+
+
+@router.post("/system/models/{profile_id}/test-jobs", response_model=JobOut)
+def test_chat_model_profile_job(profile_id: str, request: Request, db: Db):
+    try:
+        return submit_chat_model_connection_test(
+            db, getattr(request.state, "principal", {}), profile_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(getattr(exc, "status_code", 422), str(exc)) from exc
 
 
 @router.get("/system/retrieval")

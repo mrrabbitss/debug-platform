@@ -1,20 +1,25 @@
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import or_, select
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.utils import json_dumps, json_loads, new_id
-from app.models import AnalysisRun, Artifact, Case, CodeSymbol, Job, Repository
+from app.models import Artifact, Case, CodeSymbol, Job, Repository
 from app.schemas import JobOut, PatchRequest, RepositoryImportOut, StaticAnalysisRequest
 from app.services.code_graph import code_graph_snapshot, search_code_graph
 from app.services.code_index import index_repository_job
 from app.services.commit_graph import commit_graph_snapshot
 from app.services.import_jobs import import_repository_job
 from app.services.jobs import job_runner
-from app.services.llm import get_llm_provider
+from app.services.patch_suggestions import (
+    create_patch_suggestion_input,
+    generate_patch_suggestion,
+    patch_suggestion_job,
+    resolve_patch_suggestion_context,
+)
 from app.services.static_tools import static_analysis_job
 from app.services.storage import storage
 
@@ -27,6 +32,14 @@ job_runner.register(
     import_repository_job,
     ("repository_id",),
     cancellable=True,
+)
+job_runner.register(
+    "patch_suggestion",
+    patch_suggestion_job,
+    ("case_id", "actor", "snapshot", "symbol_id", "generation_id", "instruction"),
+    cancellable=True,
+    max_attempts=1,
+    timeout_seconds=7200,
 )
 job_runner.register("index_repository", index_repository_job, ("repository_id",))
 job_runner.register(
@@ -250,55 +263,52 @@ def run_static_analysis(repository_id: str, payload: StaticAnalysisRequest, db: 
     )
 
 
+def _patch_principal(request: Request | None, case: Case | None) -> dict[str, str]:
+    identity = getattr(getattr(request, "state", None), "principal", {}) if request else {}
+    if identity:
+        return identity
+    if request is not None:
+        raise HTTPException(401, "An authenticated identity is required")
+    # Retain direct local callers of the old synchronous function. HTTP calls
+    # always supply the authenticated request principal.
+    return {"id": case.owner_id if case and case.owner_id else "local-development",
+            "role": "ADMIN", "type": "local"}
+
+
 @router.post("/cases/{case_id}/patch-suggestions")
-async def patch_suggestion(case_id: str, payload: PatchRequest, db: Db) -> dict:
+async def patch_suggestion(
+    case_id: str,
+    payload: PatchRequest,
+    db: Db,
+    request: Request = None,
+) -> dict:
+    # Resolve the target first so legacy callers retain the old 404 behavior.
     case = db.get(Case, case_id)
-    symbol = db.scalars(
-        select(CodeSymbol)
-        .join(Repository, CodeSymbol.repository_id == Repository.id)
-        .where(
-            Repository.case_id == case_id,
-            CodeSymbol.generation_id
-            == Repository.active_graph_generation_id,
-            or_(
-                CodeSymbol.logical_id == payload.symbol_id,
-                CodeSymbol.id == payload.symbol_id,
-            ),
-        )
-        .limit(1)
-    ).first()
-    repository = db.get(Repository, symbol.repository_id) if symbol else None
-    if (
-        not case
-        or not symbol
-        or not repository
-        or repository.case_id != case_id
-        or symbol.generation_id != repository.active_graph_generation_id
-    ):
+    if not case:
         raise HTTPException(404, "Case or symbol not found")
-    latest = db.scalars(
-        select(AnalysisRun).where(AnalysisRun.case_id == case_id, AnalysisRun.status == "COMPLETED")
-        .order_by(AnalysisRun.created_at.desc()).limit(1)
-    ).first()
-    diagnosis = json_loads(latest.result_json, {}) if latest else {}
-    provider = get_llm_provider()
-    if provider.is_mock:
-        return {
-            "status": "NEED_LLM_CONFIGURATION",
-            "message": "配置 Qwen/GLM API 后可生成候选 unified diff。当前仅返回人工审查模板。",
-            "symbol": {"file": symbol.file_path, "name": symbol.name, "line_start": symbol.line_start},
-            "review_checklist": ["确认日志证据与该函数存在数据流或调用关系", "采用最小修改", "重新编译并运行相关测试", "不得直接覆盖原文件"],
-        }
-    prompt = {
-        "instruction": payload.instruction,
-        "case": {"title": case.title, "description": case.description, "device": case.device_type},
-        "diagnosis": diagnosis,
-        "symbol": {"file_path": symbol.file_path, "line_start": symbol.line_start, "line_end": symbol.line_end, "code": symbol.code},
-        "output": "只输出 unified diff；不得修改无关文件；不得调用不存在的 API；无法安全修复时说明 NEED_HUMAN_REVIEW。",
-    }
-    text = await provider.generate_text(
-        "你是 C/C++ 网络设备代码审查工程师，生成最小、可审查、未自动应用的候选补丁。",
-        json_dumps(prompt),
-        purpose="patch_suggestion",
+    identity = _patch_principal(request, case)
+    data = create_patch_suggestion_input(
+        db, case_id=case_id, symbol_id=payload.symbol_id,
+        instruction=payload.instruction, principal=identity,
     )
-    return {"status": "SUGGESTED", "patch": text, "auto_applied": False}
+    context = resolve_patch_suggestion_context(
+        db, case_id=case_id, actor_id=data["actor"], snapshot=data["snapshot"],
+        symbol_id=data["symbol_id"], generation_id=data["generation_id"],
+    )
+    return await generate_patch_suggestion(db, context, data["instruction"])
+
+
+@router.post("/cases/{case_id}/patch-suggestion-jobs", response_model=JobOut)
+def create_patch_suggestion_job(case_id: str, payload: PatchRequest, request: Request, db: Db) -> Job:
+    data = create_patch_suggestion_input(
+        db, case_id=case_id, symbol_id=payload.symbol_id,
+        instruction=payload.instruction,
+        principal=getattr(request.state, "principal", {}) or {},
+    )
+    try:
+        return job_runner.submit(
+            db, "patch_suggestion", patch_suggestion_job, input_data=data,
+            max_attempts=1, timeout_seconds=7200,
+        )
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error

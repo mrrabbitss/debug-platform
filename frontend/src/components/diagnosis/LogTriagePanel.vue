@@ -9,15 +9,19 @@ import type {
   LogEvidenceHitPage,
   LogEvidenceItem,
   LogEvidencePage,
-  LogTriageRun
+  LogTriageRun,
+  Job
 } from '../../types'
 import PlanningTracePanel from './PlanningTracePanel.vue'
+import ModelTaskProgress from '../common/ModelTaskProgress.vue'
+import { clearTaskJobBookmark, readTaskJobBookmark, saveTaskJobBookmark, shouldClearTaskJobBookmark } from '../../composables/taskJobBookmark'
 
 const props = defineProps<{
   caseId: string
   artifacts: Artifact[]
   canEdit: boolean
   modelEgressApproved: boolean
+  principalId?: string
 }>()
 
 const emit = defineEmits<{
@@ -26,8 +30,10 @@ const emit = defineEmits<{
 
 const selectedArtifactId = ref('')
 const triage = ref<LogTriageRun | null>(null)
+const activeJob = ref<Job | null>(null)
 const loading = ref(false)
 const submitting = ref(false)
+const pollError = ref('')
 const activeBucket = ref<LogEvidenceBucket>('LLM_RELEVANT')
 const pages = reactive<Record<LogEvidenceBucket, LogEvidencePage>>({
   LLM_RELEVANT: { triage_run_id: '', bucket: 'LLM_RELEVANT', total: 0, offset: 0, limit: 100, items: [] },
@@ -36,7 +42,10 @@ const pages = reactive<Record<LogEvidenceBucket, LogEvidencePage>>({
 })
 const occurrencePages = reactive<Record<string, LogEvidenceHitPage>>({})
 const occurrenceLoading = reactive<Record<string, boolean>>({})
-let timer: number | null = null
+let triageTimer: number | undefined
+let jobTimer: number | undefined
+let epoch = 0
+let disposed = false
 
 const parsedArtifacts = computed(() => props.artifacts.filter(item => item.status === 'PARSED'))
 const methodDocuments = computed(() => triage.value?.method_coverage?.documents || [])
@@ -76,21 +85,60 @@ function bucketLabel(bucket: LogEvidenceBucket): string {
   return labels[bucket]
 }
 
-function schedule() {
-  if (timer) window.clearTimeout(timer)
-  timer = window.setTimeout(() => void loadTriage(), 1400)
+function triageScope(artifactId = selectedArtifactId.value) {
+  return `case:${props.caseId}:log-triage:${artifactId}`
 }
 
-async function loadTriage() {
-  if (!selectedArtifactId.value) {
+function scheduleTriage(token = epoch) {
+  if (triageTimer !== undefined) window.clearTimeout(triageTimer)
+  triageTimer = window.setTimeout(() => void loadTriage(token), 1400)
+}
+
+function scheduleJob(jobId: string, token = epoch) {
+  if (jobTimer !== undefined) window.clearTimeout(jobTimer)
+  jobTimer = window.setTimeout(() => void pollJob(jobId, token), 1400)
+}
+
+function trackTriageJob(job: Job, artifactId = selectedArtifactId.value, token?: number) {
+  const effectiveToken = token ?? ++epoch
+  activeJob.value = job
+  saveTaskJobBookmark(props.principalId, triageScope(artifactId), job.id)
+  pollError.value = ''
+  scheduleJob(job.id, effectiveToken)
+}
+
+async function pollJob(jobId: string, token = epoch) {
+  try {
+    const { data } = await api.get<Job>(`/jobs/${jobId}`)
+    if (disposed || token !== epoch) return
+    activeJob.value = data
+    pollError.value = ''
+    if (['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(data.status)) {
+      scheduleJob(jobId, token)
+      return
+    }
+    await loadTriage(token)
+  } catch (error: any) {
+    if (disposed || token !== epoch) return
+    // Preserve the last server-confirmed progress until the user can refresh or connectivity returns.
+    pollError.value = error?.response?.data?.detail || error?.message || '任务状态暂时无法刷新，页面保留最近一次确认的进度。'
+    if (shouldClearTaskJobBookmark(error)) clearTaskJobBookmark(props.principalId, triageScope())
+    if (!shouldClearTaskJobBookmark(error) && activeJob.value && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(activeJob.value.status)) scheduleJob(jobId, token)
+  }
+}
+
+async function loadTriage(token = epoch) {
+  const artifactId = selectedArtifactId.value
+  if (!artifactId) {
     triage.value = null
     return
   }
   loading.value = !triage.value
   try {
     const { data } = await api.get<LogTriageRun | null>(`/cases/${props.caseId}/log-triage`, {
-      params: { artifact_id: selectedArtifactId.value }
+      params: { artifact_id: artifactId }
     })
+    if (disposed || token !== epoch || artifactId !== selectedArtifactId.value) return
     if (triage.value?.id !== data?.id) {
       for (const key of Object.keys(occurrencePages)) delete occurrencePages[key]
     }
@@ -99,28 +147,79 @@ async function loadTriage() {
       await Promise.all((['LLM_RELEVANT', 'METHOD_REQUIRED', 'OTHER'] as LogEvidenceBucket[])
         .map(bucket => loadEvidence(bucket, 1)))
     } else if (data && ['QUEUED', 'RUNNING'].includes(data.status)) {
-      schedule()
+      if (!activeJob.value || !['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(activeJob.value.status)) scheduleTriage(token)
     }
   } catch (error: any) {
+    if (disposed || token !== epoch || artifactId !== selectedArtifactId.value) return
     ElMessage.error(error?.response?.data?.detail || error?.message || '日志规划状态加载失败')
   } finally {
-    loading.value = false
+    if (!disposed && token === epoch && artifactId === selectedArtifactId.value) loading.value = false
   }
 }
 
 async function startTriage() {
   if (!selectedArtifactId.value) return ElMessage.warning('请选择已解析日志')
   if (!props.modelEgressApproved) return ElMessage.warning('请先在案例概览确认模型出站授权')
+  const artifactId = selectedArtifactId.value
+  const token = ++epoch
   submitting.value = true
   try {
-    await api.post(`/cases/${props.caseId}/artifacts/${selectedArtifactId.value}/triage`)
+    const { data } = await api.post<{ job: Job }>(`/cases/${props.caseId}/artifacts/${artifactId}/triage`)
+    if (disposed || token !== epoch || artifactId !== selectedArtifactId.value) return
+    trackTriageJob(data.job, artifactId, token)
     ElMessage.success('LLM 日志规划已进入后台任务')
-    await loadTriage()
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || error?.message || '日志规划启动失败')
   } finally {
     submitting.value = false
   }
+}
+
+async function restoreTriageJob(token = epoch) {
+  const artifactId = selectedArtifactId.value
+  const jobId = readTaskJobBookmark(props.principalId, triageScope(artifactId))
+  if (!artifactId || !jobId) return
+  try {
+    const { data } = await api.get<Job>(`/jobs/${jobId}`)
+    if (disposed || token !== epoch || artifactId !== selectedArtifactId.value) return
+    activeJob.value = data
+    if (['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(data.status)) trackTriageJob(data, artifactId, token)
+  } catch (error) {
+    if (shouldClearTaskJobBookmark(error)) clearTaskJobBookmark(props.principalId, triageScope(artifactId))
+  }
+}
+
+async function cancelTriage() {
+  if (!activeJob.value) return
+  const artifactId = selectedArtifactId.value
+  const jobId = activeJob.value.id
+  const token = epoch
+  try {
+    const { data } = await api.post<Job>(`/jobs/${jobId}/cancel`)
+    if (disposed || token !== epoch || artifactId !== selectedArtifactId.value) return
+    trackTriageJob(data, artifactId)
+  } catch (error: any) { pollError.value = error?.response?.data?.detail || error?.message || '取消请求失败' }
+}
+
+async function retryTriage() {
+  if (!activeJob.value) return
+  const artifactId = selectedArtifactId.value
+  const jobId = activeJob.value.id
+  const token = epoch
+  try {
+    const { data } = await api.post<Job>(`/jobs/${jobId}/retry`)
+    if (disposed || token !== epoch || artifactId !== selectedArtifactId.value) return
+    trackTriageJob(data, artifactId)
+  } catch (error: any) { pollError.value = error?.response?.data?.detail || error?.message || '重试任务创建失败' }
+}
+
+function dismissTriageJob() {
+  ++epoch
+  if (jobTimer !== undefined) window.clearTimeout(jobTimer)
+  if (triageTimer !== undefined) window.clearTimeout(triageTimer)
+  clearTaskJobBookmark(props.principalId, triageScope())
+  activeJob.value = null
+  pollError.value = ''
 }
 
 async function loadEvidence(bucket: LogEvidenceBucket, page: number) {
@@ -201,13 +300,24 @@ watch(parsedArtifacts, (items) => {
 }, { immediate: true })
 
 watch(selectedArtifactId, () => {
+  ++epoch
+  if (triageTimer !== undefined) window.clearTimeout(triageTimer)
+  if (jobTimer !== undefined) window.clearTimeout(jobTimer)
   triage.value = null
-  void loadTriage()
+  activeJob.value = null
+  pollError.value = ''
+  const token = epoch
+  void loadTriage(token)
+  void restoreTriageJob(token)
 })
 
-onMounted(() => void loadTriage())
+watch(() => props.principalId, () => { if (selectedArtifactId.value) void restoreTriageJob(epoch) })
+onMounted(() => { void loadTriage(epoch); void restoreTriageJob(epoch) })
 onBeforeUnmount(() => {
-  if (timer) window.clearTimeout(timer)
+  disposed = true
+  ++epoch
+  if (triageTimer !== undefined) window.clearTimeout(triageTimer)
+  if (jobTimer !== undefined) window.clearTimeout(jobTimer)
 })
 </script>
 
@@ -224,12 +334,19 @@ onBeforeUnmount(() => {
       <el-select v-model="selectedArtifactId" placeholder="选择已解析日志" style="width:320px">
         <el-option v-for="item in parsedArtifacts" :key="item.id" :label="item.original_name" :value="item.id" />
       </el-select>
-      <el-button type="primary" :disabled="!canEdit || !selectedArtifactId" :loading="submitting" @click="startTriage">
+      <el-button type="primary" :disabled="!canEdit || !selectedArtifactId || ['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(activeJob?.status || '')" :loading="submitting" @click="startTriage">
         {{ isDemoSnapshot ? '使用当前模型重新执行 LLM 规划' : triage ? '重新执行 LLM 规划' : '启动 LLM 日志规划' }}
       </el-button>
       <el-tag v-if="triage" data-testid="log-triage-status" :type="triage.status === 'COMPLETED' ? 'success' : triage.status === 'FAILED' ? 'danger' : 'primary'">{{ triage.status }}</el-tag>
       <span v-if="triage" class="muted">{{ triage.model_name || '确定性回退' }} · {{ triage.plan?.planner_mode || '等待规划' }}</span>
+      <el-button v-if="activeJob && ['QUEUED','RUNNING'].includes(activeJob.status)" type="warning" link @click="cancelTriage">取消规划</el-button>
+      <el-button v-if="activeJob && ['FAILED','CANCELLED','DEAD_LETTER'].includes(activeJob.status)" type="primary" link @click="retryTriage">重试规划</el-button>
     </div>
+
+    <ModelTaskProgress v-if="activeJob" :job="activeJob" compact test-id="log-triage-model-progress">
+      <template #actions><el-button v-if="['COMPLETED','FAILED','CANCELLED','DEAD_LETTER'].includes(activeJob.status)" size="small" @click="dismissTriageJob">关闭记录</el-button></template>
+    </ModelTaskProgress>
+    <el-alert v-if="pollError" type="warning" :title="pollError" :closable="false" style="margin:12px 0" />
 
     <el-empty v-if="!selectedArtifactId" description="暂无已解析日志" />
     <el-empty v-else-if="!triage" description="尚未执行日志规划" />

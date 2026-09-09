@@ -434,6 +434,7 @@ class JobOut(ORMModel):
     kind: str
     status: str
     progress: int
+    progress_detail: dict[str, Any] = Field(default_factory=dict)
     message: str
     result_json: str
     error_message: str | None

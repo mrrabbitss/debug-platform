@@ -32,7 +32,13 @@ from app.models import (
     ModelProfile,
 )
 from app.services.agent_trace import record_agent_run, update_resource_approval
+from app.services.curation_refinement_state import (
+    prepare_refinement_session,
+    report_refinement_stage,
+    revalidate_refinement_snapshot,
+)
 from app.services.jobs import JobCancelledError, JobContext
+from app.services.job_progress import report_progress
 from app.services.knowledge_governance import create_document_revision
 from app.services.knowledge_curation_common import CurationConflict, CurationError
 from app.services.knowledge_curation_prompts import (
@@ -223,14 +229,15 @@ def curate_knowledge_folder_job(ctx: JobContext, session_id: str) -> dict[str, A
             session.model_profile_id = profile.id
             session.model_snapshot_json = json_dumps(snapshot)
             db.commit()
-            ctx.update(10, "Inspecting and sampling source files")
+            from app.services.job_progress import report_progress
+            report_progress(ctx, 10, "正在检查上传文件并提取案例证据", stage="提取来源证据", stage_index=1, stage_count=3)
             evidence, manifest = build_evidence_bundle(db, session)
             extraction_duration_ms = int((perf_counter() - extraction_started) * 1000)
             user_prompt = _initial_user_prompt(session, evidence)
             ctx.raise_if_cancelled()
             provider = get_llm_provider(profile)
 
-        ctx.update(45, "Generating a source-grounded case draft")
+        report_progress(ctx, 40, "正在根据来源证据生成案例知识初稿", stage="生成提炼草稿", stage_index=2, stage_count=3)
         generated_data = asyncio.run(provider.generate_json(
             _initial_system_prompt(),
             user_prompt,
@@ -243,6 +250,7 @@ def curate_knowledge_folder_job(ctx: JobContext, session_id: str) -> dict[str, A
             raise CurationError("Model returned an invalid case draft structure") from exc
         markdown = _normalize_markdown(generated.title, generated.markdown)
 
+        report_progress(ctx, 90, "正在核对来源引用并保存初稿，随后进入人工审核", stage="校验与保存草稿", stage_index=3, stage_count=3)
         with SessionLocal() as db:
             session = db.get(KnowledgeCurationSession, session_id)
             if not session:
@@ -469,15 +477,16 @@ async def refine_curation_session(
     instruction: str,
     expected_draft_version: int,
     actor: str | None,
+    model_snapshot: dict[str, Any] | None = None,
+    ctx: JobContext | None = None,
+    commit: bool = True,
+    record_trace: bool = True,
 ) -> KnowledgeCurationSession:
     trace_started = perf_counter()
-    if session.status != "REVIEWING":
-        raise CurationConflict("Only a reviewing session can be refined")
-    if session.draft_version != expected_draft_version:
-        raise CurationConflict("Draft changed; refresh before sending another correction")
-    if actor != session.created_by:
-        raise CurationError("Only the session owner may refine its private extraction")
-    profile, snapshot = resolve_session_model(db, session)
+    profile, snapshot = prepare_refinement_session(
+        db, session, actor, expected_draft_version, model_snapshot,
+        resolve_session=resolve_session_model, resolve_model=resolve_chat_model_snapshot,
+    )
     evidence = _evidence_for_session(session)
     history = _conversation_history(db, session.id)
     user_prompt = f"""当前草稿版本：v{session.draft_version}
@@ -500,6 +509,7 @@ async def refine_curation_session(
     session_id = session.id
     profile_id = profile.id
     draft_title = session.draft_title or "故障案例"
+    report_refinement_stage(ctx, 2, reporter=report_progress)
     db.rollback()
     refined_data = await provider.generate_json(
         _refinement_system_prompt(),
@@ -512,10 +522,16 @@ async def refine_curation_session(
     except ValidationError as exc:
         raise CurationError("Model returned an invalid refinement structure") from exc
     markdown = _normalize_markdown(draft_title, refined.revised_markdown)
+    report_refinement_stage(ctx, 3, reporter=report_progress)
     db.expire_all()
     session = db.get(KnowledgeCurationSession, session_id)
     if not session:
         raise CurationError("Knowledge curation session was deleted")
+    if ctx and model_snapshot is not None:
+        profile = revalidate_refinement_snapshot(
+            db, session, actor, model_snapshot,
+            resolve_model=resolve_chat_model_snapshot, resolve_actor=principal_for_model_user,
+        )
     source_refs = _source_refs(db, session.id)
     validation = validate_curation_markdown(markdown, source_refs)
     new_version = expected_draft_version + 1
@@ -538,6 +554,8 @@ async def refine_curation_session(
         model_profile_id=profile_id,
         created_by="curation-model",
     )
+    # Report before acquiring the persistence write lock for the draft and Job.
+    report_refinement_stage(ctx, 4, reporter=report_progress)
     changed = db.execute(
         update(KnowledgeCurationSession)
         .where(
@@ -572,8 +590,12 @@ async def refine_curation_session(
         created_by=actor or "curation-model",
         source_message_id=assistant_message.id,
     )
+    if not commit:
+        return session
     db.commit()
     db.refresh(session)
+    if not record_trace:
+        return session
     try:
         record_agent_run(
             db,

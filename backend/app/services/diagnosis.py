@@ -527,7 +527,8 @@ def _analyze_case_impl(
         run_id = run.id
         knowledge_view = json_loads(run.model_config_json, {}).get("personal_knowledge_revisions", [])
 
-    ctx.update(10, "Collecting high-signal log events")
+    from app.services.job_progress import report_progress
+    report_progress(ctx, 5, "正在收集案例日志与设备信息", stage="收集日志证据", stage_index=1, stage_count=6)
     event_started = perf_counter()
     with SessionLocal() as db:
         case = db.get(Case, case_id)
@@ -582,7 +583,7 @@ def _analyze_case_impl(
     query_parts = [case.title, case.description, case.device_type, case.device_model or "", case.firmware_version or ""]
     query_parts += [f"{event.event_code} {event.component} {event.message[:160]}" for event in events[:30]]
     query = "\n".join(query_parts)
-    ctx.update(30, "Retrieving protocol, product and historical evidence")
+    report_progress(ctx, 15, "正在检索对应问题类别、通用知识及历史案例", stage="检索相关知识", stage_index=2, stage_count=6)
     retrieval_started = perf_counter()
     with SessionLocal() as db:
         search_result = agentic_search(
@@ -630,7 +631,7 @@ def _analyze_case_impl(
         )
         for item in search_result["results"]
     ]
-    ctx.update(48, "Reading all applicable methods and starting multi-round LLM planning")
+    report_progress(ctx, 25, "正在准备适用的诊断 Skill，随后逐段完整阅读", stage="完整阅读 Skill", stage_index=3, stage_count=6)
     planning = run_diagnostic_planning(
         ctx,
         knowledge_view=knowledge_view,
@@ -702,7 +703,7 @@ def _analyze_case_impl(
         + [_retrieval_to_evidence(hit) for hit in hits]
     )
 
-    ctx.update(88, "Running evidence-constrained final LLM synthesis")
+    report_progress(ctx, 85, "正在根据核验过的证据生成诊断结论", stage="综合诊断结论", stage_index=5, stage_count=6)
     synthesis_started = perf_counter()
     result, synthesis_metadata = asyncio.run(
         _augment_with_llm_with_metadata(case, result, evidence)
@@ -753,6 +754,7 @@ def _analyze_case_impl(
         "summary": result.get("summary"),
         "hypotheses": len(result.get("hypotheses", [])),
     }
+    report_progress(ctx, 96, "正在校验并保存诊断结论、证据和报告所需内容", stage="校验与保存", stage_index=6, stage_count=6)
     with SessionLocal() as db:
         run = db.get(AnalysisRun, run_id)
         case = db.get(Case, case_id)

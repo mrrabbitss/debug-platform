@@ -642,7 +642,8 @@ def route_markdown_knowledge_job(
                 )
                 context = knowledge_routing_context(db, [temporary.id])
                 db.rollback()
-                ctx.update(35, "Classifying Markdown against the active taxonomy")
+                from app.services.job_progress import report_progress
+                report_progress(ctx, 15, "正在读取完整 Markdown 并核对现有分类", stage="完整阅读与归类", stage_index=1, stage_count=2)
                 decisions = asyncio.run(classify_complete_document(provider, context, content, ctx))
                 category_map = {
                     item["id"]: item for item in context["categories"]
@@ -660,7 +661,8 @@ def route_markdown_knowledge_job(
             else:
                 raise ValueError("Unsupported knowledge-routing reasoning owner")
         ctx.raise_if_cancelled()
-        ctx.update(70, "Creating governed knowledge draft")
+        from app.services.job_progress import report_progress
+        report_progress(ctx, 90, "正在保存分类结果与知识草稿，仍需审核后发布", stage="保存分类草稿", stage_index=2, stage_count=2)
         with SessionLocal() as db:
             artifact = db.get(Artifact, artifact_id)
             if not artifact:

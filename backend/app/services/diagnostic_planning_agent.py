@@ -22,6 +22,7 @@ from app.services.diagnostic_fault_tree_baseline import (
     is_case_log_evidence,
 )
 from app.services.diagnostic_methods import DiagnosticMethodDocument, DiagnosticPattern
+from app.services.diagnostic_progress import report_planning_progress
 from app.services.diagnostic_planning_coverage import (
     TERMINAL_FAULT_TREE_STATUSES,
     coverage_snapshot,
@@ -249,6 +250,8 @@ def _execute_planned_tool_calls(
             budget_reason = budget_tracker.stop_reason
             break
         ctx.raise_if_cancelled()
+        report_planning_progress(ctx, coverage, round_number,
+                                 f"第 {round_number} 轮：正在读取原始证据并核对故障树")
         invocation = invoke_diagnostic_tool(
             tool_registry,
             tool_context,
@@ -519,10 +522,8 @@ async def execute_llm_planning_rounds(
                 )
                 budget_stop_triggered = True
                 break
-            ctx.update(
-                min(86, 50 + round_number * 4),
-                f"LLM diagnostic tool-agent round {round_number}",
-            )
+            report_planning_progress(ctx, coverage, round_number,
+                                     f"正在进行第 {round_number} 轮推理，选择下一步需要核对的证据")
             ctx.raise_if_cancelled()
             started = perf_counter()
             active_round_started = started

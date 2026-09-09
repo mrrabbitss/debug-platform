@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { api } from '../api/client'
+import { useKnowledgeCurationTask } from '../composables/useKnowledgeCurationTask'
 import CurationSourcePreviewDialog from '../components/curation/CurationSourcePreviewDialog.vue'
 import ChatModelSelect from '../components/ChatModelSelect.vue'
+import ModelTaskProgress from '../components/common/ModelTaskProgress.vue'
 import { contributionsApi } from '../api/knowledgeContributions'
 import { useKnowledgeCurationPresentation } from '../composables/useKnowledgeCurationPresentation'
 import { knowledgeDeviceTypeOptions } from '../constants/knowledge'
@@ -11,7 +14,6 @@ import {
   confirmKnowledgeCuration,
   createKnowledgeCuration,
   deleteKnowledgeCuration,
-  getKnowledgeCuration,
   listKnowledgeCurations,
   loadCurationOptions,
   previewKnowledgeCurationSource,
@@ -59,7 +61,27 @@ const previewSourceItem = ref<KnowledgeCurationSource | null>(null)
 const previewStartLine = ref(1)
 const previewHasMore = ref(false)
 const activeTab = ref('draft')
-let pollTimer: number | undefined
+const principalId = ref('')
+const {
+  activeJob,
+  jobPollError,
+  isWorking,
+  progressPhase,
+  loadSession,
+  trackCurationJob,
+  cancelModelTask,
+  retryModelTask,
+  dismissModelTask,
+  resetModelTask
+} = useKnowledgeCurationTask({
+  current,
+  principalId,
+  loading,
+  draftEditor,
+  draftTitle,
+  loadSessions,
+  errorText
+})
 
 const createForm = reactive({
   title_hint: '',
@@ -88,56 +110,23 @@ const draftDirty = computed(() => Boolean(
     || draftTitle.value !== current.value.draft_title
   )
 ))
-const isWorking = computed(() => ['QUEUED', 'EXTRACTING', 'CONFIRMING'].includes(current.value?.status || ''))
-
 function errorText(error: any) {
   return error?.response?.data?.detail || error?.message || '操作失败'
 }
 
-function clearPoll() {
-  if (pollTimer !== undefined) window.clearTimeout(pollTimer)
-  pollTimer = undefined
-}
-
-function schedulePoll() {
-  clearPoll()
-  if (!current.value || !['QUEUED', 'EXTRACTING', 'CONFIRMING'].includes(current.value.status)) return
-  pollTimer = window.setTimeout(async () => {
-    if (!current.value) return
-    try {
-      await loadSession(current.value.id)
-      await loadSessions(current.value.id)
-    } finally {
-      schedulePoll()
-    }
-  }, 1500)
-}
-
 async function loadModelsAndCategories() {
-  const options = await loadCurationOptions()
+  const [options, meResponse] = await Promise.all([loadCurationOptions(), api.get<{ id: string }>('/system/me')])
   modelProfiles.value = options.models
   categories.value = options.categories
+  principalId.value = meResponse.data.id
 }
 
-async function loadSessions(preferredId?: string) {
-  sessions.value = await listKnowledgeCurations()
+async function loadSessions(preferredId?: string, isCurrent?: () => boolean) {
+  const items = await listKnowledgeCurations()
+  if (isCurrent && !isCurrent()) return
+  sessions.value = items
   const target = preferredId || current.value?.id || sessions.value[0]?.id
   if (target && (!current.value || current.value.id !== target)) await loadSession(target)
-}
-
-async function loadSession(sessionId: string) {
-  loading.value = true
-  try {
-    const detail = await getKnowledgeCuration(sessionId)
-    current.value = detail
-    draftEditor.value = detail.draft_markdown || ''
-    draftTitle.value = detail.draft_title || detail.title_hint
-  } catch (error) {
-    ElMessage.error(errorText(error))
-  } finally {
-    loading.value = false
-  }
-  schedulePoll()
 }
 
 async function selectSession(session: KnowledgeCurationSession) {
@@ -150,6 +139,7 @@ async function selectSession(session: KnowledgeCurationSession) {
       return
     }
   }
+  resetModelTask()
   await loadSession(session.id)
 }
 
@@ -194,6 +184,8 @@ async function createSession() {
     const session = response.session
     createDialog.value = false
     current.value = session
+    trackCurationJob(response.job, session.id)
+    jobPollError.value = ''
     draftEditor.value = ''
     draftTitle.value = session.title_hint
     ElMessage.success('文件夹已上传，正在后台调用大模型生成案例初稿')
@@ -230,6 +222,7 @@ async function saveDraft() {
 }
 
 async function sendCorrection() {
+  if (isWorking.value || saving.value) return
   if (!current.value) return
   const instruction = chatInstruction.value.trim()
   if (!instruction) return ElMessage.warning('请输入要讨论或纠正的内容')
@@ -241,12 +234,10 @@ async function sendCorrection() {
       instruction,
       current.value.draft_version
     )
-    current.value = response
-    draftEditor.value = response.draft_markdown || ''
-    draftTitle.value = response.draft_title
+    trackCurationJob(response)
+    jobPollError.value = ''
     chatInstruction.value = ''
-    ElMessage.success('模型已根据本轮对话生成新的草稿版本')
-    await loadSessions(current.value!.id)
+    ElMessage.success('修正任务已进入后台队列')
   } catch (error) {
     ElMessage.error(errorText(error))
   } finally {
@@ -310,8 +301,9 @@ async function retrySession() {
   try {
     const response = await retryKnowledgeCuration(current.value.id)
     current.value = response.session
+    trackCurationJob(response.job, response.session.id)
+    jobPollError.value = ''
     ElMessage.success('已重新提交模型提炼任务')
-    schedulePoll()
   } catch (error) {
     ElMessage.error(errorText(error))
   } finally {
@@ -328,6 +320,7 @@ async function deleteSession() {
       { type: 'warning' }
     )
     await deleteKnowledgeCuration(current.value.id)
+    resetModelTask()
     current.value = null
     draftEditor.value = ''
     await loadSessions()
@@ -369,7 +362,6 @@ async function initialize() {
 }
 
 onMounted(initialize)
-onBeforeUnmount(clearPoll)
 </script>
 
 <template>
@@ -437,6 +429,14 @@ onBeforeUnmount(clearPoll)
             :closable="false"
             style="margin-bottom:16px"
           />
+          <ModelTaskProgress v-if="activeJob" :job="activeJob" :phase="progressPhase" test-id="knowledge-curation-model-progress">
+            <template #actions>
+              <el-button v-if="['QUEUED','RUNNING'].includes(activeJob.status)" size="small" type="warning" @click="cancelModelTask">取消本轮</el-button>
+              <el-button v-if="['FAILED','CANCELLED','DEAD_LETTER'].includes(activeJob.status)" size="small" type="primary" @click="retryModelTask">重试本轮</el-button>
+              <el-button v-if="['COMPLETED','FAILED','CANCELLED','DEAD_LETTER'].includes(activeJob.status)" size="small" @click="dismissModelTask">关闭记录</el-button>
+            </template>
+          </ModelTaskProgress>
+          <el-alert v-if="jobPollError" type="warning" :title="jobPollError" :closable="false" style="margin-bottom:16px" />
           <el-alert
             v-if="current.status === 'FAILED'"
             :title="current.error_message || '模型提炼失败'"
@@ -525,7 +525,7 @@ onBeforeUnmount(clearPoll)
                     data-testid="curation-send-correction"
                     type="primary"
                     style="width:100%;margin-top:8px"
-                    :disabled="current.status !== 'REVIEWING' || draftDirty"
+                    :disabled="current.status !== 'REVIEWING' || draftDirty || isWorking"
                     :loading="saving"
                     @click="sendCorrection"
                   >发送并生成下一版</el-button>

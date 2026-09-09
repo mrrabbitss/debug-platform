@@ -4,7 +4,7 @@ from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, 
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
-from app.core.utils import utcnow
+from app.core.utils import json_loads, utcnow
 from app.memory_models import AgentMemory as AgentMemory
 from app.publication_models import KnowledgeDraft as KnowledgeDraft, KnowledgePublication as KnowledgePublication
 from app.knowledge_acl_models import KnowledgeAccess as KnowledgeAccess
@@ -805,6 +805,7 @@ class Job(Base):
     kind: Mapped[str] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(32), default="QUEUED", index=True)
     progress: Mapped[int] = mapped_column(Integer, default=0)
+    progress_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
     message: Mapped[str] = mapped_column(Text, default="")
     input_json: Mapped[str] = mapped_column(Text, default="{}")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -832,6 +833,11 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def progress_detail(self) -> dict:
+        value = json_loads(self.progress_json, {})
+        return value if isinstance(value, dict) else {}
 
 
 class RetrievalEvaluationDataset(Base):

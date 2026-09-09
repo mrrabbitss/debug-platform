@@ -94,32 +94,19 @@ class JobContext:
             raise JobLeaseLostError("Background job lease is no longer owned")
 
     def update(self, progress: int, message: str) -> None:
-        now = utcnow()
-        with SessionLocal() as db:
-            changed = db.execute(
-                update(Job)
-                .where(*self._owned_running_clause())
-                .values(
-                    progress=max(0, min(100, progress)),
-                    message=message[:4000],
-                    heartbeat_at=now,
-                    lease_expires_at=now + timedelta(seconds=self.lease_seconds),
-                )
-                .execution_options(synchronize_session=False)
-            )
-            if changed.rowcount == 1:
-                expired = db.scalar(select(Job.id).where(
-                    Job.id == self.job_id,
-                    Job.deadline_at.is_not(None),
-                    Job.deadline_at <= now,
-                ))
-                db.commit()
-                if expired:
-                    raise JobTimeoutError("Background job exceeded its runtime budget")
-                return
-            db.rollback()
-        self.raise_if_cancelled()
-        raise JobLeaseLostError("Background job lease is no longer owned")
+        self._write_progress(progress, message)
+
+    def report_progress(self, progress: int, message: str, details: dict) -> None:
+        self._write_progress(progress, message, details)
+
+    def model_wait(self, waiting: bool) -> None:
+        self._write_progress(None, None, {"waiting_for_model": waiting})
+
+    def _write_progress(self, progress: int | None, message: str | None,
+                        details: dict | None = None) -> None:
+        from app.services.job_progress import write_job_progress
+
+        write_job_progress(self, SessionLocal, progress, message, details)
 
     def raise_if_cancelled(self, *, allow_completed: bool = False) -> None:
         now = utcnow()
@@ -456,6 +443,7 @@ class JobRunner:
                 .values(
                     status="QUEUED",
                     progress=0,
+                    progress_json="{}",
                     message="Worker lease expired; queued for recovery",
                     available_at=now,
                     lease_owner=None,
@@ -588,6 +576,7 @@ class JobRunner:
                 )
                 job.status = "QUEUED"
                 job.progress = 0
+                job.progress_json = "{}"
                 job.message = (
                     f"Retry {job.attempt + 1}/{job.max_attempts} scheduled "
                     f"after {delay:.2f}s backoff"
@@ -615,6 +604,8 @@ class JobRunner:
     ) -> None:
         heartbeat_stop = threading.Event()
         heartbeat_thread: threading.Thread | None = None
+        from app.services.job_progress import active_job_context
+        progress_token = None
         try:
             with SessionLocal() as db:
                 job = db.get(Job, job_id)
@@ -632,6 +623,7 @@ class JobRunner:
                         status="RUNNING",
                         started_at=now,
                         progress=1,
+                        progress_json="{}",
                         message="Running",
                         attempt=Job.attempt + 1,
                         lease_owner=self.worker_id,
@@ -657,6 +649,7 @@ class JobRunner:
                 lease_owner=self.worker_id,
                 lease_seconds=self.lease_seconds,
             )
+            progress_token = active_job_context.set(context)
             heartbeat_thread = threading.Thread(
                 target=self._heartbeat_loop,
                 args=(job_id, heartbeat_stop),
@@ -715,6 +708,8 @@ class JobRunner:
             logger.exception("Background job %s failed", job_id)
             self._fail_or_retry(job_id, exc)
         finally:
+            if progress_token is not None:
+                active_job_context.reset(progress_token)
             heartbeat_stop.set()
             if heartbeat_thread and heartbeat_thread.is_alive():
                 heartbeat_thread.join(timeout=2)

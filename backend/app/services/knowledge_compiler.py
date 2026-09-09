@@ -90,12 +90,20 @@ async def classify_complete_document(provider, context: dict, content: str, ctx)
             pages.append([section])
     for index, page in enumerate(pages):
         ctx.raise_if_cancelled()
+        from app.services.job_progress import report_progress
+        report_progress(ctx, 15 + int(65 * index / max(1, len(pages))),
+            f"正在阅读全文并归类：第 {index + 1}/{len(pages)} 组章节",
+            stage="完整阅读与归类", stage_index=1, stage_count=2,
+            completed_units=index, total_units=len(pages), unit="组章节")
         left, right = page[0]["start"], page[-1]["end"]
         item = {**source, "excerpt": mask_sensitive(content[left:right]), "excerpt_truncated": False,
                 "markdown_outline": "\n".join(section["heading"] for section in page), "outline_truncated": False}
         decision = (await classify_routing_context(provider, {**context, "documents": [item]}))[0]
         votes.append({**decision, "section_ids": [section["id"] for section in page], "characters": right - left})
-        ctx.update(35 + int(30 * (index + 1) / max(1, len(pages))), "Classifying complete Markdown sections")
+        report_progress(ctx, 15 + int(65 * (index + 1) / max(1, len(pages))),
+            f"已完成 {index + 1}/{len(pages)} 组完整章节归类",
+            stage="完整阅读与归类", stage_index=1, stage_count=2,
+            completed_units=index + 1, total_units=len(pages), unit="组章节")
     if not votes:
         raise ValueError("Markdown has no content to classify")
     weights = {}

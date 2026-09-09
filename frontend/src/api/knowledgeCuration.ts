@@ -4,9 +4,10 @@ import type {
   KnowledgeCategory,
   KnowledgeCurationRevision,
   KnowledgeCurationSession,
+  Job,
   ModelProfile
 } from '../types'
-import { api, SYNCHRONOUS_AI_TIMEOUT_MS } from './client'
+import { api } from './client'
 import type { KnowledgeContribution } from './knowledgeContributions'
 
 export interface KnowledgeCurationCreateInput {
@@ -26,7 +27,7 @@ export interface KnowledgeCurationCreateInput {
 
 export interface KnowledgeCurationJobResponse {
   session: KnowledgeCurationSession
-  job: { id: string; status: string }
+  job: Job
 }
 
 export interface KnowledgeCurationPreview {
@@ -92,11 +93,10 @@ export async function refineKnowledgeCuration(
   sessionId: string,
   instruction: string,
   expectedDraftVersion: number
-): Promise<KnowledgeCurationSession> {
-  return (await api.post<KnowledgeCurationSession>(
-    `/knowledge-curations/${sessionId}/chat`,
+): Promise<Job> {
+  return (await api.post<Job>(
+    `/knowledge-curations/${sessionId}/chat-jobs`,
     { instruction, expected_draft_version: expectedDraftVersion },
-    { timeout: SYNCHRONOUS_AI_TIMEOUT_MS }
   )).data
 }
 

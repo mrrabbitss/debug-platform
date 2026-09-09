@@ -26,6 +26,7 @@ from app.schemas import (
 )
 from app.services.audit import record_audit_event
 from app.services.jobs import job_runner
+from app.services.interactive_model_jobs import curation_refinement_job
 from app.services.knowledge_curation import (
     CurationConflict,
     CurationError,
@@ -55,6 +56,14 @@ job_runner.register(
     ("session_id",),
     cancellable=True,
     max_attempts=3,
+    timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
+)
+job_runner.register(
+    "refine_knowledge_curation",
+    curation_refinement_job,
+    ("session_id", "expected_draft_version", "instruction", "owner_id", "model_snapshot"),
+    cancellable=True,
+    max_attempts=1,
     timeout_seconds=AI_JOB_TIMEOUT_SECONDS,
 )
 
@@ -352,6 +361,41 @@ async def chat_with_curation_session(
         details={"draft_version": session.draft_version},
     )
     return session_to_dict(db, session, detail=True, principal=_principal(request))
+
+
+@router.post("/{session_id}/chat-jobs", response_model=JobOut)
+def chat_with_curation_session_job(
+    session_id: str,
+    payload: KnowledgeCurationChatRequest,
+    request: Request,
+    db: Db,
+) -> Job:
+    """Queue one pinned curation correction; retain the synchronous chat API."""
+    from app.services.model_access import ModelAccessError, resolve_chat_model_snapshot
+
+    principal = _require_contributor(request)
+    session = _get_session(db, session_id, _principal(request), write=True)
+    if session.status != "REVIEWING" or session.draft_version != payload.expected_draft_version:
+        raise HTTPException(409, "Draft changed; refresh before sending another correction")
+    snapshot = json_loads(session.model_snapshot_json, {})
+    model_snapshot = {key: snapshot.get(key) for key in (
+        "selected_chat_profile_id", "model_actor_id", "model_profile_fingerprint")}
+    try:
+        resolve_chat_model_snapshot(db, model_snapshot)
+    except ModelAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    data = {
+        "session_id": session.id,
+        "expected_draft_version": payload.expected_draft_version,
+        "instruction": payload.instruction.strip(),
+        "owner_id": actor_id(principal),
+        "model_snapshot": model_snapshot,
+    }
+    try:
+        return job_runner.submit(db, "refine_knowledge_curation", curation_refinement_job,
+                                 input_data=data, max_attempts=1, timeout_seconds=AI_JOB_TIMEOUT_SECONDS)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.patch("/{session_id}/draft")

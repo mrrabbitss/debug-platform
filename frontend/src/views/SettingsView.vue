@@ -11,6 +11,8 @@ import type {
   ModelProfile,
   ModelTask
 } from '../types'
+import ModelTaskProgress from '../components/common/ModelTaskProgress.vue'
+import { useSettingsChatTest } from '../composables/useSettingsChatTest'
 
 type ThinkingMode = 'inherit' | 'enabled' | 'disabled'
 const props = withDefaults(defineProps<{ retrievalOnly?: boolean }>(), { retrievalOnly: true })
@@ -22,6 +24,17 @@ const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
 const saving = ref(false)
 const testingId = ref('')
+const principalId = ref('')
+let chatTestRestoreAttempted = false
+const {
+  activeChatTestJob,
+  chatTestPollError,
+  trackChatTest,
+  restoreChatTest,
+  cancelChatTest,
+  retryChatTest,
+  dismissChatTest
+} = useSettingsChatTest({ principalId, errorText })
 const reindexing = ref(false)
 const apiKey = ref(localStorage.getItem('gw_ap_api_key') || '')
 const startingDownloadId = ref('')
@@ -99,14 +112,17 @@ function errorText(error: any) {
 }
 
 async function load() {
-  const [modelResponse, retrievalResponse, downloadResponse] = await Promise.all([
+  const [modelResponse, retrievalResponse, downloadResponse, meResponse] = await Promise.all([
     api.get('/system/models'),
     api.get('/system/retrieval'),
-    api.get<ModelDownloadCatalog>('/system/model-downloads')
+    api.get<ModelDownloadCatalog>('/system/model-downloads'),
+    api.get<{ id: string }>('/system/me')
   ])
   profiles.value = modelResponse.data
   retrieval.value = retrievalResponse.data
   applyDownloadCatalog(downloadResponse.data)
+  principalId.value = meResponse.data.id
+  if (!chatTestRestoreAttempted) { chatTestRestoreAttempted = true; void restoreChatTest() }
 }
 
 function applyDownloadCatalog(payload: ModelDownloadCatalog) {
@@ -419,6 +435,13 @@ async function saveProfile() {
 async function testProfile(profile: ModelProfile) {
   testingId.value = profile.id
   try {
+    if (profile.task_type === 'chat') {
+      const { data } = await api.post<Job>(`/system/models/${profile.id}/test-jobs`)
+      trackChatTest(data)
+      chatTestPollError.value = ''
+      ElMessage.info('诊断模型测试已进入后台队列')
+      return
+    }
     const { data } = await api.post(`/system/models/${profile.id}/test`, undefined, {
       timeout: SYNCHRONOUS_AI_TIMEOUT_MS
     })
@@ -532,6 +555,14 @@ onMounted(load)
           索引 {{ retrieval.embedding?.vector_count || 0 }} / {{ retrieval.embedding?.chunk_count || 0 }} 个知识分块
         </span>
       </div>
+      <ModelTaskProgress v-if="activeChatTestJob" :job="activeChatTestJob" test-id="settings-chat-model-test-progress">
+        <template #actions>
+          <el-button v-if="['QUEUED','RUNNING'].includes(activeChatTestJob.status)" size="small" type="warning" @click="cancelChatTest">取消测试</el-button>
+          <el-button v-if="['FAILED','CANCELLED','DEAD_LETTER'].includes(activeChatTestJob.status)" size="small" type="primary" @click="retryChatTest">重试测试</el-button>
+          <el-button v-if="['COMPLETED','FAILED','CANCELLED','DEAD_LETTER'].includes(activeChatTestJob.status)" size="small" @click="dismissChatTest">关闭记录</el-button>
+        </template>
+      </ModelTaskProgress>
+      <el-alert v-if="chatTestPollError" type="warning" :title="chatTestPollError" :closable="false" style="margin-bottom:12px" />
       <el-table :data="taskProfiles" stripe>
         <el-table-column label="状态" width="90">
           <template #default="scope"><el-tag v-if="scope.row.is_active" type="success">当前使用</el-tag><el-tag v-else type="info">备用</el-tag></template>

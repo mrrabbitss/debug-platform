@@ -8,19 +8,26 @@ from app.models import KnowledgeCurationSession
 from app.services.knowledge_access import require_knowledge_admin
 from app.services.knowledge_contributions import (contribution_payload, require_contribution,
     require_version, update_contribution, validate_candidate_evidence)
+from app.services.job_progress import report_progress
 from app.services.llm import LLMError, get_llm_provider
 from app.services.model_access import (ModelAccessError, chat_model_snapshot, principal_for_model_user,
     resolve_chat_model_snapshot, resolve_user_chat_profile)
 
 
-async def refine_contribution(db, row, principal, values):
+async def refine_contribution(db, row, principal, values, *, model_snapshot=None, ctx=None):
     require_knowledge_admin(principal)
     require_version(row, values["expected_version"])
     if row.status != "SUBMITTED" or row.operation == "DELETE":
         raise HTTPException(409, "AI correction requires a submitted content change")
     try:
-        profile = resolve_user_chat_profile(db, principal, values.get("model_profile_id"))
-        model_snapshot = chat_model_snapshot(db, principal, profile)
+        if model_snapshot:
+            selected_snapshot = model_snapshot
+            profile = resolve_chat_model_snapshot(db, model_snapshot)
+            if selected_snapshot.get("model_actor_id") != principal.get("id"):
+                raise ModelAccessError("Saved model owner no longer matches the reviewer", 409)
+        else:
+            profile = resolve_user_chat_profile(db, principal, values.get("model_profile_id"))
+            selected_snapshot = chat_model_snapshot(db, principal, profile)
     except ModelAccessError as error:
         raise HTTPException(error.status_code, str(error)) from error
     if profile.provider == "mock":
@@ -45,6 +52,10 @@ async def refine_contribution(db, row, principal, values):
     contribution_id, version = row.id, row.version
     provider = get_llm_provider(profile)
     # Capture immutable inputs before releasing the database transaction for the external call.
+    if ctx:
+        report_progress(ctx, 35, "正在生成修订草稿", stage="生成修订草稿",
+                        stage_index=2, stage_count=4, waiting_for_model=True)
+        ctx.raise_if_cancelled()
     db.rollback()
     try:
         for attempt in range(2):
@@ -73,11 +84,15 @@ async def refine_contribution(db, row, principal, values):
         raise HTTPException(502, "Model returned an invalid review response") from error
     except LLMError as error:
         raise HTTPException(502, "AI review request failed; the pending candidate was preserved") from error
+    if ctx:
+        ctx.raise_if_cancelled()
+        report_progress(ctx, 80, "正在核对输出", stage="核对输出",
+                        stage_index=3, stage_count=4, waiting_for_model=False)
     db.expire_all()
     try:
         # A response from a changed/disabled profile cannot silently become the
         # reviewed candidate, even when the reviewer still has the same role.
-        resolve_chat_model_snapshot(db, model_snapshot)
+        resolve_chat_model_snapshot(db, selected_snapshot)
         principal = principal_for_model_user(db, principal["id"])
     except ModelAccessError as error:
         raise HTTPException(error.status_code, str(error)) from error
@@ -86,6 +101,12 @@ async def refine_contribution(db, row, principal, values):
     require_version(row, version)
     # Invalid model citations are rejected before changing either draft or dialogue history.
     validate_candidate_evidence(db, row, {**candidate, "content": refined.revised_markdown})
+    if ctx:
+        ctx.raise_if_cancelled()
+        # This write is deliberately outside the transaction lock that commits
+        # the contribution revision and Job completion marker together.
+        report_progress(ctx, 95, "正在保存待审版本", stage="保存待审版本",
+                        stage_index=4, stage_count=4, waiting_for_model=False)
     return update_contribution(db, row, principal, {"expected_version": version, "title": refined.title,
         "content": refined.revised_markdown, "comment": refined.change_summary}, review=True,
         messages=[{"role": "user", "content": values["instruction"], "actor_id": principal["id"], "version": version},

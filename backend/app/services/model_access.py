@@ -236,6 +236,37 @@ def chat_model_snapshot(db: Session, principal: dict, profile: ModelProfile) -> 
             "model_profile_fingerprint": model_profile_fingerprint(db, profile)}
 
 
+def chat_connection_test_snapshot(db: Session, principal: dict, profile: ModelProfile) -> dict:
+    """Pin a Chat probe without requiring that an owner-managed draft is enabled."""
+    profile = require_model_profile(db, principal, profile.id)
+    if profile.task_type != "chat":
+        raise ModelAccessError("This background connection test is available only for Chat models", 422)
+    if not profile.enabled and not can_manage_model(db, principal, profile):
+        raise ModelAccessError("This shared model is disabled", 409)
+    return {"selected_chat_profile_id": profile.id, "model_actor_id": principal["id"],
+            "model_profile_fingerprint": model_profile_fingerprint(db, profile)}
+
+
+def resolve_chat_connection_test_snapshot(db: Session, snapshot: dict) -> ModelProfile:
+    """Revalidate a pinned Chat probe, including disabled private draft models."""
+    profile_id = snapshot.get("selected_chat_profile_id")
+    actor_id = snapshot.get("model_actor_id")
+    if not profile_id or not actor_id:
+        raise ModelAccessError("The saved Chat selection is missing; start a fresh request", 409)
+    principal = principal_for_model_user(db, actor_id)
+    profile = require_model_profile(db, principal, profile_id)
+    if profile.task_type != "chat":
+        raise ModelAccessError("The saved selection is not a Chat model", 409)
+    if not profile.enabled and not can_manage_model(db, principal, profile):
+        raise ModelAccessError("This shared model is disabled", 409)
+    fingerprint = snapshot.get("model_profile_fingerprint")
+    if not fingerprint:
+        raise ModelAccessError("The saved model configuration is incomplete", 409)
+    if fingerprint != model_profile_fingerprint(db, profile):
+        raise ModelAccessError("Model configuration or credentials changed; start a fresh request", 409)
+    return profile
+
+
 def resolve_chat_model_snapshot(db: Session, snapshot: dict) -> ModelProfile:
     profile_id = snapshot.get("selected_chat_profile_id")
     if not profile_id:

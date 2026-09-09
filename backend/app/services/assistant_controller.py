@@ -7,6 +7,7 @@ from app.services.assistant_plan import Decision, SourceSlice, materialize, revi
 from app.services.assistant_sources import (PAGE_SIZE, catalogue_page, snapshot_document, get_source,
     source_page, reading_page, verify_receipts, resolve_reference, redacted_source)
 from app.services.workbench import categories, KNOWLEDGE_ROLES
+from app.services.job_progress import report_progress
 
 MAX_STEPS = 96
 MAX_SELECTED = 64
@@ -165,7 +166,8 @@ def execute(runtime, step):
 
 def plan(runtime):
     from app.services.assistant_runtime import RunPaused
-    for _ in range(MAX_STEPS):
+    runtime.planning = True
+    for step_number in range(1, MAX_STEPS + 1):
         with SessionLocal() as db:
             _, value = runtime.state(db)
             payload = {"task": "回答请求并提出可核对的具体方案。可用分页工具search检索目录、read全文读取已有知识及依赖、"
@@ -185,7 +187,14 @@ def plan(runtime):
                 "categories": categories(db), "roles": KNOWLEDGE_ROLES,
                 "pending_operations": len(value.get("pending_plan", [])),
                 "last_step": value.get("planning_checkpoint")}
+        report_progress(runtime.ctx, 60,
+            f"正在进行第 {step_number} 步知识对比与整理；已形成 {len(value.get('pending_plan', []))} 项候选变更",
+            stage="对比与整理方案", stage_index=2, stage_count=3, round_number=step_number)
         step = runtime.call(payload, Step, "knowledge_assistant_plan")
+        report_progress(runtime.ctx, 92 if step.action == "finish" else 60,
+            "正在核对来源、具体差异和完整变更清单" if step.action == "finish" else "正在执行本轮只读检索或校验草稿",
+            stage="校验与保存待审方案" if step.action == "finish" else "对比与整理方案",
+            stage_index=3 if step.action == "finish" else 2, stage_count=3, round_number=step_number)
         result = execute(runtime, step)
         if step.action == "finish":
             return result

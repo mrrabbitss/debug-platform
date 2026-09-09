@@ -12,6 +12,7 @@ from app.core.timeouts import chat_timeout_seconds
 from app.core.utils import json_loads
 from app.models import ModelProfile
 from app.services.audit import record_model_egress
+from app.services.job_progress import track_model_request
 from app.services.model_profiles import (
     get_active_model_profile,
     get_profile_api_key,
@@ -201,6 +202,7 @@ class OpenAICompatibleProvider(LLMProvider):
             usage=usage,
         )
 
+    @track_model_request
     async def generate_json(
         self,
         system: str,
@@ -323,6 +325,7 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         return parsed
 
+    @track_model_request
     async def generate_text(self, system: str, user: str, purpose: str = "case_assistance") -> str:
         started = perf_counter()
         try:

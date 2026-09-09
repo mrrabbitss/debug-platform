@@ -6,12 +6,15 @@ from sqlalchemy import and_, case, exists, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.core.timeouts import AI_JOB_TIMEOUT_SECONDS
 from app.core.db import get_db
 from app.knowledge_contribution_models import KnowledgeContribution
 from app.models import Job
+from app.schemas import JobOut
 from app.knowledge_contribution_schemas import (ContributionChat, ContributionCreate, ContributionReview,
     ContributionUpdate, ContributionVersion)
 from app.services.jobs import job_runner
+from app.services.interactive_model_jobs import contribution_review_job
 from app.services.knowledge_access import is_knowledge_manager, require_contributor, require_knowledge_admin
 from app.services.knowledge_contribution_publication import publication_job
 from app.services.knowledge_contribution_review import refine_contribution
@@ -33,6 +36,10 @@ Db = Annotated[Session, Depends(conflict_checked_db)]
 job_runner.register("publish_knowledge_contribution", publication_job,
                     ("contribution_id", "approved_version", "approved_hash", "reviewer"),
                     cancellable=True, max_attempts=3, timeout_seconds=1800)
+job_runner.register("refine_knowledge_contribution", contribution_review_job,
+                    ("contribution_id", "expected_version", "instruction", "owner_id", "model_snapshot",
+                     "consent_model_egress"),
+                    cancellable=True, max_attempts=1, timeout_seconds=AI_JOB_TIMEOUT_SECONDS)
 
 
 def principal(request):
@@ -143,6 +150,42 @@ async def reviewer_chat(contribution_id: str, payload: ContributionChat, request
     require_knowledge_admin(identity)
     row = require_contribution(db, contribution_id, identity)
     return committed(db, await refine_contribution(db, row, identity, payload.model_dump()))
+
+
+@router.post("/{contribution_id}/review-chat-jobs", response_model=JobOut)
+def reviewer_chat_job(contribution_id: str, payload: ContributionChat, request: Request, db: Db):
+    """Queue one reviewer correction; the synchronous endpoint remains available."""
+    from app.services.model_access import ModelAccessError, chat_model_snapshot, resolve_user_chat_profile
+
+    identity = principal(request)
+    require_knowledge_admin(identity)
+    row = require_contribution(db, contribution_id, identity)
+    from app.services.knowledge_contributions import require_version
+    require_version(row, payload.expected_version)
+    if row.status != "SUBMITTED" or row.operation == "DELETE":
+        raise HTTPException(409, "AI correction requires a submitted content change")
+    try:
+        profile = resolve_user_chat_profile(db, identity, payload.model_profile_id)
+        model_snapshot = chat_model_snapshot(db, identity, profile)
+    except ModelAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    if profile.provider == "mock":
+        raise HTTPException(409, "Select a diagnostic Chat API for AI review")
+    if profile.mode == "api" and payload.consent_model_egress is not True:
+        raise HTTPException(409, "Model egress consent is disabled")
+    data = {
+        "contribution_id": row.id,
+        "expected_version": payload.expected_version,
+        "instruction": payload.instruction,
+        "owner_id": identity["id"],
+        "model_snapshot": model_snapshot,
+        "consent_model_egress": payload.consent_model_egress,
+    }
+    try:
+        return job_runner.submit(db, "refine_knowledge_contribution", contribution_review_job,
+                                 input_data=data, max_attempts=1, timeout_seconds=AI_JOB_TIMEOUT_SECONDS)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("/{contribution_id}/review")

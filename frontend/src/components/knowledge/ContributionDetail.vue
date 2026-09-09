@@ -1,18 +1,26 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { api } from '../../api/client'
 import { contributionsApi, contributionStatus, type KnowledgeContribution } from '../../api/knowledgeContributions'
 import { failure } from '../../composables/useWorkbench'
+import { clearTaskJobBookmark, readTaskJobBookmark, saveTaskJobBookmark, shouldClearTaskJobBookmark } from '../../composables/taskJobBookmark'
+import type { Job } from '../../types'
+import ModelTaskProgress from '../common/ModelTaskProgress.vue'
 const props = defineProps<{ id: string; ownerId: string; review?: boolean }>()
 const emit = defineEmits<{ changed: []; close: [] }>()
 const item = ref<KnowledgeContribution | null>(null), busy = ref(false), loading = ref(false), error = ref('')
 const title = ref(''), content = ref(''), comment = ref(''), instruction = ref(''), consent = ref(true), checked = ref(false), contentTab = ref('content')
 let epoch = 0, timer: number | undefined, disposed = false
+const activeReviewJob = ref<Job | null>(null), reviewPollError = ref('')
+let reviewJobTimer: number | undefined
+let reviewJobEpoch = 0
 const ownDraft = computed(() => !!item.value && item.value.owner_id === props.ownerId && ['DRAFT', 'RETURNED', 'REJECTED'].includes(item.value.status))
 const reviewing = computed(() => !!props.review && item.value?.status === 'SUBMITTED')
 const editable = computed(() => ownDraft.value || reviewing.value)
 const dirty = computed(() => !!item.value && (title.value !== item.value.candidate.title || content.value !== item.value.candidate.content))
 const unsent = computed(() => !!instruction.value.trim())
+const reviewJobActive = computed(() => ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(activeReviewJob.value?.status || ''))
 function apply(value: KnowledgeContribution) {
   if (disposed) return
   item.value = value; title.value = value.candidate.title; content.value = value.candidate.content; checked.value = false
@@ -48,9 +56,79 @@ async function save() {
   await perform(() => contributionsApi.update(current.id, { expected_version: current.version, ...(current.operation === 'DELETE' ? {} : { title: title.value.trim(), content: content.value }), comment: comment.value }, reviewing.value), '修改已保存，原稿与差异已保留')
 }
 async function chat() {
-  if (!item.value || !reviewing.value || item.value.operation === 'DELETE' || dirty.value || !consent.value || !instruction.value.trim()) return
+  if (!item.value || !reviewing.value || reviewJobActive.value || item.value.operation === 'DELETE' || dirty.value || !consent.value || !instruction.value.trim()) return
   const current = item.value, text = instruction.value.trim()
-  await perform(async () => { const value = await contributionsApi.chat(current, text, consent.value); instruction.value = ''; return value }, 'AI 修订已保存，请核对新的差异')
+  busy.value = true; reviewPollError.value = ''
+  try {
+    const job = await contributionsApi.reviewChatJob(current, text, consent.value)
+    trackReviewJob(job)
+    instruction.value = ''
+    ElMessage.info('AI 修正任务已进入后台队列')
+  } catch (cause) { reviewPollError.value = failure(cause) }
+  finally { busy.value = false }
+}
+
+function reviewJobScope() { return `knowledge-contribution:${props.id}:review-chat` }
+function trackReviewJob(job: Job) {
+  const token = ++reviewJobEpoch
+  activeReviewJob.value = job
+  saveTaskJobBookmark(props.ownerId, reviewJobScope(), job.id)
+  scheduleReviewJob(job.id, token)
+}
+function scheduleReviewJob(jobId: string, token = reviewJobEpoch) {
+  if (reviewJobTimer !== undefined) window.clearTimeout(reviewJobTimer)
+  reviewJobTimer = window.setTimeout(() => void pollReviewJob(jobId, token), 1200)
+}
+async function pollReviewJob(jobId: string, token = reviewJobEpoch) {
+  try {
+    const { data } = await api.get<Job>(`/jobs/${jobId}`)
+    if (disposed || token !== reviewJobEpoch) return
+    activeReviewJob.value = data; reviewPollError.value = ''
+    if (['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(data.status)) return scheduleReviewJob(jobId, token)
+    if (data.status === 'COMPLETED') { ElMessage.success('AI 修订已保存，请核对新的差异'); await load(); emit('changed') }
+    else if (data.status === 'CANCELLED') ElMessage.warning('AI 修正已取消')
+    else reviewPollError.value = data.error_message || 'AI 修正失败'
+  } catch (cause) {
+    if (disposed || token !== reviewJobEpoch) return
+    // Keep the last known job rather than converting a polling outage into a failed review.
+    reviewPollError.value = failure(cause) || '任务状态暂时无法刷新，页面保留最近一次确认的进度。'
+    if (shouldClearTaskJobBookmark(cause)) clearTaskJobBookmark(props.ownerId, reviewJobScope())
+    if (!shouldClearTaskJobBookmark(cause) && activeReviewJob.value && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(activeReviewJob.value.status)) scheduleReviewJob(jobId, token)
+  }
+}
+async function cancelReviewJob() {
+  if (!activeReviewJob.value) return
+  try {
+    const { data } = await api.post<Job>(`/jobs/${activeReviewJob.value.id}/cancel`)
+    activeReviewJob.value = data; scheduleReviewJob(data.id)
+  } catch (cause) { reviewPollError.value = failure(cause) }
+}
+async function retryReviewJob() {
+  if (!activeReviewJob.value) return
+  try {
+    const { data } = await api.post<Job>(`/jobs/${activeReviewJob.value.id}/retry`)
+    reviewPollError.value = ''; trackReviewJob(data)
+  } catch (cause) { reviewPollError.value = failure(cause) }
+}
+async function restoreReviewJob() {
+  const id = props.id, token = reviewJobEpoch, scope = reviewJobScope()
+  const jobId = readTaskJobBookmark(props.ownerId, scope)
+  if (!jobId) return
+  try {
+    const { data } = await api.get<Job>(`/jobs/${jobId}`)
+    if (disposed || token !== reviewJobEpoch || props.id !== id) return
+    activeReviewJob.value = data
+    if (['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(data.status)) trackReviewJob(data)
+  } catch (cause) {
+    if (shouldClearTaskJobBookmark(cause)) clearTaskJobBookmark(props.ownerId, scope)
+  }
+}
+function dismissReviewJob() {
+  ++reviewJobEpoch
+  window.clearTimeout(reviewJobTimer)
+  clearTaskJobBookmark(props.ownerId, reviewJobScope())
+  activeReviewJob.value = null
+  reviewPollError.value = ''
 }
 async function submit() {
   if (!item.value || !ownDraft.value || dirty.value || unsent.value) return
@@ -80,8 +158,8 @@ async function remove() {
   finally { busy.value = false }
 }
 async function retry() { const current = item.value; if (current && props.review && current.status === 'FAILED') await perform(() => contributionsApi.retry(current), '已恢复同一已审批版本的发布任务') }
-watch(() => props.id, () => { item.value = null; comment.value = ''; instruction.value = ''; busy.value = false; void load() }, { immediate: true })
-onBeforeUnmount(() => { disposed = true; epoch++; window.clearTimeout(timer) })
+watch(() => props.id, () => { item.value = null; comment.value = ''; instruction.value = ''; busy.value = false; activeReviewJob.value = null; reviewPollError.value = ''; ++reviewJobEpoch; window.clearTimeout(reviewJobTimer); void load(); void restoreReviewJob() }, { immediate: true })
+onBeforeUnmount(() => { disposed = true; epoch++; ++reviewJobEpoch; window.clearTimeout(timer); window.clearTimeout(reviewJobTimer) })
 </script>
 <template>
   <section class="contribution-detail" v-loading="loading" aria-label="知识提交详情">
@@ -101,7 +179,11 @@ onBeforeUnmount(() => { disposed = true; epoch++; window.clearTimeout(timer) })
         <aside class="review-assistant" aria-label="审核 AI 修正">
           <h3>{{ reviewing ? 'AI 多轮修正' : '提炼与修正记录' }}</h3><p class="muted">使用你的统一模型选择。每次修订保存原稿、差异和对话，再核对最终版本。</p>
           <div v-for="(message,index) in item.messages" :key="index" class="conversation-message"><strong>{{ message.role==='user'?'人工要求':'AI 回复' }}</strong><p class="preserve-lines">{{ message.content }}</p></div>
-          <template v-if="reviewing && item.operation!=='DELETE'"><el-input v-model="instruction" aria-label="AI 修正要求" type="textarea" :rows="4" :disabled="busy" placeholder="指出需要修改之处，可以继续追问和纠正" /><el-checkbox v-model="consent" :disabled="busy">允许发送至所选模型</el-checkbox><el-button type="primary" plain :loading="busy" :disabled="!consent || !instruction.trim() || dirty" @click="chat">发送修正要求</el-button></template>
+          <ModelTaskProgress v-if="activeReviewJob" :job="activeReviewJob" compact test-id="contribution-review-model-progress">
+            <template #actions><el-button v-if="reviewJobActive" size="small" type="warning" @click="cancelReviewJob">取消本轮</el-button><el-button v-if="['FAILED','CANCELLED','DEAD_LETTER'].includes(activeReviewJob.status)" size="small" type="primary" @click="retryReviewJob">重试本轮</el-button><el-button v-if="['COMPLETED','FAILED','CANCELLED','DEAD_LETTER'].includes(activeReviewJob.status)" size="small" @click="dismissReviewJob">关闭记录</el-button></template>
+          </ModelTaskProgress>
+          <el-alert v-if="reviewPollError" type="warning" :title="reviewPollError" :closable="false" class="inline-alert" />
+          <template v-if="reviewing && item.operation!=='DELETE'"><el-input v-model="instruction" aria-label="AI 修正要求" type="textarea" :rows="4" :disabled="busy || reviewJobActive" placeholder="指出需要修改之处，可以继续追问和纠正" /><el-checkbox v-model="consent" :disabled="busy || reviewJobActive">允许发送至所选模型</el-checkbox><el-button type="primary" plain :loading="busy" :disabled="reviewJobActive || !consent || !instruction.trim() || dirty" @click="chat">发送修正要求</el-button></template>
           <el-form-item v-if="reviewing" label="审核意见"><el-input v-model="comment" aria-label="审核意见" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
           <p v-if="item.review_comment" class="field-hint">审核意见：{{ item.review_comment }}</p>
         </aside>

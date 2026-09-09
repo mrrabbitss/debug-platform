@@ -12,7 +12,13 @@ KNOWLEDGE_MANAGEMENT_JOB_KINDS = frozenset({
     "curate_knowledge_folder", "reindex_knowledge", "rebuild_domain_graph",
     "assistant_plan", "assistant_publish",
     "publish_knowledge_contribution",
+    "refine_knowledge_contribution", "refine_knowledge_curation",
     "knowledge_reset",
+})
+INTERACTIVE_MODEL_JOB_KINDS = frozenset({
+    "refine_knowledge_contribution",
+    "refine_knowledge_curation",
+    "test_chat_model_connection",
 })
 KNOWLEDGE_READ_PATHS = {(), ("categories",), ("templates", "fault-case"), ("graph", "status")}
 DOCUMENT_READ_PATHS = {(), ("sections",), ("revisions",), ("publications",)}
@@ -143,9 +149,33 @@ def authorize_knowledge_request(db, parts, method, principal):
 
 def authorize_routing_job(db, job_id: str, principal: dict, *, method="GET") -> bool:
     job = db.get(Job, job_id)
-    if not job or job.kind not in KNOWLEDGE_MANAGEMENT_JOB_KINDS:
+    if not job:
         return False
     data = json_loads(job.input_json, {})
+    if job.kind in INTERACTIVE_MODEL_JOB_KINDS:
+        # Interactive model jobs may contain private prompts and profile
+        # fingerprints.  They are never made visible to another manager or to
+        # an otherwise authorised case user through the generic /jobs route.
+        if data.get("owner_id") != principal.get("id"):
+            raise HTTPException(404, "Job not found")
+        if job.kind == "refine_knowledge_contribution":
+            require_contributor(principal)
+            require_knowledge_admin(principal)
+            from app.services.knowledge_contributions import require_contribution
+            require_contribution(db, data.get("contribution_id", ""), principal)
+        elif job.kind == "refine_knowledge_curation":
+            require_contributor(principal)
+            require_curation_access(db, data.get("session_id", ""), principal,
+                                    write=method.upper() != "GET")
+        else:
+            from app.services.model_access import ModelAccessError, require_model_profile
+            try:
+                require_model_profile(db, principal, data.get("profile_id", ""))
+            except ModelAccessError as exc:
+                raise HTTPException(exc.status_code, str(exc)) from exc
+        return True
+    if job.kind not in KNOWLEDGE_MANAGEMENT_JOB_KINDS:
+        return False
     if job.kind == "curate_knowledge_folder":
         require_curation_access(db, data.get("session_id", ""), principal, write=method.upper() != "GET")
         return True

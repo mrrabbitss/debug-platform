@@ -48,6 +48,7 @@ def plan_job(ctx, session_id: str, request_version: int):
                 raise ValueError("旧整理会话需要重新创建，以生成可校验的具体方案")
             db.commit()
             paths = [item["path"] for item in value.get("files", [])] + value.get("selected_paths", [])
+        runtime.reading_scope(paths)
         for path in dict.fromkeys(paths):
             runtime.read(path)
         return plan(runtime)

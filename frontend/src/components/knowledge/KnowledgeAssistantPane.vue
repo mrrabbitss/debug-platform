@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useKnowledgeAssistant } from '../../composables/useKnowledgeAssistant'
 import type { AssistantOperation } from '../../types/workbench'
 import AssistantSourceDialog from './AssistantSourceDialog.vue'
+import ModelTaskProgress from '../common/ModelTaskProgress.vue'
 const props = defineProps<{ categories: { id: string; name: string }[]; roles: Record<string, string> }>()
 const emit = defineEmits<{ published: [] }>()
 const assistant = useKnowledgeAssistant(() => emit('published'))
@@ -14,6 +15,15 @@ const actionName = (value: string) => ({ create:'新增', merge:'合并', replac
 const categoryName = (id: string) => props.categories.find(item => item.id === id)?.name || id
 const contentKindName = (value?: string) => value === 'SKILL' ? '诊断 Skill' : value === 'KNOWLEDGE' ? '普通知识' : '类型待核对'
 const statusName = (value: string) => ({ READING:'正在阅读与整理', REVIEW:'等待核对', APPROVED:'已审批，等待发布', BUILDING:'已审批，正在构建索引', PUBLISHED:'已发布', PUBLISH_FAILED:'已审批，发布失败', FAILED:'整理失败', CANCELLED:'已取消', PAUSED:'已暂停' } as Record<string, string>)[value] || value
+const progressPhase = computed(() => {
+  const status = session.value?.status
+  if (status === 'PAUSED') return 'paused' as const
+  if (status === 'REVIEW') return 'awaiting_human' as const
+  if (status === 'PUBLISHED') return 'published' as const
+  if (['FAILED', 'PUBLISH_FAILED'].includes(status || '')) return 'failed' as const
+  if (status === 'CANCELLED') return 'cancelled' as const
+  return undefined
+})
 watch(() => session.value?.version, () => { operation.value = null })
 watch(() => session.value?.id, () => { sourcePath.value = ''; mode.value = 'auto' })
 onMounted(loadHistory)
@@ -48,8 +58,7 @@ onMounted(loadHistory)
           <el-alert v-if="session.error || session.job?.error_message" type="warning" :closable="false" :title="session.error || session.job?.error_message || ''" class="inline-alert" />
           <el-alert v-if="session.status==='PAUSED'" type="info" :closable="false" title="会话与阅读进度已保存。开启模型授权后，点击继续整理。" class="inline-alert" />
           <el-alert v-if="session.status==='PUBLISH_FAILED'" type="warning" :closable="false" title="精确版本的审批已保留，重试会恢复同一次发布，无需再次确认。发送内容修改要求后，需要核对新的变更清单。" class="inline-alert" />
-          <p v-if="running" class="field-hint">{{ session.job?.message || '任务已保存，正在准备处理资料' }}</p>
-          <el-progress v-if="running" :percentage="Math.max(0,Math.min(100,session.job?.progress || 0))" />
+          <ModelTaskProgress v-if="session.job" :job="session.job" :phase="progressPhase" test-id="knowledge-assistant-model-progress" />
           <div v-for="(item,index) in session.messages" :key="index" class="conversation-message" :class="{assistant:item.role==='assistant'}"><span class="message-author">{{ item.role==='user'?'你的要求':'整理助手' }}</span>{{ item.content }}</div>
           <div v-if="session.answer" class="conversation-message assistant"><span class="message-author">整理助手</span>{{ session.answer }}</div>
           <div v-if="coverage.length" class="coverage-summary"><el-tag :type="complete?'success':'warning'">{{ complete?'全文已读完':'全文阅读未完成' }}</el-tag><span>{{ coverage.filter(([,item])=>item.complete).length }} / {{ coverage.length }} 份资料已完整读取</span></div>

@@ -1,6 +1,50 @@
 # Validation Record
 
-## Latest: 0.5.1 bundled Skill and local administrator recovery (2026-09-09)
+## Latest: 0.5.2 requirements audit and durable model progress (2026-09-10)
+
+Only newly introduced behavior was exercised; no successful historical regression suite,
+real Chat/CLI model request, Full/External or manual CI run was repeated. The mapping from
+confirmed requirements to current implementation is in the [audit](docs/requirements-audit-20260910.md).
+
+| New checks | Result | Scope |
+| --- | --- | --- |
+| Durable progress, runner and migration | 6 distinct cases passed | `test_job_progress.py`: persistent/monotonic progress, model-wait timestamps, unchanged heartbeat percentage, cancellation/lease fences, runner context cleanup and additive 0024→0025 migration preserving results |
+| Complete Skill reading counts | 1 passed | `test_skill_reading_progress.py`: all synthetic source segments, confirmed character counts, cached receipt resume with no new calls and read completion below whole-task completion |
+| Interactive review, refinement and Chat test jobs | 9 distinct cases passed | `test_interactive_model_progress.py`: ownership, fixed model, disabled owner-managed draft tests, negative probe failure, pre-egress consent, changed-model rejection, cancellation/lease rollback and atomic revision/completion |
+| Personal-model patch suggestions | 4 distinct cases passed | `test_patch_suggestion_progress.py`: pinned personal selection, progress, resource/generation and consent checks; legacy response rejects consent revoked during model wait |
+| Frontend presentation and task bookmarks | PASS | `frontend/scripts/modelTaskProgress.test.ts`: stage/count/remaining, paused and failed states, cancellation, retry and per-user bookmark isolation/cleanup |
+| UTC timestamp presentation | PASS | `frontend/scripts/modelTaskTime.test.ts`: SQLite timestamps without offsets and explicit offsets represent the same instant; elapsed time is correct, including invalid/future input |
+| New browser scenarios | 2 passed, 8.9s | `playwright.progress.config.ts`: real Vue pages with all API responses mocked; Chat-test refresh and offline progress retention; diagnosis Skill steps/counts, refresh without duplicate submission and failure milestone retention |
+| Later-turn curation polling | 1 passed, 5.8s | Only the added browser case: poll the correction job rather than the initial job, restore after reload, block duplicate sends, and reread the new draft when completion occurs between session and job responses |
+
+Backend checks used isolated SQLite, synthetic text and fake providers. The initial progress run
+passed four cases; only its two failing test-harness cases were rerun after correcting the runner
+method name and SQL JSON bind. The reading test needed a namespace import fix. The refinement
+atomicity fixture initially lacked its synthetic evidence pack; only that failed case was rerun.
+An existing new connection-test case was extended to cover disabled drafts and rerun for that
+changed behavior. Changed new Python files passed Ruff; legacy E402 imports were not rewritten.
+
+Frontend type checking found the new Element Plus row-control slot's generic mismatch; the handlers
+now take checked row indexes. The updated UTC production bundle passed. The two browser screenshots were visually inspected in
+`artifacts/validation/model-progress-20260910/`; no real browser action contacted a model endpoint.
+The added curation browser fixture initially targeted a nested textarea instead of the actual input;
+only that failed new case was rerun after correcting the selector. The earlier two passing cases
+were not rerun. The curation job selection/completion race was corrected before packaging.
+Final type checking passed. Vite hit the known transient Windows declaration-file write error;
+the complete generated declarations were restored and only the failed bundle step was rerun,
+passing in 5.21s. No successful frontend test was repeated.
+The first repository harness run passed 23/24 gates but rejected file-size/complexity growth.
+Progress persistence, reasoning milestones, revision checks and three page task controllers were
+extracted into focused modules without changing the thresholds. SQL persistence statements were
+mechanically preserved; changed helpers passed Ruff/AST/import checks and Vue extraction passed
+type checking. The final harness passed **24/24**, covering 203 Python files, 37 Vue files and
+38 allowlisted agent operations. Final 0.5.2 package/release verification follows after assembly.
+
+The prior third-party API comprehensive-diagnosis/report acceptance remains **PARTIAL**.
+The prior CLI terra diagnosis/report PASS, six-file installer initialization and administrator
+recovery checks are reused only within their documented scope. They were not rerun here.
+
+## Previous: 0.5.1 bundled Skill and local administrator recovery (2026-09-09)
 
 New installer-only checks: five passed in `backend/tests/test_installer_bundled_knowledge.py`.
 They cover all six files, template/dependency binding, preservation of later human edits/deletions,

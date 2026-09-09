@@ -73,7 +73,16 @@ class ContributionFence:
 
     def update(self, progress, message):
         self.raise_if_cancelled()
-        self.ctx.update(progress, message)
+        from app.services.job_progress import report_progress
+        report_progress(self.ctx, progress, "正在构建已审批知识的索引" if progress < 60 else "正在构建知识关联",
+            stage="构建知识索引" if progress < 60 else "构建知识关联", stage_index=2 if progress < 60 else 3, stage_count=4)
+
+    def report_progress(self, progress, message, details):
+        self.raise_if_cancelled()
+        if hasattr(self.ctx, "report_progress"):
+            self.ctx.report_progress(progress, message, details)
+        else:
+            self.ctx.update(progress, message)
 
 
 def prepare(fence):
@@ -253,8 +262,11 @@ def publish(fence, snapshot, replacements, by_document, graph, staged):
 def publication_job(ctx, contribution_id, approved_version, approved_hash, reviewer):
     fence = ContributionFence(ctx, contribution_id, approved_version, approved_hash, reviewer)
     try:
+        from app.services.job_progress import report_progress
+        report_progress(ctx, 5, "正在核对已审批版本并准备发布", stage="核对发布审批", stage_index=1, stage_count=4)
         snapshot = prepare(fence)
         replacements, chunks, graph, staged = build(fence, snapshot)
+        report_progress(ctx, 95, "正在原子发布已审批内容与索引", stage="发布并保存", stage_index=4, stage_count=4)
         return publish(fence, snapshot, replacements, chunks, graph, staged)
     except JobLeaseLostError:
         raise

@@ -323,7 +323,8 @@ def analysis_revision_job(
             )
             db.commit()
             instruction = revision.instruction
-        ctx.update(20, "Loading GW/AP joint evidence and diagnostic methods")
+        from app.services.job_progress import report_progress
+        report_progress(ctx, 15, "正在加载联合证据与诊断方法", stage="准备修订依据", stage_index=1, stage_count=3)
         ctx.raise_if_cancelled()
         evidence = _revision_evidence(case, source, instruction)
         with SessionLocal() as db:
@@ -334,7 +335,7 @@ def analysis_revision_job(
                 evidence_ids=[str(item["evidence_id"]) for item in evidence[:1000]],
                 metadata={"candidate_count": len(evidence)},
             )
-        ctx.update(55, "Waiting for the model to draft the requested revision")
+        report_progress(ctx, 40, "正在根据你的要求生成诊断修订稿", stage="生成修订草稿", stage_index=2, stage_count=3)
         ctx.raise_if_cancelled()
         model_started = perf_counter()
         proposed, summary, assistant_text, usage = asyncio.run(_generate_revision(
@@ -360,7 +361,7 @@ def analysis_revision_job(
                 evidence_ids=[str(item["evidence_id"]) for item in evidence[:1000]],
                 metadata={"approval_status": "DRAFT_REQUIRES_APPROVAL"},
             )
-        ctx.update(90, "Saving revision draft for human review")
+        report_progress(ctx, 90, "正在保存修订稿，完成后请核对差异", stage="保存待核对版本", stage_index=3, stage_count=3)
         ctx.raise_if_cancelled()
         with SessionLocal() as db:
             revision = db.get(AnalysisRevision, revision_id)

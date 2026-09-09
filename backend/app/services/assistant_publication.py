@@ -131,7 +131,15 @@ class PublicationFence:
 
     def update(self, progress, message):
         self.raise_if_cancelled()
-        self.ctx.update(progress, message)
+        from app.services.job_progress import report_progress
+        report_progress(self.ctx, progress, message, stage="构建知识索引", stage_index=2, stage_count=4)
+
+    def report_progress(self, progress, message, details):
+        self.raise_if_cancelled()
+        if hasattr(self.ctx, "report_progress"):
+            self.ctx.report_progress(progress, message, details)
+        else:
+            self.ctx.update(progress, message)
 
 
 def prepare(fence, vector_id):
@@ -204,7 +212,7 @@ def stage_indexes(fence, snapshot, by_document):
             raise ValueError("索引配置已变化")
         chunks = [chunk for group in by_document.values() for chunk in group]
         index_embeddings(db, profile, chunks, generation_id=snapshot["vector_id"], activate_if_missing=False,
-            progress=lambda done, total: fence.update(25 + int(30 * done / max(1, total)), "正在构建整组向量"))
+            progress=lambda done, total: fence.update(25 + int(30 * done / max(1, total)), f"正在构建知识向量：{done}/{total} 块"))
     fence.raise_if_cancelled()
     changed = {item["document"].id: item["document"] for item in snapshot["candidates"]}
     replacements = [doc for doc in snapshot["documents"] if doc.id not in changed] + list(changed.values())
@@ -324,9 +332,12 @@ def failed(fence, error):
 def publication_job(ctx, session_id: str, request_version: int, reviewer: str):
     fence = PublicationFence(ctx, session_id, request_version, reviewer, new_id("KGEN"))
     try:
+        from app.services.job_progress import report_progress
+        report_progress(ctx, 5, "正在核对已审批版本并准备发布", stage="核对发布审批", stage_index=1, stage_count=4)
         snapshot = prepare(fence, new_id("EGEN"))
         by_document = stage_chunks(fence, snapshot)
         replacements, graph = stage_indexes(fence, snapshot, by_document)
+        report_progress(ctx, 95, "正在原子发布文档、向量与图谱", stage="发布并保存", stage_index=4, stage_count=4)
         return publish(fence, snapshot, by_document, replacements, graph)
     except (JobCancelledError, JobLeaseLostError) as error:
         failed(fence, error)

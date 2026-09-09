@@ -111,7 +111,8 @@ async def _generate_case_answer(
             evidence_ids=[latest.id] if latest else [],
             metadata={"candidate_count": len(history)},
         )
-    ctx.update(15, "Retrieving case evidence")
+    from app.services.job_progress import report_progress
+    report_progress(ctx, 15, "正在检索与问题相关的案例证据", stage="检索案例证据", stage_index=1, stage_count=3)
     ctx.raise_if_cancelled()
     started = perf_counter()
     with SessionLocal() as db:
@@ -166,7 +167,7 @@ async def _generate_case_answer(
             evidence_ids=[str(item["evidence_id"]) for item in citations],
             metadata={"candidate_count": len(citations)},
         )
-    ctx.update(55, "Waiting for the configured Chat model")
+    report_progress(ctx, 40, "正在根据案例证据生成回答", stage="生成问答回复", stage_index=2, stage_count=3)
     ctx.raise_if_cancelled()
     provider = get_llm_provider()
     model_started = perf_counter()
@@ -297,7 +298,8 @@ def case_chat_job(
             current_message_id=message_id,
             agent_run_id=agent_run_id,
         ))
-        ctx.update(90, "Persisting the evidence-grounded answer")
+        from app.services.job_progress import report_progress
+        report_progress(ctx, 90, "正在校验引用并保存回答", stage="校验与保存", stage_index=3, stage_count=3)
         ctx.raise_if_cancelled()
         with SessionLocal() as db:
             current_case = db.get(Case, case_id)

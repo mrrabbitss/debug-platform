@@ -394,10 +394,10 @@ def _scan_events(
                         event_info=event_by_line.get((relative_path.replace("\\", "/"), line_number)),
                     )
                     if scanned_lines % 5000 == 0:
-                        ctx.update(
-                            min(85, 55 + scanned_lines // 5000),
-                            f"Scanning complete extracted log text ({scanned_lines:,} lines)",
-                        )
+                        from app.services.job_progress import report_progress
+                        report_progress(ctx, 55, f"已扫描原始日志 {scanned_lines:,} 行；正在继续核对",
+                            stage="扫描与筛选日志", stage_index=2, stage_count=3,
+                            completed_units=scanned_lines, unit="行")
                         ctx.raise_if_cancelled()
 
     for source_file, line_number, event_info in fallback_events:
@@ -411,10 +411,10 @@ def _scan_events(
             event_info=event_info,
         )
         if scanned_lines % 5000 == 0:
-            ctx.update(
-                min(85, 55 + scanned_lines // 5000),
-                f"Scanning parsed log events ({scanned_lines:,})",
-            )
+            from app.services.job_progress import report_progress
+            report_progress(ctx, 55, f"已扫描日志 {scanned_lines:,} 行；正在核对结构化事件",
+                stage="扫描与筛选日志", stage_index=2, stage_count=3,
+                completed_units=scanned_lines, unit="行")
             ctx.raise_if_cancelled()
 
     raw_scan_completed = bool(scanned_source_files)
@@ -562,7 +562,8 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
                     )
             db.commit()
 
-        ctx.update(20, "Planning relevant log evidence with the configured Chat model")
+        from app.services.job_progress import report_progress
+        report_progress(ctx, 15, "正在由所选模型规划日志观察点", stage="规划日志观察点", stage_index=1, stage_count=3)
         ctx.raise_if_cancelled()
         planning_started = perf_counter()
         with SessionLocal() as db:
@@ -598,14 +599,14 @@ def log_triage_job(ctx: JobContext, triage_run_id: str) -> dict[str, Any]:
                 )
             db.commit()
 
-        ctx.update(55, "Scanning all parsed events for planned and mandatory method patterns")
+        report_progress(ctx, 55, "正在扫描日志并核对模型计划与 Skill 中的观察点", stage="扫描与筛选日志", stage_index=2, stage_count=3)
         searchers = _compiled_searchers(patterns, plan)
         match_rows, hit_rows, occurrences, summary = _scan_events(
             ctx,
             triage=triage,
             searchers=searchers,
         )
-        ctx.update(90, "Publishing ranked log evidence buckets")
+        report_progress(ctx, 90, "正在保存筛选结果与日志定位引用", stage="保存日志证据", stage_index=3, stage_count=3)
         ctx.raise_if_cancelled()
         with SessionLocal() as db:
             triage = db.get(LogTriageRun, triage_run_id)

@@ -79,6 +79,7 @@ declare module 'vue' {
     LogTriagePanel: typeof import('./components/diagnosis/LogTriagePanel.vue')['default']
     MarkdownKnowledgeRoutingDialog: typeof import('./components/knowledge/MarkdownKnowledgeRoutingDialog.vue')['default']
     MemoryGovernancePanel: typeof import('./components/MemoryGovernancePanel.vue')['default']
+    ModelTaskProgress: typeof import('./components/common/ModelTaskProgress.vue')['default']
     PlanningTracePanel: typeof import('./components/diagnosis/PlanningTracePanel.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

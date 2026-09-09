@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { api } from '../../api/client'
 import type { AnalysisRevision, ConversationMessage, Job } from '../../types'
 import PlanningTracePanel from './PlanningTracePanel.vue'
+import ModelTaskProgress from '../common/ModelTaskProgress.vue'
 
 const props = defineProps<{
   caseId: string
@@ -20,6 +21,7 @@ const revisions = ref<AnalysisRevision[]>([])
 const submitting = ref(false)
 const activeJob = ref<Job | null>(null)
 const activeRunId = ref('')
+const pollError = ref('')
 let timer: number | null = null
 
 const waiting = computed(() => (
@@ -57,11 +59,14 @@ async function pollJob(jobId: string) {
       schedule(jobId)
       return
     }
+    pollError.value = ''
     if (data.status === 'COMPLETED') ElMessage.success('模型回答已完成')
     else if (data.status === 'CANCELLED') ElMessage.warning('本轮问答已取消')
     else ElMessage.error(data.error_message || '模型回答失败')
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || error?.message || '问答任务状态查询失败')
+    // Keep the last confirmed state visible. A transient network loss must not turn a live task into a failure.
+    pollError.value = error?.response?.data?.detail || error?.message || '任务状态暂时无法刷新，页面保留最近一次确认的进度。'
+    if (activeJob.value && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(activeJob.value.status)) schedule(jobId)
   }
 }
 
@@ -116,6 +121,18 @@ async function cancel() {
     schedule(data.id)
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || error?.message || '取消失败')
+  }
+}
+
+async function retry() {
+  if (!activeJob.value) return
+  try {
+    const { data } = await api.post<Job>(`/jobs/${activeJob.value.id}/retry`)
+    activeJob.value = data
+    pollError.value = ''
+    schedule(data.id)
+  } catch (error: any) {
+    pollError.value = error?.response?.data?.detail || error?.message || '重试任务创建失败'
   }
 }
 
@@ -175,12 +192,8 @@ onBeforeUnmount(() => {
         </el-collapse-item>
       </el-collapse>
     </el-card>
-    <el-progress
-      v-if="activeJob && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(activeJob.status)"
-      :percentage="activeJob.progress"
-      :format="() => activeJob?.message || activeJob?.status || ''"
-      style="margin:12px 0"
-    />
+    <ModelTaskProgress v-if="activeJob" :job="activeJob" />
+    <el-alert v-if="pollError" type="warning" :title="pollError" :closable="false" style="margin:12px 0" />
     <div class="chat-input">
       <el-radio-group v-model="intent" :disabled="waiting">
         <el-radio-button value="ANSWER">证据问答</el-radio-button>
@@ -196,6 +209,7 @@ onBeforeUnmount(() => {
       />
       <el-button type="primary" :loading="submitting" :disabled="!canEdit || waiting" @click="send">发送到后台</el-button>
       <el-button v-if="activeJob && ['QUEUED', 'RUNNING'].includes(activeJob.status)" type="warning" @click="cancel">取消本轮</el-button>
+      <el-button v-if="activeJob && ['FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(activeJob.status)" type="primary" @click="retry">重试本轮</el-button>
     </div>
     <details class="technical-details"><summary>技术轨迹与执行记录</summary>
     <PlanningTracePanel

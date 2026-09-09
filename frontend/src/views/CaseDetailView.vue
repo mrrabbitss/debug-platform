@@ -10,7 +10,10 @@ import LogTriagePanel from '../components/diagnosis/LogTriagePanel.vue'
 import PlanningTracePanel from '../components/diagnosis/PlanningTracePanel.vue'
 import CaseOptionsPanel from '../components/diagnosis/CaseOptionsPanel.vue'
 import LibrarySubmissionDialog from '../components/knowledge/LibrarySubmissionDialog.vue'
+import ModelTaskProgress from '../components/common/ModelTaskProgress.vue'
 import { useWorkbench, failure } from '../composables/useWorkbench'
+import { usePatchSuggestionTask } from '../composables/usePatchSuggestionTask'
+import { clearTaskJobBookmark, readTaskJobBookmark, saveTaskJobBookmark, shouldClearTaskJobBookmark } from '../composables/taskJobBookmark'
 import type {
   Analysis,
   Artifact,
@@ -43,6 +46,7 @@ const debugFileInput = ref<HTMLInputElement | null>(null)
 const repoFile = ref<File | null>(null)
 const currentJob = ref<Job | null>(null)
 const jobTimer = ref<number | null>(null)
+let jobEpoch = 0
 const diagnosis = ref<any>({})
 const reportHtml = ref('')
 const reportPreviewAnalysisId = ref('')
@@ -62,6 +66,21 @@ const latestAnalysisWithTrace = computed(() => analyses.value.find(item => item.
 const canEditCase = computed(() => {
   if (!principal.value || principal.value.role === 'VIEWER') return false
   return ['OWNER', 'EDITOR', 'SHARED'].includes(caseAccess.value?.permission || '')
+})
+const {
+  patchSuggestionJob,
+  patchSuggestion,
+  patchSuggestionError,
+  suggestPatch,
+  restorePatchSuggestionJob,
+  copyPatchSuggestion,
+  cancelPatchSuggestion,
+  retryPatchSuggestion,
+  dismissPatchSuggestion
+} = usePatchSuggestionTask({
+  caseId,
+  principalId: () => principal.value?.id,
+  canSuggest: () => canEditCase.value && Boolean(caseInfo.value?.model_egress_approved)
 })
 const canManageMembers = computed(() => (
   principal.value?.role === 'ADMIN' || caseAccess.value?.permission === 'OWNER'
@@ -232,7 +251,7 @@ async function removeCaseMember(member: CaseMember) {
 
 async function initialize() {
   loading.value = true; loadError.value = ''
-  try { await Promise.all([loadConfig(), loadAll()]) }
+  try { await Promise.all([loadConfig(), loadAll()]); await Promise.all([restoreCurrentJob(), restorePatchSuggestionJob()]) }
   catch (cause) { loadError.value = failure(cause) }
   finally { loading.value = false }
 }
@@ -313,12 +332,14 @@ async function updateModelEgress(value: boolean) {
 }
 
 function watchJob(job: Job) {
+  const token = ++jobEpoch
   currentJob.value = job
+  saveTaskJobBookmark(principal.value?.id, `case:${caseId}:primary`, job.id)
   if (jobTimer.value) window.clearTimeout(jobTimer.value)
   const poll = async () => {
     try {
       const { data } = await api.get(`/jobs/${job.id}`)
-      if (disposed) return
+      if (disposed || token !== jobEpoch) return
       currentJob.value = data
       if (['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(data.status)) {
         jobTimer.value = null
@@ -330,11 +351,31 @@ function watchJob(job: Job) {
       }
       jobTimer.value = window.setTimeout(() => void poll(), 1200)
     } catch (error: any) {
+      if (disposed || token !== jobEpoch) return
+      if (shouldClearTaskJobBookmark(error)) clearTaskJobBookmark(principal.value?.id, `case:${caseId}:primary`)
       jobTimer.value = null
       ElMessage.error(error?.response?.data?.detail || error?.message || '任务状态查询失败')
+      if (!shouldClearTaskJobBookmark(error) && currentJob.value && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(currentJob.value.status)) {
+        jobTimer.value = window.setTimeout(() => void poll(), 2500)
+      }
     }
   }
   void poll()
+}
+
+async function restoreCurrentJob() {
+  const scope = `case:${caseId}:primary`
+  const jobId = readTaskJobBookmark(principal.value?.id, scope)
+  if (!jobId) return
+  const token = jobEpoch
+  try {
+    const { data } = await api.get<Job>(`/jobs/${jobId}`)
+    if (disposed || token !== jobEpoch) return
+    currentJob.value = data
+    if (['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(data.status)) watchJob(data)
+  } catch (error) {
+    if (shouldClearTaskJobBookmark(error)) clearTaskJobBookmark(principal.value?.id, scope)
+  }
 }
 
 async function cancelCurrentJob() {
@@ -439,14 +480,11 @@ async function runStatic(repositoryId: string) {
   watchJob(data)
 }
 
-async function suggestPatch(symbolId: string) {
-  const { data } = await api.post(`/cases/${caseId}/patch-suggestions`, { symbol_id: symbolId })
-  if (data.patch) {
-    await navigator.clipboard.writeText(data.patch)
-    ElMessage.success('候选补丁已复制到剪贴板；系统未自动修改源码')
-  } else {
-    ElMessage.info(data.message || '需要人工审查')
-  }
+function dismissCurrentJob() {
+  ++jobEpoch
+  if (jobTimer.value) window.clearTimeout(jobTimer.value)
+  clearTaskJobBookmark(principal.value?.id, `case:${caseId}:primary`)
+  currentJob.value = null
 }
 
 onMounted(initialize)
@@ -484,12 +522,13 @@ onBeforeUnmount(() => {
     />
 
     <el-alert v-if="currentJob" :closable="false" :type="['FAILED', 'DEAD_LETTER'].includes(currentJob.status) ? 'error' : currentJob.status === 'CANCELLED' ? 'warning' : 'info'" style="margin-bottom:14px">
-      <template #title>{{ currentJob.kind }}：{{ currentJob.message || currentJob.status }}</template>
-      <el-progress :percentage="currentJob.progress" :status="['FAILED', 'DEAD_LETTER'].includes(currentJob.status) ? 'exception' : undefined" />
+      <template #title>综合诊断任务</template>
+      <ModelTaskProgress :job="currentJob" />
       <pre v-if="currentJob.error_message" class="mono">{{ currentJob.error_message }}</pre>
       <div class="toolbar" style="margin-top:8px">
         <el-button v-if="canEditCase && ['QUEUED', 'RUNNING'].includes(currentJob.status)" size="small" type="warning" @click="cancelCurrentJob">安全取消</el-button>
         <el-button v-if="canEditCase && ['FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(currentJob.status)" size="small" type="primary" @click="retryCurrentJob">重试</el-button>
+        <el-button v-if="['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD_LETTER'].includes(currentJob.status)" size="small" @click="dismissCurrentJob">关闭记录</el-button>
       </div>
     </el-alert>
 
@@ -577,7 +616,7 @@ onBeforeUnmount(() => {
       </el-tab-pane>
 
       <el-tab-pane label="日志与筛查" name="logs" lazy>
-        <LogTriagePanel v-if="activeTab==='logs'" :case-id="caseId" :artifacts="artifacts" :can-edit="canEditCase" :model-egress-approved="caseInfo.model_egress_approved" @open-source="openTriageSource" />
+        <LogTriagePanel v-if="activeTab==='logs'" :case-id="caseId" :artifacts="artifacts" :can-edit="canEditCase" :model-egress-approved="caseInfo.model_egress_approved" :principal-id="principal?.id" @open-source="openTriageSource" />
         <h3 class="section-title">原始日志与证据位置</h3>
         <LogBrowserPanel ref="logBrowser" :artifacts="artifacts" />
       </el-tab-pane>
@@ -666,9 +705,22 @@ onBeforeUnmount(() => {
           <el-table-column label="操作" width="280"><template #default="scope"><el-button link type="primary" :disabled="!canEditCase || !['UPLOADED', 'INDEXED', 'INDEX_FAILED'].includes(scope.row.status)" @click="indexRepo(scope.row.id)">建立索引</el-button><el-button link @click="loadSymbols(scope.row.id)">查看符号</el-button><el-button link type="warning" :disabled="!canEditCase || !['UPLOADED', 'INDEXED', 'INDEX_FAILED'].includes(scope.row.status)" @click="runStatic(scope.row.id)">静态分析</el-button></template></el-table-column>
         </el-table>
         <div class="toolbar" style="margin-top:18px"><el-input v-model="symbolSearch" placeholder="函数名、宏名或文件路径" style="width:300px"/><el-button v-if="repositories[0]" @click="loadSymbols(repositories[0].id)">搜索符号</el-button></div>
+        <ModelTaskProgress v-if="patchSuggestionJob" :job="patchSuggestionJob" test-id="patch-suggestion-model-progress">
+          <template #actions>
+            <el-button v-if="['QUEUED','RUNNING'].includes(patchSuggestionJob.status)" size="small" type="warning" @click="cancelPatchSuggestion">取消候选生成</el-button>
+            <el-button v-if="['FAILED','CANCELLED','DEAD_LETTER'].includes(patchSuggestionJob.status)" size="small" type="primary" @click="retryPatchSuggestion">重试候选生成</el-button>
+            <el-button v-if="['COMPLETED','FAILED','CANCELLED','DEAD_LETTER'].includes(patchSuggestionJob.status)" size="small" @click="dismissPatchSuggestion">关闭记录</el-button>
+          </template>
+        </ModelTaskProgress>
+        <el-alert v-if="patchSuggestionError" type="error" :title="patchSuggestionError" :closable="false" style="margin-bottom:12px" />
+        <el-card v-if="patchSuggestion" shadow="never" style="margin-bottom:12px">
+          <template #header><div class="toolbar"><strong>候选补丁（尚未应用）</strong><el-button type="primary" size="small" @click="copyPatchSuggestion">复制候选</el-button></div></template>
+          <pre class="mono" style="max-height:360px;overflow:auto;white-space:pre-wrap">{{ patchSuggestion }}</pre>
+          <p class="muted">该内容仅供人工审查与复制，平台不会自动修改任何源码。</p>
+        </el-card>
         <el-table :data="symbols" height="450">
           <el-table-column prop="kind" label="类型" width="90"/><el-table-column prop="name" label="符号" width="210"/><el-table-column prop="file_path" label="文件" min-width="260"/><el-table-column prop="line_start" label="起始行" width="90"/><el-table-column prop="signature" label="签名" min-width="260" show-overflow-tooltip/>
-          <el-table-column label="操作" width="120"><template #default="scope"><el-button link type="primary" :disabled="!canEditCase" @click="suggestPatch(scope.row.id)">候选补丁</el-button></template></el-table-column>
+          <el-table-column label="操作" width="120"><template #default="scope"><el-button link type="primary" :disabled="!canEditCase || !caseInfo.model_egress_approved || ['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(patchSuggestionJob?.status || '')" @click="suggestPatch(scope.row.id)">候选补丁</el-button></template></el-table-column>
         </el-table>
       </el-tab-pane>
 
