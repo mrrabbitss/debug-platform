@@ -38,7 +38,27 @@ Progress persistence, reasoning milestones, revision checks and three page task 
 extracted into focused modules without changing the thresholds. SQL persistence statements were
 mechanically preserved; changed helpers passed Ruff/AST/import checks and Vue extraction passed
 type checking. The final harness passed **24/24**, covering 203 Python files, 37 Vue files and
-38 allowlisted agent operations. Final 0.5.2 package/release verification follows after assembly.
+38 allowlisted agent operations.
+
+0.5.2 package assembly and byte verification passed: **10,217 manifest files**, **284 application/
+frontend files** matched the release source, and 229 Python files parsed with 3.12 syntax rules.
+All six original Skill file hashes and the original ZIP hash matched; migration 0025 and the
+unchanged administrator recovery payload are included. Windows EXE resource version components
+are 0.5.2.0; its display strings contain Inno padding, which the initial string-only assertion
+did not trim. The resource check then verified the numeric components; no rebuild was needed.
+
+Local installer: `artifacts/lan/progress-0.5.2/delivery/GWAP-Debug-Server-Setup-0.5.2-x64.exe`,
+921,195,316 bytes, SHA-256 `07df95a2de7249fa120144af83d98d63e7eb0d30958ab4d9a15308438cf1054d`.
+Build/release source is `fd5336516c0930020537b84ebdfd36bc39bc11be`; the build's dirty marker
+comes only from the preserved unrelated untracked article. Application/frontend contents matched.
+The unchanged client ZIP remains version 0.5.0 with the previously recorded SHA-256.
+Release [v0.5.2](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.2) is published/latest.
+All seven remote attachment sizes/SHA-256 values, normalized release notes and the tag's exact
+commit were verified before/after publication. Evidence is retained in
+`artifacts/lan/progress-0.5.2/github-release/remote-verification.json`.
+Automatic release build 34388170059 failed in Python selection, with all model/application checks
+skipped. Tag-triggered portable build 34388169458 was cancelled in its combined build/smoke step;
+no completed smoke pass is claimed. No CI was manually dispatched and no main-branch merge occurred.
 
 The prior third-party API comprehensive-diagnosis/report acceptance remains **PARTIAL**.
 The prior CLI terra diagnosis/report PASS, six-file installer initialization and administrator
