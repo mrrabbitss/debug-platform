@@ -10,7 +10,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ("start_codeagent.ps1", "codeagent_launcher_support.ps1", "codeagent_launcher_http.ps1", "file_hash.ps1")
+SCRIPTS = ("start_codeagent.ps1", "codeagent_launcher_support.ps1", "codeagent_launcher_http.ps1", "file_hash.ps1",
+           "install_agent_skill_mcp.ps1", "install_agent_skill_mcp.bat")
 
 
 def build(destination: Path, deployment_config: Path | None = None) -> dict:
