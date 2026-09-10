@@ -14,7 +14,18 @@ produces the original cause and location instead of FullyQualifiedErrorId in the
 Retry is restricted to native 5/32/33 and intact source/absent target, at 500ms intervals for about
 15s; same-parent atomic renames remain mandatory. No force-kill, permission changes or tree merge.
 Application/model/Skill checks reuse 0.5.4 evidence, with no repeat historical suite or model calls.
-Package/release validation pending; company installation is not claimed successful.
+Engineering harness **24/24** passed. Package manifest **10,220** items verified, **10,216** identical
+to v0.5.4; only two installer scripts, guide and build-info changed (plus regenerated manifest).
+Original ZIP and all six Skill sources match. Inno 6.7.1 compiled the complete v0.5.5 EXE:
+**921,205,470 bytes**, SHA-256 `708051d6917666b3a85b825ec553c7f45cccac13b762e8391784d0c178c2b09e`.
+Evidence: `artifacts/lan/hotfix-0.5.5/package-verification.json` and `installer-build.json`.
+Application/runtime bytes reuse v0.5.4 validation; this full EXE has not been executed on the company
+server or reinstalled locally. [v0.5.5](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.5)
+is now the latest published, non-prerelease release. All seven remote asset sizes/SHA-256 and notes
+match; the remote tag resolves to `01327e481deff2c328b0720517333aac7cfbc720`. Client 0.5.0 is unchanged.
+Automatic duplicate portable run 34433440625 and GGUF run 34433441099 were cancelled;
+no manual CI, CI-green/merge-ready or company installation success claim.
+Remote evidence: `artifacts/lan/hotfix-0.5.5/github-release/remote-verification.json`.
 
 ## Latest: additive packaged Skill import for existing databases (2026-09-10)
 

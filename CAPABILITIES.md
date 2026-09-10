@@ -7,12 +7,14 @@
 
 0.5.5 安装加固：公司日志确认 0.5.4 在新程序目录发布时被拒绝、随后恢复旧版。
 原子目录切换新增最多约 15 秒的限定重试，持续失败记录阶段、原始错误和路径；修正弹窗错误摘要。
-三个新增故障场景通过；交付及边界见 [公司安装日志定位](docs/installer-publish-access-20260910.md)。
+三个新增故障场景、工程检查 24/24、10,220 项包清单及七份远端附件核验通过。
+已发布 [0.5.5 最新正式版](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.5)；
+公司尚未验收，持续访问策略拒绝仍需环境侧排查。详情见 [公司安装日志定位](docs/installer-publish-access-20260910.md)。
 
 0.5.4 旧库导入修复：管理员/专家可在“知识库管理”直接预览并确认随包六文件 Skill，
 保留现有知识、案例、报告和已设模板。确认后完整重建含旧知识的索引并原子发布；冲突阻止覆盖。
 新增八项后端、三项浏览器场景、前端构建、原六文件实际导入与工程检查通过；
-已发布 [0.5.4 最新正式版](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.4)，
+已发布 [0.5.4 正式版](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.4)，
 10,220 项包清单、包内新 API 导入和七份远端附件及标签核验通过，分机仍为 0.5.0。
 交付边界见 [旧库导入记录](docs/bundled-skill-upgrade-import-20260910.md) 和 VALIDATION.md。
 
