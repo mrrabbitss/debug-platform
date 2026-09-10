@@ -251,7 +251,8 @@ def _summary(snapshot):
     return {key: snapshot[key] for key in ("signature", "profile_id", "profile_hash", "old_vector", "old_graph")}
 
 
-def preview_reset(db, *, operation_id: str, data_root: Path | str, source_zip: Path | str, actor: str) -> dict:
+def preview_reset(db, *, operation_id: str, data_root: Path | str, source_zip: Path | str, actor: str,
+                  preserve_existing: bool = False) -> dict:
     """Read only. Returned hashes bind all six sources and the entire prior corpus."""
     operation_key(operation_id)
     require_manager(db, actor)
@@ -269,6 +270,9 @@ def preview_reset(db, *, operation_id: str, data_root: Path | str, source_zip: P
         "content_kind": "SKILL", "problem_categories": ["network"],
         "preserved": ["cases", "reports", "users", "models", "configuration", "audit", "immutable_references"],
         "report_template_path": next(f["path"] for f in bundle["files"] if f["role"] == "report_template")}
+    if preserve_existing:
+        from app.services.knowledge_bundle_import import extend_preview
+        plan = extend_preview(plan, bundle, snapshot)
     return {**plan, "preview_hash": digest(plan)}
 
 
@@ -356,7 +360,7 @@ def _existing(db, operation_id, source_hash, preview_hash):
 def confirm_reset(db, *, operation_id: str, data_root: Path | str, source_zip: Path | str,
         actor: str, expected_source_sha256: str, expected_preview_hash: str,
         confirmed: bool, model_egress_approved: bool, archive_root: Path | str | None = None,
-        approval_origin: str = "INTERACTIVE"):
+        approval_origin: str = "INTERACTIVE", preserve_existing: bool = False):
     """Back up first, then commit approval and outbox job together. Never dispatch here."""
     if confirmed is not True:
         raise ResetError("Explicit confirmation of the complete preview is required")
@@ -364,9 +368,14 @@ def confirm_reset(db, *, operation_id: str, data_root: Path | str, source_zip: P
     target = verified_target(db, data_root)
     existing = _existing(db, operation_id, expected_source_sha256, expected_preview_hash)
     if existing:
+        if bool(json_loads(existing[0].payload_json, {})["approved_plan"].get("preserve_existing")) != preserve_existing:
+            raise ResetError("Operation id is bound to a different import mode")
         return existing
     _assert_idle(db)
-    preview = preview_reset(db, operation_id=operation_id, data_root=data_root, source_zip=source_zip, actor=actor)
+    preview = preview_reset(db, operation_id=operation_id, data_root=data_root, source_zip=source_zip, actor=actor,
+                           preserve_existing=preserve_existing)
+    if preserve_existing and (approval_origin != "INTERACTIVE" or not preview["can_confirm"]):
+        raise ResetError("The packaged Skill conflicts with existing knowledge; review the complete file list")
     if approval_origin not in {"INTERACTIVE", "INSTALLER_DEFAULT"}:
         raise ResetError("Unsupported approval origin")
     if approval_origin == "INSTALLER_DEFAULT":
@@ -419,6 +428,9 @@ def confirm_reset(db, *, operation_id: str, data_root: Path | str, source_zip: P
             details_json=json_dumps({"operation_id": operation_id, "source_sha256": expected_source_sha256,
                 "preview_hash": expected_preview_hash, "backup_sha256": backup["sha256"],
                 "approval_origin": approval_origin, "content_recorded": False}))])
+        if preserve_existing:
+            from app.services.knowledge_bundle_import import track_operation
+            track_operation(db, operation_id, expected_source_sha256)
         db.commit()
         return row, job
     except Exception:
@@ -586,7 +598,9 @@ def _publish(fence, approved, candidates, by_document, vector_id, graph_metadata
             KnowledgeEmbedding.profile_id == snapshot["profile_id"], KnowledgeEmbedding.generation_id == vector_id))
         if not expected_chunks or actual != expected_chunks:
             raise ResetError("The complete private vector generation is required before publication")
-        _retire(db, snapshot, value)
+        preserve_existing = value["approved_plan"].get("preserve_existing", False)
+        if not preserve_existing:
+            _retire(db, snapshot, value)
         published = []
         for candidate in candidates:
             document = db.get(KnowledgeDocument, candidate.id)
@@ -618,11 +632,14 @@ def _publish(fence, approved, candidates, by_document, vector_id, graph_metadata
                     "reset_operation_id": fence.operation_id, "preview_hash": value["preview_hash"],
                     "source_zip_sha256": value["source_sha256"], "embedding_profile_id": snapshot["profile_id"],
                     "embedding_generation_id": vector_id, "graph_generation_id": fence.graph_id,
-                    "document_versions": {d.id: 1 for d in candidates},
+                    "document_versions": {d.id: d.version for d in [*snapshot["documents"], *candidates]
+                                          if d.id in by_document},
                     "chunk_ids": {key: [c.id for c in group] for key, group in by_document.items()}})))
             published.append(document.id)
             if json_loads(document.metadata_json, {})["knowledge_role"] == "report_template":
                 template = db.get(WorkbenchRecord, "template-network")
+                if preserve_existing and template and json_loads(template.payload_json, {}).get("document_id"):
+                    continue
                 if not template:
                     template = WorkbenchRecord(id="template-network", kind="template_default", owner_id=value["approved_by"])
                     db.add(template)
@@ -632,7 +649,8 @@ def _publish(fence, approved, candidates, by_document, vector_id, graph_metadata
         graph = db.get(KnowledgeGraphState, "domain")
         graph.active_generation_id, graph.building_generation_id, graph.status = fence.graph_id, None, "READY"
         graph.metadata_json, graph.error_message = json_dumps(graph_metadata), None
-        result = {"operation_id": fence.operation_id, "documents": published, "retired_documents": len(snapshot["documents"]),
+        result = {"operation_id": fence.operation_id, "documents": published,
+            "retired_documents": 0 if preserve_existing else len(snapshot["documents"]),
             "embedding_generation_id": vector_id, "graph_generation_id": fence.graph_id, "source_sha256": value["source_sha256"]}
         value.update(status="PUBLISHED", result=result, published_at=utcnow().isoformat(), building_generation_id=None)
         row.payload_json = json_dumps(value)
@@ -708,13 +726,17 @@ def reset_job(ctx, operation_id: str):
                 raise ResetError("The approved Embedding profile changed before indexing")
             if profile.mode == "api" and profile.provider != MANAGED_LOCAL_PROVIDER and not value["model_egress_approved"]:
                 raise ResetError("Embedding egress was not approved")
+            index_documents = candidates
+            if value["approved_plan"].get("preserve_existing"):
+                from app.services.knowledge_bundle_import import retain_index_inputs
+                index_documents = retain_index_inputs(db, snapshot, candidates, by_document)
             count = index_embeddings(db, profile, [c for group in by_document.values() for c in group],
                 generation_id=vector_id, activate_if_missing=False,
                 progress=lambda done, total: fence.update(15 + int(50 * done / max(1, total)), "Building private vectors"))
         if count != sum(len(group) for group in by_document.values()):
             raise ResetError("Embedding did not cover every imported chunk")
         fence.update(70, "Building a private graph; original knowledge remains active")
-        graph = stage_graph(SessionLocal, candidates, by_document, fence.graph_id, fence)
+        graph = stage_graph(SessionLocal, index_documents, by_document, fence.graph_id, fence)
         return _publish(fence, value, candidates, by_document, vector_id, graph)
     except (JobCancelledError, JobLeaseLostError) as error:
         _failed(fence, error)

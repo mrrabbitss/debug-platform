@@ -23,6 +23,7 @@ from app.api.workbench import router as workbench_router
 from app.api.knowledge_assistant import router as knowledge_assistant_router
 from app.api.knowledge_contributions import router as knowledge_contributions_router
 from app.api.knowledge_reset import router as knowledge_reset_router
+from app.api.bundled_skill import router as bundled_skill_router
 
 
 def include_modular_routers(router: APIRouter) -> None:
@@ -31,6 +32,7 @@ def include_modular_routers(router: APIRouter) -> None:
         knowledge_assistant_router,
         knowledge_contributions_router,
         knowledge_reset_router,
+        bundled_skill_router,
         agent_runs_router,
         client_discovery_router,
         demo_cases_router,

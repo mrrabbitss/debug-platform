@@ -7,6 +7,7 @@ import SkillManagementPane from '../components/knowledge/SkillManagementPane.vue
 import KnowledgeAssistantPane from '../components/knowledge/KnowledgeAssistantPane.vue'
 import KnowledgeContributionsPane from '../components/knowledge/KnowledgeContributionsPane.vue'
 import KnowledgeResetPane from '../components/knowledge/KnowledgeResetPane.vue'
+import BundledSkillImportDialog from '../components/knowledge/BundledSkillImportDialog.vue'
 import KnowledgeView from './KnowledgeView.vue'
 import type { Job } from '../types'
 import type { LibraryEntry } from '../types/workbench'
@@ -22,7 +23,7 @@ function pollBundle() {
   }, 5000)
 }
 onUnmounted(() => { bundleDisposed = true; if (bundleTimer) clearTimeout(bundleTimer) })
-const route = useRoute(), router = useRouter(), tab = ref('skills'), ready = ref(false), error = ref(''), indexBusy = ref(false), indexJob = ref<Job | null>(null)
+const route = useRoute(), router = useRouter(), tab = ref('skills'), ready = ref(false), error = ref(''), indexBusy = ref(false), indexJob = ref<Job | null>(null), bundledImportOpen = ref(false), skillPaneRevision = ref(0)
 const legacyCases = ref<LibraryEntry[]>([]), bridging = ref(''), reviews = ref<InstanceType<typeof KnowledgeContributionsPane> | null>(null)
 function syncTab() { const value = String(route.query.tab || 'skills'); tab.value = ['skills','assistant','review','maintenance'].includes(value) ? value : 'skills' }
 watch(() => route.query.tab, syncTab)
@@ -41,6 +42,7 @@ async function reindex() {
   catch(cause) { error.value = failure(cause) } finally { indexBusy.value = false }
 }
 async function refreshIndex() { if (indexJob.value) try { indexJob.value = (await api.get<Job>(`/jobs/${indexJob.value.id}`)).data } catch(cause) { error.value = failure(cause) } }
+async function bundledSkillChanged() { await refreshConfig(); skillPaneRevision.value++ }
 watch(tab, value => { if (value === 'review' && canManageKnowledge.value) void loadLegacyCases() })
 onMounted(async () => { try { await loadConfig(); ready.value = true; syncTab(); if (['PENDING','APPROVED','BUILDING'].includes(config.value.bundled_knowledge?.status || '')) pollBundle(); if (tab.value==='review') await loadLegacyCases() } catch(cause) { error.value = failure(cause) } })
 </script>
@@ -51,10 +53,12 @@ onMounted(async () => { try { await loadConfig(); ready.value = true; syncTab();
     <template v-if="ready && canManageKnowledge">
       <el-alert v-if="config.bundled_knowledge && config.bundled_knowledge.status !== 'NOT_BUNDLED'" :title="config.bundled_knowledge.message" :type="config.bundled_knowledge.status === 'PUBLISHED' ? 'success' : config.bundled_knowledge.status === 'FAILED' ? 'warning' : 'info'" :closable="false" class="inline-alert">
         <span v-if="config.bundled_knowledge.status !== 'PUBLISHED'" class="field-hint">随包文件夹：{{ config.bundled_knowledge.folder }}<template v-if="config.bundled_knowledge.operation_id"> · 操作：{{ config.bundled_knowledge.operation_id }}</template></span>
+        <el-button link type="primary" @click="bundledImportOpen=true">导入内置组网 Skill</el-button>
         <el-button link @click="refreshConfig">刷新状态</el-button>
       </el-alert>
+      <BundledSkillImportDialog v-model="bundledImportOpen" :operation-id="config.bundled_knowledge?.operation_id" :roles="config.knowledge_roles" @changed="bundledSkillChanged" />
       <el-tabs v-model="tab" @tab-change="name=>router.replace({path:'/knowledge-management',query:{tab:String(name)}})"><el-tab-pane label="Skill 与故障类别" name="skills" /><el-tab-pane label="AI 整理助手" name="assistant" /><el-tab-pane label="审批中心" name="review" /><el-tab-pane label="知识维护" name="maintenance" /></el-tabs>
-      <SkillManagementPane v-if="tab==='skills'" :key="config.bundled_knowledge?.status" :categories="config.categories" :roles="config.knowledge_roles" :owner-id="config.principal.id || ''" @changed="refreshConfig" @organize="tab='assistant'" @maintain="tab='maintenance'" />
+      <SkillManagementPane v-if="tab==='skills'" :key="`${config.bundled_knowledge?.status || 'none'}-${skillPaneRevision}`" :categories="config.categories" :roles="config.knowledge_roles" :owner-id="config.principal.id || ''" @changed="refreshConfig" @organize="tab='assistant'" @maintain="tab='maintenance'" />
       <KnowledgeAssistantPane v-else-if="tab==='assistant'" :categories="config.categories" :roles="config.knowledge_roles" @published="refreshConfig" />
       <section v-else-if="tab==='review'"><KnowledgeContributionsPane ref="reviews" :owner-id="config.principal.id || ''" :categories="config.categories" :review="true" :initial-id="String(route.query.contribution || '')" @changed="loadLegacyCases" /><el-collapse v-if="legacyCases.length" class="section-card"><el-collapse-item :title="`案例与报告待审记录（${legacyCases.length}）`" name="legacy"><p class="field-hint">已进入审批队列的记录可继续从上方打开；旧版本的待审案例可以在此接入同一多轮审核流程。</p><div v-for="item in legacyCases" :key="item.id" class="collection-heading"><span>{{ item.title }}</span><el-button :loading="bridging===item.id" :disabled="!!bridging" @click="reviewCase(item)">纳入审批队列</el-button></div></el-collapse-item></el-collapse></section>
       <section v-else>

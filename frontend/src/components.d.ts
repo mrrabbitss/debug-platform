@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AssistantSourceDialog: typeof import('./components/knowledge/AssistantSourceDialog.vue')['default']
+    BundledSkillImportDialog: typeof import('./components/knowledge/BundledSkillImportDialog.vue')['default']
     CaseChatPanel: typeof import('./components/diagnosis/CaseChatPanel.vue')['default']
     CaseOptionsPanel: typeof import('./components/diagnosis/CaseOptionsPanel.vue')['default']
     ChatModelSelect: typeof import('./components/ChatModelSelect.vue')['default']

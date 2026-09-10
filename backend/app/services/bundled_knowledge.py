@@ -77,7 +77,8 @@ def initialize_packaged_knowledge(db, package_root: Path = PACKAGE_ROOT):
         if operation is not None:
             return  # Includes interrupted, failed and completed attempts.
         marker = db.get(WorkbenchRecord, RECORD_ID)
-        if marker and json_loads(marker.payload_json, {}).get("status") == "PRESERVED":
+        if marker and (json_loads(marker.payload_json, {}).get("status") == "PRESERVED"
+                       or json_loads(marker.payload_json, {}).get("operation_id")):
             return
         if has_existing_knowledge(db):
             _remember(db, "PRESERVED", source_sha256=manifest["source_sha256"])
@@ -105,8 +106,9 @@ def initialize_packaged_knowledge(db, package_root: Path = PACKAGE_ROOT):
 
 
 def packaged_knowledge_status(db, package_root: Path = PACKAGE_ROOT):
-    operation = db.get(WorkbenchRecord, reset.operation_key(OPERATION_ID))
     marker = db.get(WorkbenchRecord, RECORD_ID)
+    operation_id = json_loads(marker.payload_json, {}).get("operation_id", OPERATION_ID) if marker else OPERATION_ID
+    operation = db.get(WorkbenchRecord, reset.operation_key(operation_id))
     if operation:
         value = json_loads(operation.payload_json, {})
         job = db.get(Job, value.get("job_id"))
@@ -115,7 +117,7 @@ def packaged_knowledge_status(db, package_root: Path = PACKAGE_ROOT):
             status = "FAILED"
         elif job and job.status == "QUEUED":
             status = "APPROVED"
-        result = {"status": status, "operation_id": OPERATION_ID,
+        result = {"status": status, "operation_id": operation_id,
                   "job_id": job.id if job else None, "progress": job.progress if job else 0}
     elif marker:
         result = {"status": json_loads(marker.payload_json, {}).get("status", "FAILED")}
@@ -127,7 +129,7 @@ def packaged_knowledge_status(db, package_root: Path = PACKAGE_ROOT):
         "APPROVED": "内置组网 Skill 已排队；索引完成后六个文件一起生效。",
         "BUILDING": "正在初始化内置组网 Skill 和索引，完成后会自动显示。",
         "PUBLISHED": "内置组网包已完整初始化；当前生效内容以人工维护的版本为准。",
-        "PRESERVED": "已保留现有知识和 Skill。安装包内附完整组网文件夹，可在 AI 整理助手中按需合并导入。",
+        "PRESERVED": "旧知识库已保留，内置组网 Skill 未自动导入。可点击“导入内置组网 Skill”核对并导入，不清空现有知识。",
         "WAITING_ADMIN": "内置组网 Skill 等待服务器初始管理员创建完成；请重启服务器。",
         "WAITING_LOCAL_INDEX": "内置组网 Skill 尚未导入。请启用内置 Embedding 后重启，或在知识维护中确认使用外部模型导入。",
         "FAILED": "内置组网 Skill 初始化未完成，原有内容保留。请在知识维护中查看此操作并重试或重新预览导入。",

@@ -189,6 +189,20 @@ rest_only_endpoints:
     path: /api/v1/workbench/categories/{category_id}
     allowed_roles: [ADMIN, EXPERT]
     scope: managed_category_deactivation_and_expected_version
+  preview_bundled_skill:
+    method: POST
+    path: /api/v1/workbench/bundled-skill/preview
+    allowed_roles: [ADMIN, EXPERT]
+    scope: verified_packaged_source_and_server_data_root_additive_only
+  confirm_bundled_skill:
+    method: POST
+    path: /api/v1/workbench/bundled-skill/confirm
+    allowed_roles: [ADMIN, EXPERT]
+    scope: exact_source_and_preview_hashes_human_confirmation_preserving_existing_knowledge
+  get_bundled_skill:
+    method: GET
+    path: /api/v1/workbench/bundled-skill/{operation_id}
+    allowed_roles: [ADMIN, EXPERT]
   preview_knowledge_reset:
     method: POST
     path: /api/v1/workbench/knowledge-reset/preview

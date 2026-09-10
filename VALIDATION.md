@@ -1,5 +1,28 @@
 # Validation Record
 
+## Latest: additive packaged Skill import for existing databases (2026-09-10)
+
+New backend cases: **8 passed** (six on the first run; one fixed and rerun alone; one added cancellation case).
+`backend/tests/test_bundled_skill_additive.py` covers retained old knowledge/chunks/draft/case/template,
+idempotent approval and restart, full-bundle existing recognition, active/deleted/draft conflicts,
+stale preview, failed indexing retry, cancellation retaining the previous active vectors,
+and privileged strict API confirmation/server-selected paths.
+Identical bytes in different synthetic reference files exposed a false hash-only identity conflict;
+matching source filenames fixed it. Historical successful suites were not repeated.
+Frontend `npm run build` passed after fixing the new browser timer's TypeScript type.
+Three isolated mocked-browser scenarios passed: six-file confirmation, failed installer-operation retry,
+and lost-confirm-response recovery without duplicate submit. Two passed initially; the third needed only
+a test locator narrowed to the progress component because the error text appears twice. Only that failed
+scenario was rerun. No backend, fake model or historical browser suite was started for these UI checks.
+
+Original supplied ZIP proof passed using local Hashing: all six source/adapted contents compared fully,
+five root dependencies resolved, seven active documents including a retained synthetic old Wiki,
+363 active vectors including the old chunk, and restart retained PUBLISHED. No source content printed.
+Evidence: `artifacts/lan/hotfix-0.5.4/original-bundle-proof.json`, `frontend-first-run.xml` and
+`frontend-failed-case-fixed.xml`. Engineering harness passed **24/24** without threshold changes.
+Package/release verification is pending; delivery status is updated after compilation and remote verification.
+No real diagnostic model calls, Full/External runs or manual CI. Schema remains 0025.
+
 ## Latest: 0.5.3 installer upgrade failure repair (2026-09-10)
 
 The reported Win11 0.5.2 upgrade returned only publisher exit code 1. The user later reported

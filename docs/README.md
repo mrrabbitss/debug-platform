@@ -6,6 +6,8 @@
 
 ## 架构与演进
 
+- [旧库升级后的内置 Skill 导入](bundled-skill-upgrade-import-20260910.md)：PRESERVED 原因、六文件预览与保留旧知识的原子导入。
+
 - [0.5.3 安装失败与目录切换修复](installer-upgrade-fix-20260910.md)
 - [最近需求核对与模型任务进度](requirements-audit-20260910.md)
 - [0.5.1 内置组网 Skill 与管理员恢复修复](installer-skill-admin-fix-20260909.md)
