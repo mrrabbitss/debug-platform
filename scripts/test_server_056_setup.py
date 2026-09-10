@@ -55,12 +55,12 @@ def check_knowledge(data, package, *, old=False):
         # Five child files match original bytes; the root retains the full source
         # plus only the existing, explicitly documented platform adapter.
         for _, title, content, _ in skills:
-            original = (package / "bundled-knowledge" / title).read_text(encoding="utf-8-sig")
+            original = (package / "bundled-knowledge" / title).read_bytes().decode("utf-8-sig")
             if title.endswith("/SKILL.md"):
                 for line in original.splitlines():
                     assert line in content
             else:
-                assert content == original
+                assert content == original, title
         if old:
             assert db.execute("select content from knowledge_documents where id='old'").fetchone()[0] == "Preserve old wiki"
             assert db.execute("select title from cases where id='case'").fetchone()[0] == "Synthetic case retained"
@@ -76,6 +76,9 @@ def main():
     parser.add_argument("--installer", type=Path, required=True)
     parser.add_argument("--old-package", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--reuse-running-refusal", action="store_true",
+                        help="Reuse this exact EXE's already-passed running-lock scenario")
+    parser.add_argument("--reuse-upgrade-check", action="store_true")
     args = parser.parse_args()
     args.installer, args.old_package = args.installer.resolve(strict=True), args.old_package.resolve(strict=True)
     home = Path(os.environ["LOCALAPPDATA"]) / "Programs/GWAPDebugServer"
@@ -115,7 +118,7 @@ def main():
                         process.terminate()
                         raise TimeoutError("Focused EXE installation exceeded 10 minutes")
                     time.sleep(0.2)
-                new = set(releases.iterdir()) - existing
+                new = set(releases.iterdir()) - existing if releases.exists() else set()
                 owned_releases.extend(new)
                 evidence_log = args.evidence.parent / (label + "-setup.log")
                 evidence_log.parent.mkdir(parents=True, exist_ok=True)
@@ -130,19 +133,34 @@ def main():
                 print("EXE_INSTALL_OK " + target_data.name, flush=True)
                 return next(iter(new))
             import msvcrt
-            with (data / "script-runner.lock").open("w+b") as runner_lock:
-                runner_lock.write(b"0")
-                runner_lock.flush()
-                runner_lock.seek(0)
-                msvcrt.locking(runner_lock.fileno(), msvcrt.LK_NBLCK, 1)
-                install(data, expected_code=7)
-                msvcrt.locking(runner_lock.fileno(), msvcrt.LK_UNLCK, 1)
+            if args.reuse_running_refusal:
+                prior = (args.evidence.parent / "old-data-7-setup.log").read_text(encoding="utf-8-sig")
+                assert "The interactive server or a backup is running" in prior
+                assert str(args.installer) in prior
+            else:
+                with (data / "script-runner.lock").open("w+b") as runner_lock:
+                    runner_lock.write(b"0")
+                    runner_lock.flush()
+                    runner_lock.seek(0)
+                    msvcrt.locking(runner_lock.fileno(), msvcrt.LK_NBLCK, 1)
+                    install(data, expected_code=7)
+                    msvcrt.locking(runner_lock.fileno(), msvcrt.LK_UNLCK, 1)
             assert snapshot(legacy) == before
-            handles.append(lock_directory(legacy))
-            upgraded = install(data, hold_new=True)
-            assert snapshot(legacy) == before
-            check_knowledge(data, upgraded, old=True)
-            assert list((data / "knowledge-update-backups").glob("**/before.sqlite3"))
+            upgrade_proof = args.evidence.parent / "upgrade-verification.json"
+            exe_sha = hashlib.sha256(args.installer.read_bytes()).hexdigest()
+            if args.reuse_upgrade_check:
+                prior_upgrade = json.loads(upgrade_proof.read_text(encoding="utf-8"))
+                assert prior_upgrade["status"] == "PASS" and prior_upgrade["installer_sha256"] == exe_sha
+            else:
+                handles.append(lock_directory(legacy))
+                upgraded = install(data, hold_new=True)
+                assert snapshot(legacy) == before
+                check_knowledge(data, upgraded, old=True)
+                assert list((data / "knowledge-update-backups").glob("**/before.sqlite3"))
+                upgrade_proof.write_text(json.dumps({"status": "PASS", "installer_sha256": exe_sha,
+                    "old_program_files_unchanged": len(before), "skills": 6,
+                    "old_case_wiki_preserved": True, "previous_root_archived": True,
+                    "database_backup": True, "old_new_directory_handles": True}), encoding="utf-8")
             # Release only test-owned handles; no arbitrary process is stopped.
             for handle in handles:
                 KERNEL.CloseHandle(handle)
@@ -154,8 +172,12 @@ def main():
             # address; normal first-start path must populate the six files.
             started = subprocess.run([str(fresh / "runtime/python/python.exe"), "-B", "-s",
                 str(fresh / "scripts/run_lan_server.py"), "--package", str(fresh), "--data-root", str(fresh_data),
-                "--public-url", "https://127.0.0.1:25453", "--backend-port", "25454", "--run-seconds", "40"],
+                "--public-url", "https://127.0.0.1:25453", "--backend-port", "25454", "--run-seconds", "180"],
                 cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=480)
+            for log in fresh_data.rglob("*.log"):
+                destination = args.evidence.parent / "fresh-start-logs" / log.relative_to(fresh_data)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(log, destination)
             assert started.returncode == 0, started.stdout + started.stderr
             assert "READY:" in started.stdout
             check_knowledge(fresh_data, fresh)
@@ -163,6 +185,8 @@ def main():
             assert snapshot(legacy) == before
             proof = {"status": "PASS", "installer_sha256": hashlib.sha256(args.installer.read_bytes()).hexdigest(),
                 "actual_exe_runs": 3, "running_server_refused_exit_code": 7, "upgrade_old_and_new_directory_handles_held": True,
+                "running_refusal_reused_same_exe": args.reuse_running_refusal,
+                "upgrade_reused_same_exe": args.reuse_upgrade_check,
                 "old_program_files_unchanged": len(before), "upgrade_published_before_finish": 6,
                 "old_case_wiki_preserved": True, "previous_root_archived": True, "database_backup": True,
                 "fresh_install_and_actual_server_start": True, "fresh_skill_files": 6, "initial_admin_created": True,

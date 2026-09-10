@@ -1,6 +1,6 @@
 # Validation Record
 
-## In progress: 0.5.6 full server installer (2026-09-10)
+## Latest: 0.5.6 full server installer (2026-09-10)
 
 New server release-directory publisher removes both root renames. Complete file verification
 replaces the staging-name-only component projector; knowledge update runs automatically with a
@@ -8,9 +8,23 @@ stopped-server guard, pre-migration/approval backups and an isolated offline job
 PrepareToInstall now returns a failure before registration/shortcuts instead of raising from
 AfterInstall (which was observed to return Setup exit 0 after the failed child).
 Three adjusted diagnostic/UTF-8/error-summary checks passed; engineering harness 24/24 passed.
-The first unreleased candidate failed its new end-to-end check at the obsolete staging-name
-component guard. It is not an accepted installer. A rebuilt EXE must pass running-server refusal,
-simultaneous old/new directory-handle upgrade, six-file database publication and fresh startup.
+The first unreleased candidate failed at the obsolete staging-name component guard and is rejected.
+The rebuilt full EXE passed three actual Win11 installation scenarios: running-server refusal
+(Setup exit 7, before creating a release), simultaneous old/new directory-handle upgrade, and
+fresh installation followed by real server startup with the actual bundled GGUF models.
+Upgrade published all six full Skill documents before Setup completed; retained the old case/Wiki,
+archived the prior root document and created database backups. All 10,219 old program files retained
+their size/mtime. Fresh startup created an administrator and six complete Skill documents.
+The test's original read_text normalized CRLF while the importer correctly retained original bytes;
+the verifier now decodes raw bytes. Fresh import is asynchronous: stopping 40 seconds after launch
+was premature; the completed check allowed 180 seconds. Passed refusal/upgrade scenarios were reused
+against the same EXE rather than repeated. No application change was needed for these test fixes.
+
+Accepted EXE: `artifacts/lan/hotfix-0.5.6/rebuild-2/delivery/GWAP-Debug-Server-Setup-0.5.6-x64.exe`,
+**921,213,695 bytes**, SHA-256 `8a5747822fddf98bef777b68d46e7d24dd7ae4cfb7fddd684792cc49095c2bd2`.
+Its clean package source is `11ec4e2ac31b44c1192cd347ba65799939cc6e7b`. Package manifest contains
+10,224 verified files and the original six-file ZIP. Evidence in the same rebuild-2 directory:
+`installer-build.json`, `package-verification.json`, `upgrade-verification.json`, `setup-verification.json`.
 No old functional/model regression or manual CI was run. Company server is not this test host.
 
 ## Latest: standalone six-file Skill maintenance (2026-09-10)
