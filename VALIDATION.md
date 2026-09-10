@@ -1,5 +1,21 @@
 # Validation Record
 
+## Latest: company-log staging publication access failure (2026-09-10)
+
+The supplied company log confirms full payload/self-check success, failure at staging-to-app
+Directory.Move (access denied), then successful restoration of the complete previous application.
+No company log/account/path was added to Git. The log does not identify the lock holder or prove
+whether the denial is transient or a persistent policy restriction.
+
+Three new Windows PowerShell 5.1 cases passed in `test_installer_publish_access_retry.py`:
+staging file locked for 1.2s then publication succeeds; persistent staging lock exhausts bounded
+retry and restores old app with synthetic business marker unchanged; a real PowerShell IOException
+produces the original cause and location instead of FullyQualifiedErrorId in the saved summary.
+Retry is restricted to native 5/32/33 and intact source/absent target, at 500ms intervals for about
+15s; same-parent atomic renames remain mandatory. No force-kill, permission changes or tree merge.
+Application/model/Skill checks reuse 0.5.4 evidence, with no repeat historical suite or model calls.
+Package/release validation pending; company installation is not claimed successful.
+
 ## Latest: additive packaged Skill import for existing databases (2026-09-10)
 
 New backend cases: **8 passed** (six on the first run; one fixed and rerun alone; one added cancellation case).

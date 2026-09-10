@@ -101,6 +101,46 @@ function New-PlatformShortcuts {
     }
 }
 
+function Move-ApplicationDirectory {
+    param([string]$From, [string]$To, [string]$Phase)
+    # Keep the atomic same-parent rename. Only access/sharing failures with
+    # intact source and absent target may be retried; never merge directories.
+    foreach ($path in @($From, $To)) {
+        $resolved = [IO.Path]::GetFullPath($path)
+        if ($resolved -ne $destination) {
+            Assert-ManagedSibling -Path $resolved -Prefix 'GWAPDebugPlatform.'
+        }
+        if ([IO.Path]::GetFullPath((Split-Path -Parent $resolved)) -ne $destinationParent) {
+            throw 'Application rename must stay inside the installation parent.'
+        }
+    }
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            [IO.Directory]::Move($From, $To)
+            if ($attempt -gt 1) { Write-Host "[OK] $Phase succeeded after $attempt attempts." }
+            return
+        } catch {
+            $original = $_.Exception.GetBaseException()
+            $nativeCode = $original.HResult -band 0xFFFF
+            $canRetry = ($original -is [IO.IOException] -or $original -is [UnauthorizedAccessException]) -and
+                $nativeCode -in @(5, 32, 33) -and
+                (Test-Path -LiteralPath $From -PathType Container) -and
+                -not (Test-Path -LiteralPath $To) -and $timer.Elapsed.TotalSeconds -lt 15
+            if (-not $canRetry) {
+                throw ("$Phase failed after $attempt attempt(s). Windows error ${nativeCode}: " +
+                    $original.Message + " Source: $From ; Target: $To .")
+            }
+            if ($attempt -eq 1) {
+                Write-Warning "$Phase is blocked (Windows error $nativeCode); retrying the atomic rename for up to 15 seconds."
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
 function Get-PreviousComponentSelection {
     $selectionPath = Join-Path $destination "installation-selection.json"
     if (-not (Test-Path -LiteralPath $selectionPath -PathType Leaf)) {
@@ -230,7 +270,7 @@ try {
             )
             Assert-RestorableBackup -Path $recoveryBackup
             Write-Warning "Restoring the only verified orphaned application backup before installation."
-            [System.IO.Directory]::Move($recoveryBackup, $destination)
+            Move-ApplicationDirectory -From $recoveryBackup -To $destination -Phase 'Recover previous application'
             Write-Host "[OK] Recovered the previous application tree."
         }
     }
@@ -343,11 +383,11 @@ try {
             Write-Host "[INFO] Preserving the current application until the upgrade is verified..."
             # Same-parent Directory.Move is a rename. PowerShell Move-Item can
             # move individual children before failing on a locked file.
-            [System.IO.Directory]::Move($destination, $backup)
+            Move-ApplicationDirectory -From $destination -To $backup -Phase 'Preserve previous application'
             $previousMoved = $true
         }
         Write-Host "[INFO] Publishing the verified application directory..."
-        [System.IO.Directory]::Move($staging, $destination)
+        Move-ApplicationDirectory -From $staging -To $destination -Phase 'Publish verified application'
         $newInstalled = $true
         if (-not $NoShortcuts) {
             New-PlatformShortcuts -InstalledRoot $destination
@@ -357,10 +397,10 @@ try {
         $installationFailure = $_
         try {
             if ($newInstalled) {
-                [System.IO.Directory]::Move($destination, $staging)
+                Move-ApplicationDirectory -From $destination -To $staging -Phase 'Withdraw new application for rollback'
             }
             if ($previousMoved) {
-                [System.IO.Directory]::Move($backup, $destination)
+                Move-ApplicationDirectory -From $backup -To $destination -Phase 'Restore previous application'
                 Write-Host "[INFO] The complete previous application directory was restored."
             }
         } catch {
@@ -387,7 +427,7 @@ try {
         Assert-ManagedSibling -Path $backup -Prefix "GWAPDebugPlatform.backup-"
         Assert-ManagedSibling -Path $retired -Prefix "GWAPDebugPlatform.retired-"
         try {
-            [System.IO.Directory]::Move($backup, $retired)
+            Move-ApplicationDirectory -From $backup -To $retired -Phase 'Retire previous application'
             Remove-Item -LiteralPath $retired -Recurse -Force
         } catch {
             Write-Warning ("The new application is installed. Old program cleanup was incomplete; " +

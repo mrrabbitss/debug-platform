@@ -79,6 +79,13 @@ function Get-UsefulFailureReason {
         [AllowEmptyString()][string]$StandardOutput,
         [Parameter(Mandatory = $true)][int]$ExitCode
     )
+    foreach ($line in @($StandardError -split "`r?`n")) {
+        if ($line -match '^\[GWAP_INSTALL_ERROR\]\s*(.+)$') {
+            $reason = Protect-InstallOutput -Text $Matches[1]
+            if ($reason.Length -gt 900) { $reason = $reason.Substring(0, 897) + '...' }
+            return $reason
+        }
+    }
     foreach ($stream in @($StandardError, $StandardOutput)) {
         $lines = @($stream -split "`r?`n")
         for ($index = $lines.Count - 1; $index -ge 0; $index--) {
@@ -88,6 +95,7 @@ function Get-UsefulFailureReason {
                 $candidate -notmatch '\[REDACTED' -and
                 $candidate -notmatch '^\[(INFO|OK)\]' -and
                 $candidate -notmatch '^<frozen site>:' -and
+                $candidate -notmatch '^\s*\+' -and
                 $candidate -notmatch '^At .+:[0-9]+'
             ) {
                 $candidate = [System.Text.RegularExpressions.Regex]::Replace($candidate, '\s+', ' ')
@@ -155,8 +163,14 @@ $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
 $global:LASTEXITCODE = 0
-& $env:GWAP_SETUP_PUBLISHER -InstallRoot $env:GWAP_SETUP_TARGET -NoLaunch -NoShortcuts -Components Full
-exit $LASTEXITCODE
+try {
+    & $env:GWAP_SETUP_PUBLISHER -InstallRoot $env:GWAP_SETUP_TARGET -NoLaunch -NoShortcuts -Components Full
+    exit $LASTEXITCODE
+} catch {
+    [Console]::Error.WriteLine('[GWAP_INSTALL_ERROR] ' + $_.Exception.GetBaseException().Message)
+    [Console]::Error.WriteLine('[GWAP_INSTALL_LOCATION] ' + $_.InvocationInfo.PositionMessage)
+    exit 1
+}
 '@
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = $powerShell

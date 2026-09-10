@@ -6,6 +6,8 @@
 
 ## 架构与演进
 
+- [公司安装日志：新目录发布被拒绝](installer-publish-access-20260910.md)：0.5.5 原子改名有限重试、原始错误摘要与验证边界。
+
 - [旧库升级后的内置 Skill 导入](bundled-skill-upgrade-import-20260910.md)：PRESERVED 原因、六文件预览与保留旧知识的原子导入。
 
 - [0.5.3 安装失败与目录切换修复](installer-upgrade-fix-20260910.md)
