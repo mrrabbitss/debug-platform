@@ -8,9 +8,11 @@
 0.5.4 旧库导入修复：管理员/专家可在“知识库管理”直接预览并确认随包六文件 Skill，
 保留现有知识、案例、报告和已设模板。确认后完整重建含旧知识的索引并原子发布；冲突阻止覆盖。
 新增八项后端、三项浏览器场景、前端构建、原六文件实际导入与工程检查通过；
-交付状态见 [旧库导入记录](docs/bundled-skill-upgrade-import-20260910.md) 和 VALIDATION.md。
+已发布 [0.5.4 最新正式版](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.4)，
+10,220 项包清单、包内新 API 导入和七份远端附件及标签核验通过，分机仍为 0.5.0。
+交付边界见 [旧库导入记录](docs/bundled-skill-upgrade-import-20260910.md) 和 VALIDATION.md。
 
-已发布 [0.5.3 最新正式版](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.3)：
+已发布 [0.5.3 正式版](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.3)：
 修复旧文件占用导致 PowerShell 逐文件移动、旧程序目录不完整的问题；发布与回滚改用同父目录重命名，
 旧目录清理失败不撤回新版。六项新增故障/日志检查、中文错误往返、工程检查及实际 EXE 覆盖升级通过。
 服务器安装错误增加底层原因与持久日志；七个附件与源码标签远端核验通过，分机仍为 0.5.0。

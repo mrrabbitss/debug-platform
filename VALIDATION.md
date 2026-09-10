@@ -20,7 +20,25 @@ five root dependencies resolved, seven active documents including a retained syn
 363 active vectors including the old chunk, and restart retained PUBLISHED. No source content printed.
 Evidence: `artifacts/lan/hotfix-0.5.4/original-bundle-proof.json`, `frontend-first-run.xml` and
 `frontend-failed-case-fixed.xml`. Engineering harness passed **24/24** without threshold changes.
-Package/release verification is pending; delivery status is updated after compilation and remote verification.
+Complete v0.5.4 payload verified **10,220** manifest members; **10,176** match v0.5.3 bytes.
+All **240** backend source files and the built frontend were compared against this commit/build;
+the original ZIP and all six source files match. Models, runtime and installer scripts are unchanged.
+Using the packaged Python 3.14.0 and packaged backend, new preview/confirm/status APIs moved a temporary
+old corpus from PRESERVED to PUBLISHED: six full Skill files, five resolved children, retained old Wiki
+and case, old chunk in the new vector generation, and PUBLISHED after restart. Local Hashing only.
+Evidence: `artifacts/lan/hotfix-0.5.4/package-verification.json` and `packaged-api-proof.json`.
+
+Inno 6.7.1 compiled `GWAP-Debug-Server-Setup-0.5.4-x64.exe`: **921,204,634 bytes**,
+SHA-256 `494d225827cc1305058f57a91517193cd1bb0892448d63336dc666fbc485e966`.
+Installer scripts reuse v0.5.3's actual fresh/upgrade evidence; this new EXE was not installed again.
+[v0.5.4](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.4) is published as latest,
+non-draft and non-prerelease. All **7** remote assets match local sizes/SHA-256 and release notes.
+The remote source tag resolves to `a82015ecfe80a7f32ff7cab467d607d095a7207f`.
+The unchanged 0.5.0 client remains SHA-256 `8ed2a944a331780a059142758b948d8579f9bbe5520454d1f6d1f287ba9ae4eb`.
+Remote evidence: `artifacts/lan/hotfix-0.5.4/github-release/remote-verification.json`.
+Automatic GGUF run **34431531771** failed at `Select Python 3.12` before app validation;
+automatic portable run **34431531628** was cancelled to avoid repeating prior successful checks.
+No manual CI or CI-green/merge-ready claim. The company installation remains user-operated.
 No real diagnostic model calls, Full/External runs or manual CI. Schema remains 0025.
 
 ## Latest: 0.5.3 installer upgrade failure repair (2026-09-10)
