@@ -64,19 +64,45 @@ end;
 
 procedure InstallPayloadAtomically;
 var
+  FailureLog: String;
+  FailureSummary: String;
+  FailureReason: String;
+  FailureReasonUtf8: AnsiString;
+  LogDirectory: String;
   Parameters: String;
   ResultCode: Integer;
 begin
   if not IsExpectedAppRoot then
     RaiseException('Refusing to install outside the server application directory.');
+  LogDirectory := ExpandConstant('{localappdata}\GWAPDebugServer\install-logs');
+  FailureLog := LogDirectory + '\setup-payload-' +
+    GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
+  FailureSummary := FailureLog + '.summary.txt';
   Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
-    ExpandConstant('{tmp}\GWAPServerPayload\install_local.ps1') +
+    ExpandConstant('{tmp}\GWAPServerPayload\publish_server_payload.ps1') +
+    '" -PayloadRoot "' + ExpandConstant('{tmp}\GWAPServerPayload') +
     '" -InstallRoot "' + ExpandConstant('{app}') +
-    '" -NoLaunch -NoShortcuts -Components Full';
+    '" -FailureLog "' + FailureLog +
+    '" -FailureSummary "' + FailureSummary + '"';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     Parameters, ExpandConstant('{tmp}\GWAPServerPayload'), SW_HIDE,
     ewWaitUntilTerminated, ResultCode) then
     RaiseException('Unable to start the offline payload publisher.');
-  if ResultCode <> 0 then
-    RaiseException('Installation failed. The previous program and business data were preserved. Exit code: ' + IntToStr(ResultCode));
+  if ResultCode <> 0 then begin
+    FailureReason := 'The offline payload publisher exited with code ' + IntToStr(ResultCode) + '.';
+    if FileExists(FailureLog) then begin
+      if LoadStringFromFile(FailureSummary, FailureReasonUtf8) then begin
+        FailureReason := Trim(UTF8Decode(FailureReasonUtf8));
+        if FailureReason = '' then
+          FailureReason := 'The offline payload publisher exited with code ' + IntToStr(ResultCode) + '.';
+      end;
+      RaiseException('Installation failed. ' + FailureReason + #13#10 + #13#10 +
+        'Publisher output was saved for this Windows account at:' + #13#10 + FailureLog + #13#10 + #13#10 +
+        'The prior application state could not be verified. Review this log before retrying.');
+    end;
+    RaiseException('Installation failed. ' + FailureReason + #13#10 + #13#10 +
+      'The publisher diagnostic could not be saved. Review the Setup log at:' + #13#10 +
+      ExpandConstant('{log}') + #13#10 + #13#10 +
+      'The prior application state could not be verified.');
+  end;
 end;

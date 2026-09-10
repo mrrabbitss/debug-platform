@@ -1,6 +1,39 @@
 # Validation Record
 
-## Latest: 0.5.2 requirements audit and durable model progress (2026-09-10)
+## Latest: 0.5.3 installer upgrade failure repair (2026-09-10)
+
+The reported Win11 0.5.2 upgrade returned only publisher exit code 1. The user later reported
+possible remaining old-server processes. Without the remote publisher log, its exact cause is
+unconfirmed. A new local reproduction found WinPS 5.1 `Move-Item` partially moves an old app tree
+before failing on a locked child. The synthetic business-data marker was unchanged.
+
+Three new cases in `backend/tests/test_installer_atomic_upgrade_failures.py` passed (3.12s):
+locked old child preserves the whole previous tree, interrupted retired-tree cleanup retains the
+new installation, and failure creating shortcuts after publication restores the previous tree.
+They invoke actual Windows PowerShell 5.1 with synthetic payloads and a test-only Python shim.
+The first collection needed the repository's `tests.` import namespace; no executed pass was repeated.
+
+The unchanged original 0.5.2 packaged publisher installed successfully into an isolated directory.
+The exact released 0.5.2 EXE also passed a new local fresh-install check after guards verified no
+existing server app/data, uninstall registry key, Start Menu group or desktop shortcut. It did not
+start the server or models. These paths had not previously been tested for this server release;
+they do not establish remote-user upgrade success. Logs: `artifacts/validation/server-install-20260910`.
+
+Three new diagnostic-wrapper cases passed on Windows PowerShell 5.1, including warning-only
+success, exit 23 with stderr tail preserved, redaction and space-containing paths. Integration
+found an Inno `AnsiString` type mismatch and Chinese console encoding mismatch; the tiny Inno
+6.7.1 compile now passes, and the UTF-8 child/summary path round-trips a Chinese error with exit 29.
+Only the affected wrapper process case was rerun after changing its entry point (passed 1.45s).
+The repository harness passed 24/24 and changed Python files passed Ruff. The original 0.5.2
+synthetic locked-file failure also successfully retried after releasing the handle, preserving
+the business-data marker and retaining the earlier partial backup for inspection.
+
+The final 0.5.3 EXE and publication remain pending at this checkpoint.
+Only new installer-failure behavior is exercised. Previous app/CLI/API/GGUF passes are reused;
+no successful historical regression, Full/External or manual CI is repeated. API/MCP and schema
+0025 remain unchanged. Details: [installer repair](docs/installer-upgrade-fix-20260910.md).
+
+## Previous: 0.5.2 requirements audit and durable model progress (2026-09-10)
 
 Only newly introduced behavior was exercised; no successful historical regression suite,
 real Chat/CLI model request, Full/External or manual CI run was repeated. The mapping from

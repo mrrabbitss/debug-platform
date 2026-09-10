@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+SERVER_INSTALLER_HELPERS = ("publish_server_payload.ps1",)
 
 
 def digest(path: Path) -> str:
@@ -89,8 +90,11 @@ def build(portable: Path, output: Path, cache: Path, deployment_config: Path | N
             (runtime / name).write_bytes(archive.read(name))
     shutil.copyfile(downloads["winsw"], runtime / "WinSW-x64.exe")
     for path in (ROOT / "deploy/windows-server").iterdir():
-        if path.is_file() and path.suffix != ".iss":
+        if (path.is_file() and path.suffix != ".iss"
+                and path.name not in SERVER_INSTALLER_HELPERS):
             shutil.copyfile(path, target / path.name)
+    for filename in SERVER_INSTALLER_HELPERS:
+        shutil.copyfile(ROOT / "deploy/windows-server" / filename, target / filename)
     shutil.copyfile(ROOT / "scripts/run_lan_server.py", target / "scripts/run_lan_server.py")
     shutil.copyfile(ROOT / "deploy/windows-server/start_server.bat", target / "start.bat")
     shutil.copyfile(ROOT / "docs/服务器使用指南.md", target / "服务器使用指南.md")

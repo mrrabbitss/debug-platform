@@ -230,7 +230,7 @@ try {
             )
             Assert-RestorableBackup -Path $recoveryBackup
             Write-Warning "Restoring the only verified orphaned application backup before installation."
-            Move-Item -LiteralPath $recoveryBackup -Destination $destination
+            [System.IO.Directory]::Move($recoveryBackup, $destination)
             Write-Host "[OK] Recovered the previous application tree."
         }
     }
@@ -324,6 +324,7 @@ try {
             if ($LASTEXITCODE -ne 0) {
                 throw "Component selection/integrity verification failed with exit code $LASTEXITCODE."
             }
+            Write-Host "[INFO] Checking the bundled application in an isolated temporary data directory..."
             & $python -B -s $launcher `
                 --check `
                 --no-browser `
@@ -340,38 +341,62 @@ try {
 
         if (Test-Path -LiteralPath $destination) {
             Write-Host "[INFO] Preserving the current application until the upgrade is verified..."
-            Move-Item -LiteralPath $destination -Destination $backup
+            # Same-parent Directory.Move is a rename. PowerShell Move-Item can
+            # move individual children before failing on a locked file.
+            [System.IO.Directory]::Move($destination, $backup)
             $previousMoved = $true
         }
-        Move-Item -LiteralPath $staging -Destination $destination
+        Write-Host "[INFO] Publishing the verified application directory..."
+        [System.IO.Directory]::Move($staging, $destination)
         $newInstalled = $true
         if (-not $NoShortcuts) {
             New-PlatformShortcuts -InstalledRoot $destination
         }
 
-        if ($previousMoved -and (Test-Path -LiteralPath $backup)) {
-            Assert-ManagedSibling -Path $backup -Prefix "GWAPDebugPlatform.backup-"
-            Remove-Item -LiteralPath $backup -Recurse -Force
-        }
-        Write-Host "[OK] Installed to $destination"
-        Write-Host "[OK] Runtime data remains under %LOCALAPPDATA%\GWAPDebugPlatform."
     } catch {
+        $installationFailure = $_
+        try {
+            if ($newInstalled) {
+                [System.IO.Directory]::Move($destination, $staging)
+            }
+            if ($previousMoved) {
+                [System.IO.Directory]::Move($backup, $destination)
+                Write-Host "[INFO] The complete previous application directory was restored."
+            }
+        } catch {
+            throw ("Installation failed and automatic program rollback could not finish. " +
+                "Keep these directories for recovery: $destination ; $backup ; $staging . " +
+                "Original error: $($installationFailure.Exception.Message) " +
+                "Rollback error: $($_.Exception.Message)")
+        }
         if (Test-Path -LiteralPath $staging) {
             Assert-ManagedSibling -Path $staging -Prefix "GWAPDebugPlatform.installing-"
-            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+            try {
+                Remove-Item -LiteralPath $staging -Recurse -Force
+            } catch {
+                Write-Warning "Could not clean the unused staging directory: $staging"
+            }
         }
-        if ($newInstalled -and (Test-Path -LiteralPath $destination)) {
-            Remove-Item -LiteralPath $destination -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        if (
-            $previousMoved -and
-            (Test-Path -LiteralPath $backup) -and
-            -not (Test-Path -LiteralPath $destination)
-        ) {
-            Move-Item -LiteralPath $backup -Destination $destination -ErrorAction SilentlyContinue
-        }
-        throw
+        throw $installationFailure
     }
+
+    # Publication is committed. Cleanup must never roll back to a partly
+    # deleted old tree. Retired directories are excluded from backup recovery.
+    if ($previousMoved -and (Test-Path -LiteralPath $backup)) {
+        $retired = Join-Path $destinationParent ("GWAPDebugPlatform.retired-" + $nonce)
+        Assert-ManagedSibling -Path $backup -Prefix "GWAPDebugPlatform.backup-"
+        Assert-ManagedSibling -Path $retired -Prefix "GWAPDebugPlatform.retired-"
+        try {
+            [System.IO.Directory]::Move($backup, $retired)
+            Remove-Item -LiteralPath $retired -Recurse -Force
+        } catch {
+            Write-Warning ("The new application is installed. Old program cleanup was incomplete; " +
+                "it did not undo the installation. Retained path: $backup or $retired. " +
+                $_.Exception.Message)
+        }
+    }
+    Write-Host "[OK] Installed to $destination"
+    Write-Host "[OK] Business data outside the application directory was not changed."
 
     if (-not $NoLaunch) {
         Start-Process -FilePath (Join-Path $destination "start.bat") -WorkingDirectory $destination
