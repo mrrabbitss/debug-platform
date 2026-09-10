@@ -252,9 +252,11 @@ def _summary(snapshot):
 
 
 def preview_reset(db, *, operation_id: str, data_root: Path | str, source_zip: Path | str, actor: str,
-                  preserve_existing: bool = False) -> dict:
+                  preserve_existing: bool = False, replace_bundle: bool = False) -> dict:
     """Read only. Returned hashes bind all six sources and the entire prior corpus."""
     operation_key(operation_id)
+    if replace_bundle and not preserve_existing:
+        raise ResetError("Bundle replacement must preserve unrelated knowledge")
     require_manager(db, actor)
     target = verified_target(db, data_root)
     bundle, snapshot = read_bundle(source_zip), _corpus(db)
@@ -272,7 +274,7 @@ def preview_reset(db, *, operation_id: str, data_root: Path | str, source_zip: P
         "report_template_path": next(f["path"] for f in bundle["files"] if f["role"] == "report_template")}
     if preserve_existing:
         from app.services.knowledge_bundle_import import extend_preview
-        plan = extend_preview(plan, bundle, snapshot)
+        plan = extend_preview(plan, bundle, snapshot, replace_bundle=replace_bundle)
     return {**plan, "preview_hash": digest(plan)}
 
 
@@ -360,7 +362,7 @@ def _existing(db, operation_id, source_hash, preview_hash):
 def confirm_reset(db, *, operation_id: str, data_root: Path | str, source_zip: Path | str,
         actor: str, expected_source_sha256: str, expected_preview_hash: str,
         confirmed: bool, model_egress_approved: bool, archive_root: Path | str | None = None,
-        approval_origin: str = "INTERACTIVE", preserve_existing: bool = False):
+        approval_origin: str = "INTERACTIVE", preserve_existing: bool = False, replace_bundle: bool = False):
     """Back up first, then commit approval and outbox job together. Never dispatch here."""
     if confirmed is not True:
         raise ResetError("Explicit confirmation of the complete preview is required")
@@ -368,15 +370,18 @@ def confirm_reset(db, *, operation_id: str, data_root: Path | str, source_zip: P
     target = verified_target(db, data_root)
     existing = _existing(db, operation_id, expected_source_sha256, expected_preview_hash)
     if existing:
+        if bool(json_loads(existing[0].payload_json, {})["approved_plan"].get("replace_bundle")) != replace_bundle:
+            raise ResetError("Operation id is bound to a different replacement scope")
         if bool(json_loads(existing[0].payload_json, {})["approved_plan"].get("preserve_existing")) != preserve_existing:
             raise ResetError("Operation id is bound to a different import mode")
         return existing
     _assert_idle(db)
     preview = preview_reset(db, operation_id=operation_id, data_root=data_root, source_zip=source_zip, actor=actor,
-                           preserve_existing=preserve_existing)
-    if preserve_existing and (approval_origin != "INTERACTIVE" or not preview["can_confirm"]):
+                           preserve_existing=preserve_existing, replace_bundle=replace_bundle)
+    offline = approval_origin == "OFFLINE_BUNDLE_UPDATE" and KIND == "offline_network_skill_update" and replace_bundle
+    if preserve_existing and ((approval_origin != "INTERACTIVE" and not offline) or not preview["can_confirm"]):
         raise ResetError("The packaged Skill conflicts with existing knowledge; review the complete file list")
-    if approval_origin not in {"INTERACTIVE", "INSTALLER_DEFAULT"}:
+    if approval_origin not in {"INTERACTIVE", "INSTALLER_DEFAULT"} and not offline:
         raise ResetError("Unsupported approval origin")
     if approval_origin == "INSTALLER_DEFAULT":
         from app.services.bundled_knowledge import has_existing_knowledge
@@ -423,7 +428,7 @@ def confirm_reset(db, *, operation_id: str, data_root: Path | str, source_zip: P
             "model_egress_approved": model_egress_approved, "archive_zip": str(directory / "source.zip"),
             "backup": backup, "job_id": job.id, "approval_origin": approval_origin}
         row = WorkbenchRecord(id=operation_key(operation_id), kind=KIND, owner_id=actor, payload_json=json_dumps(value))
-        db.add_all([row, job, AuditEvent(id=new_id("AUD"), actor_id=actor, actor_type="user",
+        db.add_all([row, job, AuditEvent(id=new_id("AUD"), actor_id=actor, actor_type="system" if offline else "user",
             action="knowledge.reset.approved", resource_type=KIND, resource_id=row.id,
             details_json=json_dumps({"operation_id": operation_id, "source_sha256": expected_source_sha256,
                 "preview_hash": expected_preview_hash, "backup_sha256": backup["sha256"],
@@ -601,6 +606,9 @@ def _publish(fence, approved, candidates, by_document, vector_id, graph_metadata
         preserve_existing = value["approved_plan"].get("preserve_existing", False)
         if not preserve_existing:
             _retire(db, snapshot, value)
+        elif value["approved_plan"].get("replace_bundle"):
+            from app.services.knowledge_bundle_import import retire_replaced_bundle
+            retire_replaced_bundle(db, snapshot, value)
         published = []
         for candidate in candidates:
             document = db.get(KnowledgeDocument, candidate.id)
@@ -638,7 +646,8 @@ def _publish(fence, approved, candidates, by_document, vector_id, graph_metadata
             published.append(document.id)
             if json_loads(document.metadata_json, {})["knowledge_role"] == "report_template":
                 template = db.get(WorkbenchRecord, "template-network")
-                if preserve_existing and template and json_loads(template.payload_json, {}).get("document_id"):
+                bound_id = json_loads(template.payload_json, {}).get("document_id") if template else None
+                if preserve_existing and bound_id and bound_id not in value["approved_plan"].get("retired_document_ids", []):
                     continue
                 if not template:
                     template = WorkbenchRecord(id="template-network", kind="template_default", owner_id=value["approved_by"])
@@ -650,10 +659,13 @@ def _publish(fence, approved, candidates, by_document, vector_id, graph_metadata
         graph.active_generation_id, graph.building_generation_id, graph.status = fence.graph_id, None, "READY"
         graph.metadata_json, graph.error_message = json_dumps(graph_metadata), None
         result = {"operation_id": fence.operation_id, "documents": published,
-            "retired_documents": 0 if preserve_existing else len(snapshot["documents"]),
+            "retired_documents": len(value["approved_plan"].get("retired_document_ids", [])) if preserve_existing else len(snapshot["documents"]),
             "embedding_generation_id": vector_id, "graph_generation_id": fence.graph_id, "source_sha256": value["source_sha256"]}
         value.update(status="PUBLISHED", result=result, published_at=utcnow().isoformat(), building_generation_id=None)
         row.payload_json = json_dumps(value)
+        if value.get("approval_origin") == "OFFLINE_BUNDLE_UPDATE":
+            from app.services.knowledge_bundle_import import track_operation
+            track_operation(db, fence.operation_id, value["source_sha256"], status="PUBLISHED")
         db.add(AuditEvent(id=new_id("AUD"), actor_id=value["approved_by"], actor_type="user",
             action="knowledge.reset.published", resource_type=KIND, resource_id=row.id,
             details_json=json_dumps({"operation_id": fence.operation_id, "preview_hash": value["preview_hash"],
@@ -729,7 +741,8 @@ def reset_job(ctx, operation_id: str):
             index_documents = candidates
             if value["approved_plan"].get("preserve_existing"):
                 from app.services.knowledge_bundle_import import retain_index_inputs
-                index_documents = retain_index_inputs(db, snapshot, candidates, by_document)
+                index_documents = retain_index_inputs(db, snapshot, candidates, by_document,
+                    retired_ids=value["approved_plan"].get("retired_document_ids", []))
             count = index_embeddings(db, profile, [c for group in by_document.values() for c in group],
                 generation_id=vector_id, activate_if_missing=False,
                 progress=lambda done, total: fence.update(15 + int(50 * done / max(1, total)), "Building private vectors"))

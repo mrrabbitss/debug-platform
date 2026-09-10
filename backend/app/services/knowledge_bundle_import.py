@@ -24,7 +24,9 @@ def _matches(document, item):
     return any(PurePosixPath(name.replace("\\", "/")).name.casefold() == basename for name in names if isinstance(name, str))
 
 
-def extend_preview(plan, bundle, snapshot):
+def extend_preview(plan, bundle, snapshot, *, replace_bundle=False):
+    if replace_bundle:
+        return replacement_preview(plan, bundle, snapshot)
     inspection = []
     for item in bundle["files"]:
         matches = [d for d in snapshot["documents"] if _matches(d, item)]
@@ -54,22 +56,64 @@ def public_preview(plan):
     return {**plan, "manifest": [{**item, **checks[item["path"]]} for item in plan["manifest"]]}
 
 
-def track_operation(db, operation_id, source_sha256):
+def track_operation(db, operation_id, source_sha256, *, status="APPROVED"):
     from app.services.bundled_knowledge import RECORD_ID
     marker = db.get(WorkbenchRecord, RECORD_ID)
     if marker is None:
         marker = WorkbenchRecord(id=RECORD_ID, kind="bundled_knowledge")
         db.add(marker)
-    marker.payload_json = json_dumps({"status": "APPROVED", "operation_id": operation_id,
+    marker.payload_json = json_dumps({"status": status, "operation_id": operation_id,
                                      "source_sha256": source_sha256})
 
 
-def retain_index_inputs(db, snapshot, candidates, by_document):
+def retain_index_inputs(db, snapshot, candidates, by_document, *, retired_ids=()):
     """The replacement generation must still contain all existing public live chunks."""
-    documents = [d for d in snapshot["documents"] if d.active and d.review_status == "ACTIVE"
+    documents = [d for d in snapshot["documents"] if d.id not in retired_ids and d.active and d.review_status == "ACTIVE"
                  and d.confidentiality in {"PUBLIC", "INTERNAL"}]
     for document in documents:
         by_document[document.id] = list(db.scalars(select(KnowledgeChunk).where(
             KnowledgeChunk.document_id == document.id, KnowledgeChunk.document_version == document.version)
             .order_by(KnowledgeChunk.chunk_index)))
     return [*documents, *candidates]
+
+
+def replacement_preview(plan, bundle, snapshot):
+    """Offline operator scope: exact bundle paths AND network Skill classification.
+
+    Same basenames in another folder/category, drafts and custom templates are
+    never replacement targets. Retired bodies remain immutable and readable.
+    """
+    inspection, retired = [], set()
+    for item in bundle["files"]:
+        matches = []
+        for document in snapshot["documents"]:
+            metadata = json_loads(document.metadata_json, {})
+            paths = metadata.get("source_paths", [])
+            paths = [document.title, *(paths if isinstance(paths, list) else [])]
+            exact = any(isinstance(path, str) and path.replace("\\", "/") == item["path"] for path in paths)
+            if (exact and metadata.get("content_kind") == "SKILL"
+                    and "network" in metadata.get("problem_categories", []) and document.active):
+                matches.append(document)
+        identical = (len(matches) == 1 and matches[0].review_status == "ACTIVE"
+                     and reset.digest(matches[0].content) == item["sha256"]
+                     and json_loads(matches[0].metadata_json, {}).get("knowledge_role") == item["role"]
+                     and json_loads(matches[0].metadata_json, {}).get("embedding_status") == "INDEXED"
+                     and len(json_loads(matches[0].metadata_json, {}).get("bundle_manifest", [])) == 6)
+        retired.update(d.id for d in matches)
+        inspection.append({"path": item["path"], "disposition": "EXISTS" if identical else
+                           "REPLACE" if matches else "ADD", "conflicts": [d.id for d in matches]})
+    unchanged = all(i["disposition"] == "EXISTS" for i in inspection)
+    plan.update(preserve_existing=True, replace_bundle=True, inspection=inspection,
+                retired_document_ids=sorted(retired), can_confirm=not unchanged,
+                message="六份组网 Skill 已完整生效，无需更新。" if unchanged else
+                "更新指定组网包的六份文件；保留其他知识、草稿、案例、报告和自定义模板。",
+                preserved=[*plan["preserved"], "unrelated_knowledge", "drafts", "global_memories", "custom_templates"])
+    plan["counts"].update(added_files=sum(i["disposition"] == "ADD" for i in inspection),
+                          retired_documents=0 if unchanged else len(retired))
+    return plan
+
+
+def retire_replaced_bundle(db, snapshot, value):
+    ids = set(value["approved_plan"].get("retired_document_ids", []))
+    reset._retire(db, {**snapshot, "documents": [d for d in snapshot["documents"] if d.id in ids],
+                      "drafts": [], "memories": [], "templates": []}, value)

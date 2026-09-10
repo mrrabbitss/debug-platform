@@ -1,5 +1,39 @@
 # Validation Record
 
+## Latest: standalone six-file Skill maintenance (2026-09-10)
+
+New offline replacement cases: **3 passed** in `test_offline_skill_update.py`.
+Targets require exact source path plus network Skill classification. Similar filenames in other
+folders/categories, old Wiki/vector, drafts, cases and custom templates remain intact; previous
+bundle template follows the replacement. Failure retains old generation and retries the same
+approval/job; external Embedding requires an explicit option before any approval is created.
+
+Delivered old Python/application compatibility checks passed on **0.5.3 and 0.5.1** using local
+hashing and the complete original six-file ZIP in temporary synthetic databases. The actual entry
+refuses a held server lock. A forced process exit (91) after approval is resumed as attempt 2;
+a separate old-application process reads all six full bodies, five resolved dependencies, old Wiki
+vectors and case, with PUBLISHED status. Repeat execution is UNCHANGED; old reset dispatcher cannot
+execute the distinct offline job. All 10,219/10,211 package file sizes/mtimes remained unchanged.
+The 0.5.1 run also exercised the real .bat entry. Its UTF-8 BOM build-info required a reader fix;
+the previous 0.5.3 successful run was not repeated. The managed sidecar subsequently received a
+process-only endpoint adapter so saved model settings and approval fingerprints stay unchanged.
+Evidence: `artifacts/lan/knowledge-update/compatibility-0.5.1.json` and `compatibility-0.5.3.json`.
+
+The additional new sidecar path passed using **actual bundled BGE GGUF CPU** on the old 0.5.3
+runtime, entered through the .bat file: the temporary loopback endpoint is used successfully,
+saved model URL stays unchanged, all original six files and retained Wiki are readable after
+restart, and the temporary model key is removed on exit. No Reranker or diagnosis model started.
+Evidence: `artifacts/lan/knowledge-update/sidecar-proof.json`. Engineering harness **24/24** passed.
+
+Local deliverable: `artifacts/lan/knowledge-update/GWAP-Network-Skill-Update-20260910.zip`,
+**101,266 bytes**, SHA-256 `6e760c6311787bc7d974e6afba898b19cd110477d4780c6bd33d0063c3ef1d3b`.
+This is the exact sidecar-verified candidate copied under its delivery name, with the original
+source ZIP SHA-256 `c45d0f0be6a4cb0e2b9565c8b88be25437c32c95537aa397366d510009a99d3f`.
+
+This delivery does not claim a successful company installation or change the already published
+0.5.5 EXE. No historical regression suite, Chat/API/CLI diagnosis test, manual CI or full installer
+build was run. No API/MCP operations or DB schema were added; force replacement is offline-only.
+
 ## Latest: company-log staging publication access failure (2026-09-10)
 
 The supplied company log confirms full payload/self-check success, failure at staging-to-app
