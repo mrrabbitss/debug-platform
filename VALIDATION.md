@@ -27,6 +27,14 @@ Its clean package source is `11ec4e2ac31b44c1192cd347ba65799939cc6e7b`. Package 
 `installer-build.json`, `package-verification.json`, `upgrade-verification.json`, `setup-verification.json`.
 No old functional/model regression or manual CI was run. Company server is not this test host.
 
+[v0.5.6](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.6) is published as latest,
+non-draft and non-prerelease. All eight remote assets match local sizes/SHA-256 and release notes;
+the tag resolves to the tested source commit above. Client 0.5.0 remains byte-identical.
+Convenient local copy: `D:/GRXM/GWAP-Debug-Server-Setup-0.5.6-x64.exe`, same verified hash.
+Remote evidence: `artifacts/lan/hotfix-0.5.6/rebuild-2/github-release/remote-verification.json`.
+Automatic duplicate packaging runs 34441809888 and 34441810030 were cancelled; no manual CI,
+CI-green/merge-ready or company installation success claim.
+
 ## Latest: standalone six-file Skill maintenance (2026-09-10)
 
 New offline replacement cases: **3 passed** in `test_offline_skill_update.py`.
