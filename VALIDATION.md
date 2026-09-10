@@ -28,7 +28,29 @@ The repository harness passed 24/24 and changed Python files passed Ruff. The or
 synthetic locked-file failure also successfully retried after releasing the handle, preserving
 the business-data marker and retaining the earlier partial backup for inspection.
 
-The final 0.5.3 EXE and publication remain pending at this checkpoint.
+The final 0.5.3 EXE was built from `30b6f3b9564edf38556b66d48c188c05814546da` using the
+pinned Inno 6.7.1 compiler. Its numeric version is 0.5.3.0, size **921,199,087 bytes**, and SHA-256
+`456fcd1fff0a5a0be01bf5e657acf2748161b67a07956af348bf4b4e66fcd537`.
+Local file: `artifacts/lan/hotfix-0.5.3/delivery/GWAP-Debug-Server-Setup-0.5.3-x64.exe`.
+The 10,218-item payload was verified; 10,214 files are byte-identical to v0.5.2. Only the publisher,
+diagnostic helper, guide and version/manifest metadata changed. All six original Skill files and
+the original ZIP matched their authorized hashes. No application/model byte was rebuilt.
+
+The actual 0.5.3 EXE upgraded the guarded fresh 0.5.2 test installation successfully. All **10,220**
+installed manifest entries were verified (including component-selection/source-manifest metadata).
+Synthetic SQLite/configuration hashes were unchanged, and no managed staging/backup/retired folder
+remained. The test installation was then uninstalled; the business-data markers were still unchanged.
+After recording evidence, only our exact hash-matching synthetic files and empty directories were
+removed. The initial absence of server app/data, registry and shortcuts was restored. No server or
+model was started. Evidence: `artifacts/lan/hotfix-0.5.3/setup-verification.json` and the installation logs.
+
+[v0.5.3](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.3) is published/latest.
+All seven remote assets, sizes, SHA-256 values, normalized release notes and the exact source tag
+were verified. Client ZIP remains byte-identical v0.5.0. Remote proof:
+`artifacts/lan/hotfix-0.5.3/github-release/remote-verification.json`.
+Automatic GGUF run 34429130022 and portable run 34429131670 both completed as cancelled.
+No manual CI dispatch, new CI pass or main-branch merge is claimed.
+
 Only new installer-failure behavior is exercised. Previous app/CLI/API/GGUF passes are reused;
 no successful historical regression, Full/External or manual CI is repeated. API/MCP and schema
 0025 remain unchanged. Details: [installer repair](docs/installer-upgrade-fix-20260910.md).
@@ -85,7 +107,7 @@ Local installer: `artifacts/lan/progress-0.5.2/delivery/GWAP-Debug-Server-Setup-
 Build/release source is `fd5336516c0930020537b84ebdfd36bc39bc11be`; the build's dirty marker
 comes only from the preserved unrelated untracked article. Application/frontend contents matched.
 The unchanged client ZIP remains version 0.5.0 with the previously recorded SHA-256.
-Release [v0.5.2](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.2) is published/latest.
+Release [v0.5.2](https://github.com/mrrabbitss/debug-platform/releases/tag/v0.5.2) is published.
 All seven remote attachment sizes/SHA-256 values, normalized release notes and the tag's exact
 commit were verified before/after publication. Evidence is retained in
 `artifacts/lan/progress-0.5.2/github-release/remote-verification.json`.
