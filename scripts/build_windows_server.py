@@ -96,6 +96,7 @@ def build(portable: Path, output: Path, cache: Path, deployment_config: Path | N
     for filename in SERVER_INSTALLER_HELPERS:
         shutil.copyfile(ROOT / "deploy/windows-server" / filename, target / filename)
     shutil.copyfile(ROOT / "scripts/run_lan_server.py", target / "scripts/run_lan_server.py")
+    shutil.copyfile(ROOT / "scripts/offline_skill_update.py", target / "scripts/offline_skill_update.py")
     shutil.copyfile(ROOT / "deploy/windows-server/start_server.bat", target / "start.bat")
     shutil.copyfile(ROOT / "docs/服务器使用指南.md", target / "服务器使用指南.md")
     shutil.copyfile(ROOT / "scripts/file_hash.ps1", target / "file_hash.ps1")

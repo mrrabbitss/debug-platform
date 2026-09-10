@@ -23,7 +23,8 @@ def test_server_installer_writes_sanitized_publisher_diagnostics_to_user_log():
     assert "if FileExists(FailureLog) then begin" in installer
     assert "The publisher diagnostic could not be saved." in installer
     assert "Publisher output was saved for this Windows account at:" in installer
-    assert "The prior application state could not be verified." in installer
+    assert "Previous application directories were not replaced." in installer
+    assert "function PrepareToInstall" in installer
     assert "The previous program and business data were preserved" not in installer
     assert "publisher stdout (sanitized)" in wrapper
     assert "publisher stderr (sanitized)" in wrapper
@@ -55,7 +56,7 @@ def test_server_payload_wrapper_retains_redacted_streams_and_a_safe_reason(tmpdi
     temporary_root = Path(str(tmpdir))
     payload = temporary_root / "payload with spaces"
     payload.mkdir()
-    installer_script = payload / "install_local.ps1"
+    installer_script = payload / "install_server_release.ps1"
     log_directory = Path(os.environ["LOCALAPPDATA"]) / "GWAPDebugServer/install-logs"
     failure_log = log_directory / f"pytest-{temporary_root.name}.log"
     failure_summary = Path(f"{failure_log}.summary.txt")
@@ -101,8 +102,8 @@ def test_server_payload_wrapper_retains_redacted_streams_and_a_safe_reason(tmpdi
             encoding="utf-8",
         )
         assert run_wrapper(success_log, success_summary).returncode == 0
-        assert not success_log.exists()
-        assert not success_summary.exists()
+        assert "Exit code: 0" in success_log.read_text(encoding="utf-8")
+        assert "Installation completed" in success_summary.read_text(encoding="utf-8")
 
         installer_script.write_text(
             "\n".join(

@@ -58,7 +58,7 @@ function Write-Host {
 def test_real_powershell_exception_summary_uses_cause_not_error_identifier(tmp_path):
     payload = tmp_path / "synthetic payload"
     payload.mkdir()
-    (payload / "install_local.ps1").write_text(
+    (payload / "install_server_release.ps1").write_text(
         "throw [System.IO.IOException]::new('Synthetic publication denied; token=placeholder')",
         encoding="utf-8-sig")
     log = Path(os.environ["LOCALAPPDATA"]) / "GWAPDebugServer/install-logs" / ("test-publish-" + uuid.uuid4().hex + ".log")

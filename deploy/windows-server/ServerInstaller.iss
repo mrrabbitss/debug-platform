@@ -13,7 +13,7 @@ AppId={{87293B10-EC31-41C9-B212-160C94883A91}
 AppName=GWAP Debug Server
 AppVersion={#AppVersion}
 AppPublisher=mrrabbitss
-DefaultDirName={localappdata}\Programs\GWAPDebugServer\app
+DefaultDirName={code:GetReleaseDirectory}
 DefaultGroupName=GWAP Debug Server
 DisableDirPage=yes
 DisableProgramGroupPage=yes
@@ -36,8 +36,7 @@ VersionInfoVersion={#AppVersion}
 VersionInfoProductName=GWAP Debug Server
 
 [Files]
-Source: "{#SourceRoot}\*"; DestDir: "{tmp}\GWAPServerPayload"; Excludes: "package-manifest.json"; Flags: ignoreversion recursesubdirs createallsubdirs deleteafterinstall
-Source: "{#SourceRoot}\package-manifest.json"; DestDir: "{tmp}\GWAPServerPayload"; Flags: ignoreversion deleteafterinstall; AfterInstall: InstallPayloadAtomically
+Source: "{#SourceRoot}\*"; DestDir: "{tmp}\GWAPServerPayload"; Flags: dontcopy recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\启动服务器"; Filename: "{app}\start_server.bat"; WorkingDir: "{app}"
@@ -56,13 +55,37 @@ Filename: "{app}\start_server.bat"; Description: "启动服务器"; WorkingDir: 
 Type: filesandordirs; Name: "{app}"; Check: IsExpectedAppRoot
 
 [Code]
-function IsExpectedAppRoot: Boolean;
+var
+  ReleaseDirectory: String;
+  PayloadExtracted: Boolean;
+  PreviousAttemptFailed: Boolean;
+
+function GetReleaseDirectory(Param: String): String;
+var
+  Base: String;
+  Suffix: Integer;
 begin
-  Result := CompareText(AddBackslash(ExpandConstant('{app}')),
-    AddBackslash(ExpandConstant('{localappdata}\Programs\GWAPDebugServer\app'))) = 0;
+  if ReleaseDirectory = '' then begin
+    Base := ExpandConstant('{localappdata}\Programs\GWAPDebugServer\releases\{#AppVersion}-') +
+      GetDateTimeString('yyyymmdd-hhnnss-zzz', '-', '-');
+    ReleaseDirectory := Base;
+    Suffix := 0;
+    while DirExists(ReleaseDirectory) do begin
+      Suffix := Suffix + 1;
+      ReleaseDirectory := Base + '-' + IntToStr(Suffix);
+    end;
+  end;
+  Result := ReleaseDirectory;
 end;
 
-procedure InstallPayloadAtomically;
+function IsExpectedAppRoot: Boolean;
+begin
+  Result := (CompareText(AddBackslash(ExtractFileDir(ExpandConstant('{app}'))),
+    AddBackslash(ExpandConstant('{localappdata}\Programs\GWAPDebugServer\releases'))) = 0) and
+    (Pos('{#AppVersion}-', ExtractFileName(ExpandConstant('{app}'))) = 1);
+end;
+
+procedure InstallServerRelease;
 var
   FailureLog: String;
   FailureSummary: String;
@@ -72,8 +95,9 @@ var
   Parameters: String;
   ResultCode: Integer;
 begin
-  if not IsExpectedAppRoot then
+  if (not IsExpectedAppRoot) or (CompareText(ExpandConstant('{app}'), GetReleaseDirectory('')) <> 0) then
     RaiseException('Refusing to install outside the server application directory.');
+  WizardForm.StatusLabel.Caption := '正在校验完整程序并更新六份组网 Skill，请等待索引完成…';
   LogDirectory := ExpandConstant('{localappdata}\GWAPDebugServer\install-logs');
   FailureLog := LogDirectory + '\setup-payload-' +
     GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
@@ -98,11 +122,31 @@ begin
       end;
       RaiseException('Installation failed. ' + FailureReason + #13#10 + #13#10 +
         'Publisher output was saved for this Windows account at:' + #13#10 + FailureLog + #13#10 + #13#10 +
-        'The prior application state could not be verified. Review this log before retrying.');
+        'Previous application directories were not replaced. Review the saved installation and knowledge-update log.');
     end;
     RaiseException('Installation failed. ' + FailureReason + #13#10 + #13#10 +
       'The publisher diagnostic could not be saved. Review the Setup log at:' + #13#10 +
       ExpandConstant('{log}') + #13#10 + #13#10 +
-      'The prior application state could not be verified.');
+      'Previous application directories were not replaced.');
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  try
+    if PreviousAttemptFailed then begin
+      ReleaseDirectory := '';
+      WizardForm.DirEdit.Text := GetReleaseDirectory('');
+    end;
+    if not PayloadExtracted then begin
+      ExtractTemporaryFiles('{tmp}\GWAPServerPayload\*');
+      PayloadExtracted := True;
+    end;
+    InstallServerRelease;
+    PreviousAttemptFailed := False;
+  except
+    PreviousAttemptFailed := True;
+    Result := GetExceptionMessage;
   end;
 end;

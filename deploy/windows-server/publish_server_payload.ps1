@@ -79,7 +79,7 @@ function Get-UsefulFailureReason {
         [AllowEmptyString()][string]$StandardOutput,
         [Parameter(Mandatory = $true)][int]$ExitCode
     )
-    foreach ($line in @($StandardError -split "`r?`n")) {
+    foreach ($line in @(($StandardOutput + "`n" + $StandardError) -split "`r?`n")) {
         if ($line -match '^\[GWAP_INSTALL_ERROR\]\s*(.+)$') {
             $reason = Protect-InstallOutput -Text $Matches[1]
             if ($reason.Length -gt 900) { $reason = $reason.Substring(0, 897) + '...' }
@@ -121,7 +121,7 @@ function Write-FailureArtifacts {
     $logEncoding = [System.Text.UTF8Encoding]::new($false)
     $summaryEncoding = [System.Text.UTF8Encoding]::new($false)
     $log = @(
-        "GWAP Debug Server installer payload failure",
+        "GWAP Debug Server installer result",
         "Exit code: $ExitCode",
         "Reason: $Reason",
         "",
@@ -145,7 +145,7 @@ $process = $null
 
 try {
     $payload = [System.IO.Path]::GetFullPath($PayloadRoot)
-    $installer = Join-Path $payload "install_local.ps1"
+    $installer = Join-Path $payload "install_server_release.ps1"
     if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
         throw "The offline payload publisher is missing from the extracted package."
     }
@@ -164,7 +164,7 @@ $ProgressPreference = 'SilentlyContinue'
 $OutputEncoding = [Console]::OutputEncoding
 $global:LASTEXITCODE = 0
 try {
-    & $env:GWAP_SETUP_PUBLISHER -InstallRoot $env:GWAP_SETUP_TARGET -NoLaunch -NoShortcuts -Components Full
+    & $env:GWAP_SETUP_PUBLISHER -InstallRoot $env:GWAP_SETUP_TARGET
     exit $LASTEXITCODE
 } catch {
     [Console]::Error.WriteLine('[GWAP_INSTALL_ERROR] ' + $_.Exception.GetBaseException().Message)
@@ -196,6 +196,9 @@ try {
     $stderr = $stderrTask.GetAwaiter().GetResult()
     $exitCode = $process.ExitCode
     if ($exitCode -eq 0) {
+        Write-FailureArtifacts -LogPath $failureLogPath -SummaryPath $failureSummaryPath `
+            -ExitCode 0 -Reason 'Installation completed; previous program directories were not replaced.' `
+            -StandardOutput $stdout -StandardError $stderr
         exit 0
     }
 

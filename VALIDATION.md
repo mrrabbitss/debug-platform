@@ -1,5 +1,18 @@
 # Validation Record
 
+## In progress: 0.5.6 full server installer (2026-09-10)
+
+New server release-directory publisher removes both root renames. Complete file verification
+replaces the staging-name-only component projector; knowledge update runs automatically with a
+stopped-server guard, pre-migration/approval backups and an isolated offline job kind.
+PrepareToInstall now returns a failure before registration/shortcuts instead of raising from
+AfterInstall (which was observed to return Setup exit 0 after the failed child).
+Three adjusted diagnostic/UTF-8/error-summary checks passed; engineering harness 24/24 passed.
+The first unreleased candidate failed its new end-to-end check at the obsolete staging-name
+component guard. It is not an accepted installer. A rebuilt EXE must pass running-server refusal,
+simultaneous old/new directory-handle upgrade, six-file database publication and fresh startup.
+No old functional/model regression or manual CI was run. Company server is not this test host.
+
 ## Latest: standalone six-file Skill maintenance (2026-09-10)
 
 New offline replacement cases: **3 passed** in `test_offline_skill_update.py`.
